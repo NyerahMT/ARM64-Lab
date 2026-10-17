@@ -6,7 +6,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | --- | --- | --- |
 | D0 | Inventory a local Windows PE32+ input safely | Complete locally |
 | D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
-| D2 | Establish true callable function boundaries and differential reference behavior | **One candidate validated:** cross-product function called at RVA 0x267AE0, x64-vs-C-vs-AArch64 200-case differential proof (not automated general lifting) |
+| D2 | Establish true callable function boundaries and differential reference behavior | In progress: Ghidra headless startup call graph plus one x64-vs-C-vs-ARM64 200-case cross-product differential proof |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | In progress: restricted scalar SSE lifter translated one 24-instruction original function automatically; most ISA/control flow/runtime features not yet implemented |
 | D4 | Execute real original entry path in host/native ARM64 runtime | Not started |
 | D5 | Load original archives and bridge OpenGL drawing | Not started |
@@ -25,6 +25,10 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Private CI decoded 8,563 of 8,741 Windows unwind-record intervals; 2,717 interval starts were referenced by direct calls and 605 intervals ended with a straight-line return (2026-10-17).
 - Only two short straight-line interval starts were directly call-referenced, including an SSE math candidate at RVA 0x267AE0 with 196 direct call references. An unwind interval may cover only a fragment, not the entire function.
 - The x64 vector-cross-product routine at RVA 0x267AE0 (24 instructions) was run under Unicorn x64. Both a manually written C equivalent and a **restricted automatic Capstone x64 SSE-to-C lift** were compiled to AArch64 and executed under Unicorn ARM64. All 200 normal-range float32 test pairs matched bit-for-bit across original x64, native C, generated C, and both ARM64 binaries (2026-10-17). This is a single supported straight-line function, not general game recompilation.
+- Ghidra 12.1.4 headless, using the **verified original private executable**, recognized 4,903 functions and 122 thunks, including the entry function at RVA 0x2ab31c (2026-10-17).
+- Bounded four-edge-deep static traversal from that entry found 94 nodes and 101 call edges. Of these, 22 distinct external API names were identified (Kernel32, User32, WinMM, MSVCR90, Steam API). The main startup initialization branch passes through RVA 0x136710; candidate high-fanout internal call sites include RVA 0x133e80 (26 mapped callees) and RVA 0x135cd0 (21 mapped callees).
+- Ghidra calls and unwind records are different static signals: its 4,903 recognized functions are **not** 4,903 independently recompilable, behaviorally verified functions.
+- The Ghidra headless toolchain is pinned, SHA-256 verified and cached in private CI for repeatability. Exports contain metadata only.
 - No translated original game code has been executed on iPhone, and no original engine/menu has booted.
 
 Do not commit game executables, DLLs, archives, or derived original source files to this public repository.
