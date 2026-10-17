@@ -23,6 +23,18 @@ jobs:
         run: |
           clang --target=aarch64-unknown-linux-gnu -ffreestanding -c /tmp/lift.c -o /tmp/lift.o
           readelf -h /tmp/lift.o | grep -q 'Machine:.*AArch64'
+      - name: Test Windows-compatible timing services on native host
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mx_time_compat.c tests/test_mx_time_compat.c \
+            -o /tmp/mx_time_compat_test
+          /tmp/mx_time_compat_test
+      - name: Cross-compile timing services for AArch64
+        run: |
+          clang --target=aarch64-unknown-linux-gnu -ffreestanding -std=c11 \
+            -Wall -Wextra -Werror -Iruntime -c runtime/mx_time_compat.c \
+            -o /tmp/mx_time_compat_aarch64.o
+          readelf -h /tmp/mx_time_compat_aarch64.o | grep -q 'Machine:.*AArch64'
       - name: Check no proprietary binary inputs were committed
         run: |
           if git ls-files | grep -iE '\.(exe|dll|dli|dlo|pkz|ipa|pdb|dmp)$'; then
