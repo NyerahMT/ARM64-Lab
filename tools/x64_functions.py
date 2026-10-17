@@ -34,6 +34,7 @@ def analyze(executable: pathlib.Path, max_bytes: int = 8192):
     instruction_counts = collections.Counter()
     categories = collections.Counter()
     candidate_list = []
+    direct_call_targets = collections.Counter()
     rejected = collections.Counter()
     sizes = []
     unique_intervals = set()
@@ -76,6 +77,8 @@ def analyze(executable: pathlib.Path, max_bytes: int = 8192):
                 return_count += 1
             if inst.group(CS_GRP_CALL):
                 has_call = True
+                if inst.operands and inst.operands[0].type == X86_OP_IMM:
+                    direct_call_targets[inst.operands[0].imm] += 1
             if inst.group(CS_GRP_JUMP):
                 if inst.operands and inst.operands[0].type == X86_OP_IMM:
                     branch_targets.append(inst.operands[0].imm)
@@ -115,7 +118,19 @@ def analyze(executable: pathlib.Path, max_bytes: int = 8192):
                 "jump_outside_interval": bool(out_of_range),
                 "mnemonics": [i.mnemonic for i in instructions][:32],
             })
-    candidate_list.sort(key=lambda c: (not c["straight_line"], c["bytes"], c["begin_rva"]))
+    for entry in candidate_list:
+        entry["direct_call_references"] = direct_call_targets[ int(entry["begin_rva"], 16) ]
+    categories["interval_starts_directly_called"] = sum(direct_call_targets[begin] > 0 for begin, end in unique_intervals)
+    categories["short_intervals_directly_called"] = sum(item["direct_call_references"] > 0 for item in candidate_list)
+    categories["short_straight_line_directly_called"] = sum(
+        item["straight_line"] and item["direct_call_references"] > 0 for item in candidate_list
+    )
+    candidate_list.sort(key=lambda c: (
+        not bool(c["direct_call_references"]),
+        not c["straight_line"],
+        c["bytes"],
+        c["begin_rva"],
+    ))
     return {
         "input_sha256": info["sha256"],
         "image_base": info["image_base"],
@@ -129,6 +144,7 @@ def analyze(executable: pathlib.Path, max_bytes: int = 8192):
         "categories": dict(categories),
         "rejections": dict(rejected),
         "top_instruction_mnemonics": instruction_counts.most_common(35),
+        "direct_call_target_count": len(direct_call_targets),
         "short_candidate_count": len(candidate_list),
         "short_candidate_examples": candidate_list[:75],
         "scope": [
@@ -157,15 +173,18 @@ def main():
         f"- Fully decoded intervals (bounded): {report['fully_decoded_intervals']}",
         f"- Short decoded intervals (<=128 bytes, <=32 instructions): {report['short_candidate_count']}",
         f"- Median protected interval size: {report['interval_size_median']} bytes",
+        f"- Recorded starts referenced by direct calls: {report['categories']['interval_starts_directly_called']}",
+        f"- Short straight-line intervals referenced by direct calls: {report['categories']['short_straight_line_directly_called']}",
         "", "## Static structural categories", ""
     ]
     lines += [f"- {key.replace('_',' ')}: {value}" for key,value in sorted(report["categories"].items())]
     lines += ["", "## Representative short intervals", ""]
     for cand in report["short_candidate_examples"][:20]:
         lines.append(f"- {cand['begin_rva']}: {cand['bytes']} bytes, {cand['instructions']} instructions, "
-                     f"straight-line={cand['straight_line']}, instruction classes={','.join(cand['mnemonics'])}")
+                     f"straight-line={cand['straight_line']}, call references={cand['direct_call_references']}, instruction classes={','.join(cand['mnemonics'])}")
     lines += ["", "## Caveat", "",
               "These intervals are sourced from actual PE unwind records, unlike raw byte-pattern matches. "
+              "Direct call references strengthen the case for genuine entrypoints but do not establish a complete function. "
               "They are not proven independent callable functions or completed ARM64 translations.",
               ""]
     summary = "\n".join(lines)
