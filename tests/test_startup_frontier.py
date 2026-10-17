@@ -37,6 +37,29 @@ class StartupFrontierTests(unittest.TestCase):
         ])
         self.assertIn("shutdown", make_summary(report).lower() + " shutdown")
 
+    def test_instruction_profile_ranking_is_optional(self):
+        graph = {
+            "entry_function_found": True,
+            "entry_function_rva": "0x10",
+            "graph_depth_limit": 1,
+            "graph_nodes": [
+                {"rva":"0x10", "depth":0, "external":False,
+                 "instruction_count":80, "call_instruction_count":4,
+                 "jump_instruction_count":2},
+                {"rva":"0x20", "depth":1, "external":False,
+                 "instruction_count":8, "call_instruction_count":0,
+                 "jump_instruction_count":0},
+            ],
+            "graph_edges": [{"from":"0x10","to":"0x20","external":False}],
+            "sampled_startup_instructions":88,
+            "unique_mnemonics":5,
+            "top_mnemonics":[{"mnemonic":"MOV","count":30}],
+        }
+        report = analyze_graph(graph)
+        self.assertEqual(report["sampled_startup_instructions"], 88)
+        self.assertEqual(report["translation_inspection_candidates"][0]["rva"], "0x20")
+        self.assertIn("Instruction profile", make_summary(report))
+
     def test_missing_entry_rejected(self):
         with self.assertRaises(ValueError):
             analyze_graph({"entry_function_found":False, "graph_nodes":[], "graph_edges":[]})
