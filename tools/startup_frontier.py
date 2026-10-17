@@ -14,7 +14,9 @@ from pathlib import Path
 API_CATEGORIES = {
     "process_and_crt": {
         "getstartupinfoa", "getcurrentprocessid", "getcurrentthreadid",
-        "_cexit", "exit", "_ismbblead",
+        "getcurrentprocess", "_cexit", "exit", "_ismbblead",
+        "isdebuggerpresent", "terminateprocess", "rtlcapturecontext",
+        "setunhandledexceptionfilter", "unhandledexceptionfilter",
     },
     "time_and_scheduling": {
         "queryperformancecounter", "queryperformancefrequency",
@@ -22,17 +24,35 @@ API_CATEGORIES = {
         "timebeginperiod", "timeendperiod", "sleep",
     },
     "filesystem_and_paths": {
-        "setcurrentdirectorya", "getmodulefilenamea",
+        "setcurrentdirectorya", "getmodulefilenamea", "shgetpathfromidlista", "shgetspecialfolderlocation",
     },
     "window_and_messages": {
         "peekmessagea", "translatemessage", "dispatchmessagea",
-        "setwindowtexta",
+        "setwindowtexta", "createwindowexa", "destroywindow", "registerclassexa",
+        "unregisterclassa", "updatewindow", "showwindow", "messageboxa",
+        "loadcursora", "loadimagea", "getclientrect",
+        "getwindowlongptra", "setwindowlongptra", "changedisplaysettingsa",
+        "enumdisplaymonitors",
     },
     "window_drawing": {
-        "getdc", "releasedc",
+        "getdc", "releasedc", "getstockobject",
+    },
+    "rendering_wgl": {
+        "wglcreatecontext", "wgldeletecontext", "wglmakecurrent",
+        "choosepixelformat", "describepixelformat", "setpixelformat",
+        "swapbuffers",
+    },
+    "dynamic_library_loading": {
+        "freelibrary", "loadlibrarya", "getprocaddress",
+    },
+    "steam_startup": {
+        "steamapi_init", "steamapi_restartappifnecessary", "steaminternal_contextinit",
     },
     "steam_lifecycle": {
         "steamapi_shutdown",
+    },
+    "com_memory": {
+        "cotaskmemfree",
     },
 }
 PRIORITY = {
@@ -41,6 +61,10 @@ PRIORITY = {
     "filesystem_and_paths": "early runtime",
     "window_and_messages": "window/event-loop",
     "window_drawing": "window/rendering",
+    "rendering_wgl": "graphics context/Metal adaptation",
+    "dynamic_library_loading": "dynamic imports/loader",
+    "steam_startup": "Steam integration/initialization",
+    "com_memory": "COM heap/lifetime",
     "steam_lifecycle": "lifecycle; not necessarily boot-critical",
     "uncategorized": "investigate",
 }
