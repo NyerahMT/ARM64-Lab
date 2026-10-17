@@ -112,6 +112,26 @@ def analyze_graph(data):
         for rva in nodes if outgoing[rva] > 0
     ]
     graph_hotspots.sort(key=lambda x:(-x["score"], x["depth"], x["rva"]))
+    # Optional richer metrics from newer Ghidra snapshots. Small, shallow
+    # candidates are inspection targets, not automatically liftable functions.
+    translation_candidates = [
+        {
+            "rva": n["rva"],
+            "depth": int(n.get("depth", 0)),
+            "instructions": int(n["instruction_count"]),
+            "call_instructions": int(n.get("call_instruction_count", 0)),
+            "jump_instructions": int(n.get("jump_instruction_count", 0)),
+            "outgoing_graph_edges": outgoing[n["rva"]],
+        }
+        for n in nodes.values()
+        if int(n.get("instruction_count", 0)) > 0
+        and not n.get("instruction_scan_truncated", False)
+    ]
+    translation_candidates.sort(key=lambda c: (
+        c["jump_instructions"] > 0,
+        c["call_instructions"] > 0,
+        c["depth"], c["instructions"], c["rva"],
+    ))
     # Explicitly avoid treating lifecycle/shutdown calls as mandatory boot blockers.
     plan = []
     for group, apis in sorted(grouped.items(), key=lambda item: (
@@ -136,6 +156,10 @@ def analyze_graph(data):
         "internal_nodes_at_depth_limit": len(frontier),
         "internal_nodes_at_depth_limit_sample": sorted(n["rva"] for n in frontier)[:30],
         "graph_hotspots": graph_hotspots[:15],
+        "sampled_startup_instructions": data.get("sampled_startup_instructions"),
+        "unique_mnemonics": data.get("unique_mnemonics"),
+        "top_mnemonics": data.get("top_mnemonics", [])[:30],
+        "translation_inspection_candidates": translation_candidates[:25],
         "compatibility_groups": plan,
         "limitations": [
             "Direct-call reachability does not prove runtime reachability or call order.",
@@ -143,6 +167,7 @@ def analyze_graph(data):
             "Shutdown and cleanup functions may appear without being needed to reach startup.",
             "Indirect calls and dynamically resolved imports may be absent.",
             "Nodes at the configured depth limit are an unexpanded frontier, not complete coverage.",
+            "Short instruction sequences are not automatically safe or complete translation targets.",
         ],
     }
 
@@ -161,6 +186,20 @@ def make_summary(report):
     ]
     for item in report["compatibility_groups"]:
         lines.append(f"| {item['category']} | {item['unique_apis']} | {item['call_edges']} | {item['priority']} |")
+    if report.get("sampled_startup_instructions") is not None:
+        lines.extend([
+            "", "## Instruction profile (bounded and static)", "",
+            "- Instructions sampled: " + str(report["sampled_startup_instructions"]),
+            "- Distinct decoded mnemonics: " + str(report["unique_mnemonics"]),
+            "", "### Candidate functions for follow-up inspection", "",
+            "| RVA | Graph depth | Instructions | Call instructions | Jump instructions |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ])
+        for c in report["translation_inspection_candidates"][:12]:
+            lines.append(
+                f"| {c['rva']} | {c['depth']} | {c['instructions']} | "
+                f"{c['call_instructions']} | {c['jump_instructions']} |"
+            )
     lines.extend(["", "## Candidate internal call hotspots", "",
                   "| RVA | Depth | Outgoing direct calls | Incoming direct calls |",
                   "| --- | ---: | ---: | ---: |"])
