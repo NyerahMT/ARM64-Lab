@@ -39,5 +39,24 @@ class FunctionRecordTests(unittest.TestCase):
         self.assertTrue(all(item["straight_line"] for item in report["short_candidate_examples"]))
 
 
+class CallCrossReferenceTests(unittest.TestCase):
+    def test_unwind_start_referenced_by_direct_call(self):
+        class LinkedPE(StubPE):
+            def __init__(self, path):
+                super().__init__(path)
+                # call 0x1020 from 0x1010; ret at 0x1015
+                self.mem[0x10:0x16] = bytes.fromhex("e80b000000c3")
+                self.pdata = (
+                    struct.pack("<III", 0x1010, 0x1016, 0x2000) +
+                    struct.pack("<III", 0x1020, 0x1023, 0x2000)
+                )
+        with patch.object(x64_functions, "PE", LinkedPE):
+            report = x64_functions.analyze(pathlib.Path("synthetic.exe"))
+        self.assertEqual(report["categories"]["interval_starts_directly_called"], 1)
+        self.assertEqual(report["categories"]["short_straight_line_directly_called"], 1)
+        targets = [c for c in report["short_candidate_examples"] if c["begin_rva"] == "0x1020"]
+        self.assertEqual(targets[0]["direct_call_references"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
