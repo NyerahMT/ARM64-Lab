@@ -29,6 +29,8 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Bounded four-edge-deep static traversal from that entry found 94 nodes and 101 call edges. Of these, 22 distinct external API names were identified (Kernel32, User32, WinMM, MSVCR90, Steam API). The main startup initialization branch passes through RVA 0x136710; candidate high-fanout internal call sites include RVA 0x133e80 (26 mapped callees) and RVA 0x135cd0 (21 mapped callees).
 - Ghidra calls and unwind records are different static signals: its 4,903 recognized functions are **not** 4,903 independently recompilable, behaviorally verified functions.
 - The Ghidra headless toolchain is pinned, SHA-256 verified and cached in private CI for repeatability. Exports contain metadata only.
+- Startup roadmap from the 2026-10-17 Ghidra snapshot grouped 24 static external-call edges into 22 distinct API names, spread across CRT/process, timing, file paths, window/message, drawing, and Steam lifecycle categories. 53 internal graph nodes reached the four-level analysis cutoff, so the report is not a complete call graph.
+- Platform-neutral Win32-style timing helpers now implement GetTickCount/timeGetTime rollover, QueryPerformanceCounter/Frequency, FILETIME conversion, and Sleep forwarding using injected host clock callbacks. Native deterministic unit tests and a freestanding AArch64 cross-compile passed in CI (2026-10-17). A guest import/Windows ABI bridge and iOS-specific clock sources are not yet implemented.
 - No translated original game code has been executed on iPhone, and no original engine/menu has booted.
 
 Do not commit game executables, DLLs, archives, or derived original source files to this public repository.
