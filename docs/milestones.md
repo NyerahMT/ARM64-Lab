@@ -5,7 +5,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | Gate | Criteria | Status |
 | --- | --- | --- |
 | D0 | Inventory a local Windows PE32+ input safely | Complete locally |
-| D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Local proof; CI not yet confirmed |
+| D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
 | D2 | Establish true callable function boundaries and differential reference behavior | Not started |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | Not started |
 | D4 | Execute real original entry path in host/native ARM64 runtime | Not started |
@@ -20,7 +20,8 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Imported APIs: 320 across 12 DLLs.
 - Valid Windows unwind begin/end records: 8,741. This is NOT a verified count of distinct callable functions.
 - Short candidate return-value patterns found in raw executable section: 609. These may include byte coincidences or non-entry code.
-- One candidate at RVA 0x1549a was converted to C and compiled to AArch64 ELF64 by local clang.
+- One candidate at RVA 0x1549a was converted to C and compiled to an AArch64 ELF64 object, both locally and in private GitHub Actions CI (2026-10-17).
+- Of 609 raw byte-pattern candidates, zero started at the 8,741 recorded Windows unwind-function starts; function boundaries remain unverified. This does not establish that none are real leaf functions.
 - No translated original game code has been executed on iPhone, and no original engine/menu has booted.
 
 Do not commit game executables, DLLs, archives, or derived original source files to this public repository.
