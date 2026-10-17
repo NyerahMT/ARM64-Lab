@@ -35,6 +35,18 @@ jobs:
             -Wall -Wextra -Werror -Iruntime -c runtime/mx_time_compat.c \
             -o /tmp/mx_time_compat_aarch64.o
           readelf -h /tmp/mx_time_compat_aarch64.o | grep -q 'Machine:.*AArch64'
+      - name: Test Win64 guest import dispatch with fake guest memory
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mx_time_compat.c runtime/mx_guest_imports.c \
+            tests/test_mx_guest_imports.c -o /tmp/mx_import_dispatch_test
+          /tmp/mx_import_dispatch_test
+      - name: Cross-compile Win64 guest import dispatch to AArch64
+        run: |
+          clang --target=aarch64-unknown-linux-gnu -ffreestanding -std=c11 \
+            -Wall -Wextra -Werror -Iruntime -c runtime/mx_guest_imports.c \
+            -o /tmp/mx_import_dispatch_aarch64.o
+          readelf -h /tmp/mx_import_dispatch_aarch64.o | grep -q 'Machine:.*AArch64'
       - name: Check no proprietary binary inputs were committed
         run: |
           if git ls-files | grep -iE '\.(exe|dll|dli|dlo|pkz|ipa|pdb|dmp)$'; then
