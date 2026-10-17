@@ -35,6 +35,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Newly exposed dependencies include SteamAPI_Init, OpenGL32.wglCreateContext/wglMakeCurrent, GDI SwapBuffers, User32.CreateWindowExA, Kernel32.LoadLibraryA/GetProcAddress, and associated teardown. All 59 observed names were assigned a compatibility category in the refreshed roadmap.
 - Original Win64 register-argument import-dispatch scaffolding now routes six timing APIs into deterministic clock helpers through a bounded guest-memory write interface. Native synthetic tests and freestanding AArch64 object compilation passed. No actual original Win64 imports have been invoked through this adapter yet.
 - Official rev.ng successfully created its PE/COFF parse-binary model from the original executable. A subsequent full-program LLVM lift failed with exit code 137 under a 6 GiB container memory limit; this is a resource-constrained failure, not proof that lifting is unsupported.
+- A smaller launcher PE control also failed to finish rev.ng's full LLVM lift within a four-minute timeout (exit 124). It wrote a 9,897,392-byte intermediate file, but its validity/completeness was not verified. Do not describe either rev.ng lift as successful.
 - No translated original game code has been executed on iPhone, and no original engine/menu has booted.
 
 Do not commit game executables, DLLs, archives, or derived original source files to this public repository.
