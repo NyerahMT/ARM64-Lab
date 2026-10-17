@@ -18,8 +18,8 @@ from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
 
 from .pe_probe import PE
 
-PAMBLE = """#include <stdint.h>
-#include <string.h>
+PAMBLE = """typedef unsigned int uint32_t;
+#define memcpy __builtin_memcpy
 static float _as_float(uint32_t bits) {
     float x; memcpy(&x, &bits, sizeof(x)); return x;
 }
