@@ -7,6 +7,11 @@ class StartupFrontierTests(unittest.TestCase):
     def test_category_and_lifecycle_handling(self):
         self.assertEqual(classify("KERNEL32.DLL::QueryPerformanceCounter"), "time_and_scheduling")
         self.assertEqual(classify("STEAM_API64.DLL::SteamAPI_Shutdown"), "steam_lifecycle")
+        self.assertEqual(classify("STEAM_API64.DLL::SteamAPI_Init"), "steam_startup")
+        self.assertEqual(classify("OPENGL32.DLL::wglCreateContext"), "rendering_wgl")
+        self.assertEqual(classify("GDI32.DLL::SwapBuffers"), "rendering_wgl")
+        self.assertEqual(classify("USER32.DLL::CreateWindowExA"), "window_and_messages")
+        self.assertEqual(classify("KERNEL32.DLL::GetProcAddress"), "dynamic_library_loading")
         self.assertEqual(classify("UNKNOWN.DLL::DifferentFunction"), "uncategorized")
 
     def test_bounded_graph_and_api_paths(self):
