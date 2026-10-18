@@ -81,6 +81,16 @@ def x64_reference():
 def attempt(ir_file:Path):
     original=x64_reference()
     source=ir_file.read_text()
+    # The Remill lifter produces external declarations for runtime helpers.
+    # Replace (rather than duplicate) only these two *known* declarations
+    # before injecting the precise bounded helper implementations.
+    lines=source.splitlines()
+    helper_symbols=("@__remill_write_memory_32(", "@__remill_missing_block(")
+    declarations=[line for line in lines if line.startswith("declare ") and
+                  any(symbol in line for symbol in helper_symbols)]
+    if len(declarations)!=2:
+        raise RuntimeError("Unexpected Remill helper ABI declarations: "+str(len(declarations)))
+    source="\n".join(line for line in lines if line not in declarations)+"\n"
     if not re.search(r"(?m)^define .*@sub_0\(",source):
         raise RuntimeError("No full lifted instruction function in Remill LLVM output")
     if "%struct.State" not in source or "%struct.Memory" not in source:
