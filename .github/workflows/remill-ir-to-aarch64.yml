@@ -28,6 +28,9 @@ jobs:
           set -euo pipefail
           docker pull "$IMAGE"
           mkdir -p "$RUNNER_TEMP/remill-llvm" "$RUNNER_TEMP/remill-metadata"
+          # Legacy container runs unprivileged as a different UID. This folder
+          # contains ONLY synthetic IR and is not mounted from the repository.
+          chmod 0777 "$RUNNER_TEMP/remill-llvm"
       - name: Lift three synthetic AMD64 instructions into IR
         run: |
           set -euo pipefail
