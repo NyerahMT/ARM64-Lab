@@ -125,7 +125,7 @@ def run(out):
         subprocess.run([str(obj)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         arm=work/"aot_arm64.elf"
         cmd=["clang","--target=aarch64-unknown-linux-gnu","-fuse-ld=lld",
-             "-nostdlib","-static","-fno-stack-protector","-fno-builtin",
+             "-nostdlib","-static","-ffreestanding","-fno-stack-protector","-fno-builtin",
              "-O2","-std=c11",f"-I{root/'runtime'}",
              "-Wl,-e,smoke","-Wl,--build-id=none","-Wl,-z,max-page-size=4096",
              str(generated),str(smoke),*map(str,runtime),"-o",str(arm)]
