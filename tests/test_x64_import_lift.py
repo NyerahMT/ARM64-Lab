@@ -1,6 +1,6 @@
 import unittest
 from tools.x64_import_lift import (
-    lift_import_sequence, synthetic_import_sequence, UnsupportedWin64Code
+    lift_import_sequence, lift_import_call_site, synthetic_import_sequence, UnsupportedWin64Code
 )
 
 IAT={0x1300:("KERNEL32.dll","Sleep"),0x1308:("KERNEL32.dll","GetTickCount")}
@@ -14,6 +14,16 @@ class ImportLiftTests(unittest.TestCase):
         self.assertIn("state->rsp += 40ULL;",src)
         self.assertIn("mx_dispatch_supported_win64_import",src)
         self.assertIn("return 1;",src)
+    def test_single_callsite_compiles_to_registry_dispatch(self):
+        snippet=synthetic_import_sequence()[9:15]
+        generated, metadata=lift_import_call_site(snippet,0x1009,IAT)
+        self.assertEqual(metadata["iat_rva"],"0x1300")
+        self.assertEqual(metadata["symbol"],"Sleep")
+        self.assertIn("lifted_import_callsite",generated)
+        self.assertIn("state->rsp & 15ULL",generated)
+        with self.assertRaises(UnsupportedWin64Code):
+            lift_import_call_site(b"\\x90"*6,0x1009,IAT)
+
     def test_fail_if_import_not_in_iat(self):
         with self.assertRaises(UnsupportedWin64Code):
             lift_import_sequence(synthetic_import_sequence(),0x1000,{})
