@@ -129,7 +129,9 @@ def run(out):
              "-O2","-std=c11",f"-I{root/'runtime'}",
              "-Wl,-e,smoke","-Wl,--build-id=none","-Wl,-z,max-page-size=4096",
              str(generated),str(smoke),*map(str,runtime),"-o",str(arm)]
-        subprocess.run(cmd,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        arm_compile=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        if arm_compile.returncode:
+            raise RuntimeError("AArch64 compiler/linker failed: " + arm_compile.stderr[-5000:])
         arm_result=execute_arm64_elf(arm)
     report={
        "input":"purpose-built synthetic x86-64 code only",
