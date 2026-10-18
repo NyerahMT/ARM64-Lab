@@ -12,6 +12,7 @@ An experiment in ahead-of-time recompilation of Windows x86-64 applications for 
 - Cross-compiling those generated C functions to AArch64 object code.
 - Executing a **synthetic Win64 imported-CALL sequence** under Unicorn x64, translating it automatically to C and executing the resulting AArch64 ELF with the actual native timing/import registry (not merely compiling it).
 - Translating a **single authentic MX Bikes imported-CALL instruction** at RVA `0x2AB9AE` (`KERNEL32.dll!GetTickCount`) into native C and executing its observable call effects in Unicorn ARM64; its enclosing game function remains untranslated.
+- **Five complete authentic MX Bikes function bodies** now have bitwise x64-versus-generated ARM64 differential matches: four branch-free SSE math routines (RVA `0x267AE0`, `0x266D80`, `0x266E20`, `0x266EB0`) and a bounded integer/global-memory record writer (`0x258BB0`). These cover 140 original x64 instructions, but represent narrow patterns rather than a general recompiler.
 - A fail-closed native import registry for six timing interfaces, a confirmed CRT data import, and unsupported Steam calls; native C and AArch64 compilation tests pass.
 - Private x64 startup traces have executed original CRT callbacks and read the actual archived Steam DLL, reaching `SteamAPI_Init` under emulated Windows services. These are x64 emulation results, **not native translated startup**.
 - Synthetic regression tests through GitHub Actions, without any original commercial binaries.
