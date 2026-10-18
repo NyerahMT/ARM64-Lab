@@ -38,6 +38,13 @@ Private workflow [39102065870](https://github.com/NyerahMT/ReflexBuildInput/acti
 5. **Prove semantic equivalence rather than count functions.** Each lifted function must have independently verified boundaries, no unresolved CFG successors, representative success/failure paths, all modified guest-memory regions and register state compared, and a clear note if only an internal region was recovered.
 6. **Switch away from bespoke templates when possible.** Add a small **Remill/LLVM instruction lifting pilot** using only an open, synthetic PE fixture before attempting the complete commercial game. Measure instruction coverage, build time, memory and regression mismatches. Reject if integration overhead exceeds the saved work.
 
+## Verified advancement since the initial audit
+
+- The original linked-call milestone is now **verified**, not just a candidate. Two original six-instruction callers (`0x2412E0`, `0x241960`) reach one original 12-instruction callee (`0x15C240`). Private x64 reference execution and AArch64-linked C pass 48/48 differential tests. The compiled ELF independently contains an AArch64 `BL` into the shared translated callee: [verified private run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39103113140).
+- **Ghidra independently confirmed all three exact function entries, instruction counts and recovered end addresses**, plus the two original direct-call edges: [private headless Ghidra validation](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39108857646).
+- **Remill instruction-lifting feasibility**: a legacy official-publisher container produced an LLVM IR function from an entirely synthetic AMD64 instruction in isolated CI: [synthetic-only Remill pilot](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39108999839). This is LLVM IR generation, *not* compiled AArch64, semantic equivalence or a scalable whole-game recompiler.
+- The next program-level gate is to replace strict individual opcode-pattern translations with broad instruction lifting, and check the resulting state changes across representative tests. Startup/Steam/graphics are still pending.
+
 ## Hard gates to claim a real milestone
 
 - **Original interfunction link:** Two independently identified original function bodies execute together from the original x64 image and match a generated native ARM64 linked pair across meaningful inputs. No fake callee returns.
