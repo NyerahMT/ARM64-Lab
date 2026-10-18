@@ -13,6 +13,7 @@ typedef struct {
     uint64_t r8;
     uint64_t r9;
     uint64_t rax;
+    uint64_t rsp; /* Guest stack pointer, not a host pointer. */
 } mx_win64_call;
 
 typedef int (*mx_guest_write)(void *userdata, uint64_t address,
