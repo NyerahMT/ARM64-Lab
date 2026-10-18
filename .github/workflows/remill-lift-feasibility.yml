@@ -37,6 +37,14 @@ jobs:
               for binary in /usr/local/bin/remill-lift-11.0 /usr/local/bin/remill-lift /usr/bin/remill-lift-11.0 /usr/bin/remill-lift /opt/remill/bin/remill-lift-11.0; do
                 if [ -x "$binary" ]; then lift="$binary";break;fi
               done
+              if [ -z "$lift" ]; then
+                echo "diagnostic-path=$PATH"
+                echo "remill-install-locations:"
+                find /opt /usr/local /usr/bin -maxdepth 6 \
+                   -iname "*remill*" -print 2>/dev/null | head -n 30 || true
+                lift="$(find /opt /usr/local -maxdepth 7 -type f \
+                   -name "remill-lift*" -perm /111 -print -quit 2>/dev/null)"
+              fi
               if [ -z "$lift" ];then echo "missing-remill-lift-cli";exit 31;fi
               echo "remill-lift-cli-found"
               "$lift" --arch amd64 --ir_out /tmp/amd64-lifted.ll --bytes c704ba01000000 >/tmp/lift.stdout 2>/tmp/lift.stderr
