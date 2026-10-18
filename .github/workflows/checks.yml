@@ -65,6 +65,10 @@ jobs:
         run: |
           python -m tools.import_aot_smoke --output-dir /tmp/win64-import-aot-proof
           cat /tmp/win64-import-aot-proof/import-aot-proof.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Differentially execute synthetic signed x64 backward loop on AArch64
+        run: |
+          python -m tools.loop_differential /tmp/mx-loop-differential
+          cat /tmp/mx-loop-differential/loop-differential.md >> "$GITHUB_STEP_SUMMARY"
       - name: Check no proprietary binary inputs were committed
         run: |
           if git ls-files | grep -iE '\.(exe|dll|dli|dlo|pkz|ipa|pdb|dmp)$'; then
