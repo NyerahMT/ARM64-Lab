@@ -80,7 +80,7 @@ int smoke(void) {
  /* Reject missing valid guest return-address memory. */
  {
   mx_cfg_state bad={0};
-  bad.rsp=UINT64_C(0xF000000000);
+  bad.rsp=UINT64_C(0xF000000008);
   if(lifted_caller(&bad,&mem)!=-3)return 25;
  }
  return 0;
