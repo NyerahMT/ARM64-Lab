@@ -2,7 +2,7 @@
 
 An experiment in ahead-of-time recompilation of Windows x86-64 applications for ARM64. The goal is to preserve original application behavior, not recreate it in a different engine.
 
-**Current status: PE reconnaissance and a very limited translation proof of concept. Not a playable game, emulator, iOS build, or running engine.**
+**Current status: bounded original x64 startup emulation plus a restricted, compiler-backed ARM64 translation/Win64 import-dispatch proof. Not a playable game, a native iOS build, or a running engine.**
 
 ## What works
 
@@ -10,6 +10,10 @@ An experiment in ahead-of-time recompilation of Windows x86-64 applications for 
 - Searching a locally owned executable for candidate return-value instruction sequences.
 - Lifting two trivial x86-64 patterns (zero return and immediate constant return) to freestanding C.
 - Cross-compiling those generated C functions to AArch64 object code.
+- Executing a **synthetic Win64 imported-CALL sequence** under Unicorn x64, translating it automatically to C and executing the resulting AArch64 ELF with the actual native timing/import registry (not merely compiling it).
+- Translating a **single authentic MX Bikes imported-CALL instruction** at RVA `0x2AB9AE` (`KERNEL32.dll!GetTickCount`) into native C and executing its observable call effects in Unicorn ARM64; its enclosing game function remains untranslated.
+- A fail-closed native import registry for six timing interfaces, a confirmed CRT data import, and unsupported Steam calls; native C and AArch64 compilation tests pass.
+- Private x64 startup traces have executed original CRT callbacks and read the actual archived Steam DLL, reaching `SteamAPI_Init` under emulated Windows services. These are x64 emulation results, **not native translated startup**.
 - Synthetic regression tests through GitHub Actions, without any original commercial binaries.
 
 A byte-pattern match is not proof of a true callable function boundary. A cross-compiled object is not proof that original game code runs on iOS.
@@ -29,7 +33,7 @@ The example RVA refers to a specific local executable revision; offsets may chan
 
 ## Next
 
-Validate genuine function boundaries and differential behavior before scaling translation. Future phases must address indirect control flow, Windows x64 ABI, exceptions, DLL integration, original assets, OpenGL and iOS rendering.
+Scale beyond one-instruction import calls: translate full functions and control flow, preserve guest memory/Win64 ABI/exception state, connect a production-compatible host runtime, and only then tackle original assets, OpenGL-to-Metal rendering, controller input, and iOS packaging. Steam initialization remains unresolved. Keep all original game binaries and derived native objects private.
 
 [See evidence-based milestones](docs/milestones.md) and [CI checks](../../actions).
 
