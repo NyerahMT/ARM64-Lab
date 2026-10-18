@@ -19,6 +19,7 @@ typedef struct {
     uint8_t sf;
     uint8_t cf;
     uint8_t of;
+    uint64_t rbx, rbp, rdi, r12, r13;
 } mx_cfg_state;
 static inline int mx_cfg_transfer(mx_cfg_memory *m, uint64_t address,
                                   void *host_buf, uint32_t size, int write) {
