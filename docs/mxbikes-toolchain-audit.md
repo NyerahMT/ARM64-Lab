@@ -45,6 +45,12 @@ Private workflow [39102065870](https://github.com/NyerahMT/ReflexBuildInput/acti
 - **Remill instruction-lifting feasibility**: a legacy official-publisher container produced an LLVM IR function from an entirely synthetic AMD64 instruction in isolated CI: [synthetic-only Remill pilot](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39108999839). This is LLVM IR generation, *not* compiled AArch64, semantic equivalence or a scalable whole-game recompiler.
 - The next program-level gate is to replace strict individual opcode-pattern translations with broad instruction lifting, and check the resulting state changes across representative tests. Startup/Steam/graphics are still pending.
 
+### Verified Remill → LLVM → AArch64 object experiment
+
+A synthetic-only isolated toolchain test completed on October 18, 2026: [GitHub Actions run 39109492273](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39109492273). An older official-publisher Remill container lifted three independent x86-64 instruction forms—memory store, integer add, and compare—into typed LLVM IR. LLVM 14 then assembled and verified all three modules and generated **three genuine AArch64 relocatable object files**. The two arithmetic/compare objects each retain one undefined Remill helper, and the store object retains two undefined helpers. These are *not linked nor executed* and cannot yet substitute for the existing hand-tested original-code translator.
+
+The next feasibility gate is connecting Remill's guest-state and memory semantics, resolving those runtime helpers, executing synthetic ARM64 code, and verifying behavior against x64. After that, test a verified original function privately. The old LLVM 11/14 combination is research-only, not the long-term iOS pipeline.
+
 ## Hard gates to claim a real milestone
 
 - **Original interfunction link:** Two independently identified original function bodies execute together from the original x64 image and match a generated native ARM64 linked pair across meaningful inputs. No fake callee returns.
