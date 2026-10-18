@@ -48,6 +48,11 @@ jobs:
               if [ -z "$lift" ];then echo "missing-remill-lift-cli";exit 31;fi
               echo "remill-lift-cli-found"
               llvm_as="$(command -v llvm-as-11 || command -v llvm-as || true)"
+              if [ -z "$llvm_as" ]; then
+                llvm_as="$(find /opt /usr/local /usr -maxdepth 9 \
+                    -type f -name "llvm-as*" -perm /111 -print -quit 2>/dev/null)"
+              fi
+              if [ -n "$llvm_as" ]; then echo "llvm-assembler-found=yes";fi
               case_count=0
               verified=0
               for sample in c704ba01000000 83c005 39c8; do
@@ -78,7 +83,7 @@ jobs:
           stdout=(folder/"probe.stdout").read_text() if (folder/"probe.stdout").exists() else ""
           parsed={}
           for line in stdout.splitlines():
-              if line.startswith(("llvm-define-count=","llvm-ir-byte-count=","remill-semantics-references=","synthetic-opcode-types-lifted=","llvm-as-bitcode-verified=")):
+              if line.startswith(("llvm-define-count=","llvm-ir-byte-count=","remill-semantics-references=","synthetic-opcode-types-lifted=","llvm-as-bitcode-verified=","llvm-assembler-found=")):
                   k,v=line.split("=",1)
                   parsed[k]=int(v) if v.isdigit() else v
           report={
