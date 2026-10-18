@@ -47,6 +47,20 @@ jobs:
             -Wall -Wextra -Werror -Iruntime -c runtime/mx_guest_imports.c \
             -o /tmp/mx_import_dispatch_aarch64.o
           readelf -h /tmp/mx_import_dispatch_aarch64.o | grep -q 'Machine:.*AArch64'
+      - name: Test typed Win64 import registry on native host
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mx_time_compat.c runtime/mx_guest_imports.c \
+            runtime/mx_import_registry.c tests/test_mx_import_registry.c \
+            -o /tmp/mx_import_registry_test
+          /tmp/mx_import_registry_test
+      - name: Cross-compile native import registry to AArch64
+        run: |
+          clang --target=aarch64-unknown-linux-gnu -ffreestanding -std=c11 \
+            -Wall -Wextra -Werror -Iruntime \
+            -c runtime/mx_import_registry.c \
+            -o /tmp/mx_import_registry_aarch64.o
+          readelf -h /tmp/mx_import_registry_aarch64.o | grep -q 'Machine:.*AArch64'
       - name: Check no proprietary binary inputs were committed
         run: |
           if git ls-files | grep -iE '\.(exe|dll|dli|dlo|pkz|ipa|pdb|dmp)$'; then
