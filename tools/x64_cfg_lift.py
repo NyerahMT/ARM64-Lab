@@ -58,9 +58,11 @@ def translate_cfg(blob:bytes,start:int):
           ' if (!s || !mem) return -1;\n',
           ' uint32_t steps=0;\n',
           f' goto L_{start:x};\n']
+    label_targets={start} | {i.operands[0].imm for i in instructions if i.mnemonic in ("je","jne")}
     for inst in instructions:
-        body += [f'L_{inst.address:x}:\n',
-                 ' if (++steps>256U) return -2;\n']
+        if inst.address in label_targets:
+            body.append(f'L_{inst.address:x}:\n')
+        body.append(' if (++steps>256U) return -2;\n')
         ops=inst.operands
         if inst.mnemonic=="mov":
             if len(ops)!=2:raise UnsupportedCFG("Unexpected MOV count")
