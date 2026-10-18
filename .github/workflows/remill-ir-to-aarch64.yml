@@ -41,9 +41,14 @@ jobs:
               lift="$(find /opt /usr/local -maxdepth 7 -type f -name "remill-lift*" -perm /111 -print -quit 2>/dev/null)"
               if [ -z "$lift" ];then echo "No Remill CLI";exit 31;fi
               for encoded in c704ba01000000 83c005 39c8;do
-                "$lift" --arch amd64 --ir_out "/mnt/out/$encoded.ll" --bytes "$encoded" >/dev/null 2>/tmp/lift.stderr
+                "$lift" --arch amd64 --ir_out "/tmp/$encoded.ll" --bytes "$encoded" >/dev/null 2>/tmp/lift.stderr || {
+                  cat /tmp/lift.stderr >&2
+                  exit 35
+                }
+                test -s "/tmp/$encoded.ll"
+                grep -q "^define " "/tmp/$encoded.ll"
+                cp "/tmp/$encoded.ll" "/mnt/out/$encoded.ll"
                 test -s "/mnt/out/$encoded.ll"
-                grep -q "^define " "/mnt/out/$encoded.ll"
               done
             '
       - name: Verify IR and cross-compile genuine lifted IR to ARM64 objects
