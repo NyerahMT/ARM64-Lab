@@ -69,6 +69,10 @@ jobs:
         run: |
           python -m tools.loop_differential /tmp/mx-loop-differential
           cat /tmp/mx-loop-differential/loop-differential.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Test two truly linked translated Win64 functions on ARM64
+        run: |
+          python -m tools.linked_call_differential /tmp/mx-linked-call-differential
+          cat /tmp/mx-linked-call-differential/linked-calls.md >> "$GITHUB_STEP_SUMMARY"
       - name: Check no proprietary binary inputs were committed
         run: |
           if git ls-files | grep -iE '\.(exe|dll|dli|dlo|pkz|ipa|pdb|dmp)$'; then
