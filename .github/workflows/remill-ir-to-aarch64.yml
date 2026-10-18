@@ -83,6 +83,7 @@ jobs:
               symbols[p.name]={
                 "object_size_bytes":p.stat().st_size,
                 "unresolved_external_symbol_count":len(names),
+                "unresolved_external_symbol_names":names,
                 "unresolved_remill_symbol_count":sum("remill" in n.lower() for n in names)
               }
           output={
@@ -117,6 +118,9 @@ jobs:
           ])
           (report/"remill-llvm14-object-proof.md").write_text(text)
           print(text)
+          print("Synthetic lifted runtime dependencies (names only):")
+          for key,value in symbols.items():
+              print("  "+key+": "+", ".join(value["unresolved_external_symbol_names"]))
           PY
           cat "$RUNNER_TEMP/remill-metadata/remill-llvm14-object-proof.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload only synthetic test metrics, never derived native source
