@@ -47,12 +47,26 @@ jobs:
               fi
               if [ -z "$lift" ];then echo "missing-remill-lift-cli";exit 31;fi
               echo "remill-lift-cli-found"
-              "$lift" --arch amd64 --ir_out /tmp/amd64-lifted.ll --bytes c704ba01000000 >/tmp/lift.stdout 2>/tmp/lift.stderr
-              test -s /tmp/amd64-lifted.ll || exit 32
-              grep -q "^define " /tmp/amd64-lifted.ll || exit 33
-              echo "llvm-define-count=$(grep -c "^define " /tmp/amd64-lifted.ll)"
-              echo "llvm-ir-byte-count=$(wc -c < /tmp/amd64-lifted.ll)"
-              if grep -q "@__remill" /tmp/amd64-lifted.ll; then echo "remill-semantics-references=yes";fi
+              llvm_as="$(command -v llvm-as-11 || command -v llvm-as || true)"
+              case_count=0
+              verified=0
+              for sample in c704ba01000000 83c005 39c8; do
+                "$lift" --arch amd64 --ir_out "/tmp/$sample.ll" --bytes "$sample" \
+                  >"/tmp/$sample.stdout" 2>"/tmp/$sample.stderr"
+                test -s "/tmp/$sample.ll" || exit 32
+                grep -q "^define " "/tmp/$sample.ll" || exit 33
+                case_count=$((case_count+1))
+                if [ -n "$llvm_as" ]; then
+                  "$llvm_as" "/tmp/$sample.ll" -o "/tmp/$sample.bc"
+                  test -s "/tmp/$sample.bc" || exit 34
+                  verified=$((verified+1))
+                fi
+              done
+              echo "llvm-define-count=$(grep -c "^define " /tmp/c704ba01000000.ll)"
+              echo "llvm-ir-byte-count=$(wc -c < /tmp/c704ba01000000.ll)"
+              echo "synthetic-opcode-types-lifted=$case_count"
+              echo "llvm-as-bitcode-verified=$verified"
+              if grep -q "@__remill" /tmp/c704ba01000000.ll; then echo "remill-semantics-references=yes";fi
             ' > "$RUNNER_TEMP/remill-report/probe.stdout" \
               2> "$RUNNER_TEMP/remill-report/probe.stderr"
           rc=$?
@@ -64,7 +78,7 @@ jobs:
           stdout=(folder/"probe.stdout").read_text() if (folder/"probe.stdout").exists() else ""
           parsed={}
           for line in stdout.splitlines():
-              if line.startswith(("llvm-define-count=","llvm-ir-byte-count=","remill-semantics-references=")):
+              if line.startswith(("llvm-define-count=","llvm-ir-byte-count=","remill-semantics-references=","synthetic-opcode-types-lifted=","llvm-as-bitcode-verified=")):
                   k,v=line.split("=",1)
                   parsed[k]=int(v) if v.isdigit() else v
           report={
@@ -93,6 +107,8 @@ jobs:
              "- Probe exit code: "+str(report["probe_exit_code"]),
              "- Elapsed seconds: "+str(report["elapsed_seconds"]),
              "- LLVM definitions: "+str(parsed.get("llvm-define-count","unverified")),
+             "- Synthetic opcode classes lifted: "+str(parsed.get("synthetic-opcode-types-lifted","unverified")),
+             "- LLVM-as structural bitcode validations: "+str(parsed.get("llvm-as-bitcode-verified","unverified")),
              "",
              "**An IR smoke test is not whole-game recompilation, an ARM64 test, or an iOS build.**",""
           ])
