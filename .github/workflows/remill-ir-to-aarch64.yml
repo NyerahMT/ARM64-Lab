@@ -1,0 +1,121 @@
+name: Remill - synthetic x64 IR to AArch64 object
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/remill-ir-to-aarch64.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  llvm14-proof:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 18
+    env:
+      IMAGE: trailofbits/remill:llvm1100-ubuntu20.04-amd64
+    steps:
+      - name: Install LLVM 14 tools for typed-pointer LLVM 11 IR
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends llvm-14
+          test -x /usr/bin/llvm-as-14
+          test -x /usr/bin/llc-14
+      - name: Pull isolated legacy Trail of Bits Remill image
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          mkdir -p "$RUNNER_TEMP/remill-llvm" "$RUNNER_TEMP/remill-metadata"
+      - name: Lift three synthetic AMD64 instructions into IR
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --memory 2g --cpus 1 \
+            --mount type=bind,source="$RUNNER_TEMP/remill-llvm",target=/mnt/out \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --entrypoint /bin/sh "$IMAGE" -c '
+              set -eu
+              lift="$(find /opt /usr/local -maxdepth 7 -type f -name "remill-lift*" -perm /111 -print -quit 2>/dev/null)"
+              if [ -z "$lift" ];then echo "No Remill CLI";exit 31;fi
+              for encoded in c704ba01000000 83c005 39c8;do
+                "$lift" --arch amd64 --ir_out "/mnt/out/$encoded.ll" --bytes "$encoded" >/dev/null 2>/tmp/lift.stderr
+                test -s "/mnt/out/$encoded.ll"
+                grep -q "^define " "/mnt/out/$encoded.ll"
+              done
+            '
+      - name: Verify IR and cross-compile genuine lifted IR to ARM64 objects
+        run: |
+          set -euo pipefail
+          count=0
+          for encoded in c704ba01000000 83c005 39c8;do
+            llvm-as-14 "$RUNNER_TEMP/remill-llvm/$encoded.ll" \
+              -o "$RUNNER_TEMP/remill-llvm/$encoded.bc"
+            opt-14 -verify -disable-output "$RUNNER_TEMP/remill-llvm/$encoded.bc"
+            llc-14 -mtriple=aarch64-unknown-linux-gnu -filetype=obj \
+              "$RUNNER_TEMP/remill-llvm/$encoded.bc" \
+              -o "$RUNNER_TEMP/remill-llvm/$encoded-aarch64.o"
+            readelf -h "$RUNNER_TEMP/remill-llvm/$encoded-aarch64.o" | \
+              grep -q 'Machine:.*AArch64'
+            count=$((count+1))
+          done
+          export CASES="$count"
+          python - <<'PY'
+          import os,json,pathlib,subprocess
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])
+          report=root/"remill-metadata"
+          objects=list((root/"remill-llvm").glob("*-aarch64.o"))
+          symbols={}
+          for p in objects:
+              result=subprocess.run(["llvm-nm-14","--undefined-only",str(p)],
+                                    text=True,capture_output=True,check=True)
+              names=sorted(set(line.strip().split()[-1] for line in result.stdout.splitlines() if line.strip()))
+              symbols[p.name]={
+                "object_size_bytes":p.stat().st_size,
+                "unresolved_external_symbol_count":len(names),
+                "unresolved_remill_symbol_count":sum("remill" in n.lower() for n in names)
+              }
+          output={
+            "origin":"synthetic x64 instructions; no original game bytes",
+            "instruction_types":["indexed-memory-store","arithmetic-add","compare"],
+            "source_lifter":"Legacy official-publisher Remill container (LLVM 11)",
+            "typed_ir_compiler":"LLVM 14 llvm-as, opt and llc",
+            "tested_samples":int(os.environ["CASES"]),
+            "validated_llvm_bitcode":True,
+            "aarch64_machine_objects_created":len(objects),
+            "objects_with_unresolved_runtime_functions":sum(
+               bool(v["unresolved_external_symbol_count"]) for v in symbols.values()),
+            "object_metadata":symbols,
+            "native_arm64_execution":False,
+            "limitations":[
+              "LLVM IR and target object contain guest-machine state and runtime helper references",
+              "Object compilation is not execution, no linked runtime semantics or differential equivalence",
+              "Legacy LLVM 11 source and LLVM 14 object stage are only a feasibility gate",
+              "No commercial code, no MX Bikes boot, no iOS Mach-O"
+            ]
+          }
+          (report/"remill-llvm14-object-proof.json").write_text(json.dumps(output,indent=2)+"\n")
+          text="\n".join([
+             "# Remill LLVM to ARM64 object — synthetic-only proof","",
+             f"- Instruction types lifted: {output['tested_samples']}",
+             "- LLVM IR assembled and verified with LLVM 14: yes",
+             f"- Real AArch64 machine-code objects produced: {len(objects)}",
+             f"- Objects still requiring unresolved external runtime symbols: {output['objects_with_unresolved_runtime_functions']}",
+             "",
+             "**This proves object-code compilation only: no linked runtime, original game binary, ARM64 execution or iOS build.**",
+             ""
+          ])
+          (report/"remill-llvm14-object-proof.md").write_text(text)
+          print(text)
+          PY
+          cat "$RUNNER_TEMP/remill-metadata/remill-llvm14-object-proof.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload only synthetic test metrics, never derived native source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remill-synthetic-aarch64-compile-metadata
+          path: ${{ runner.temp }}/remill-metadata/
+          if-no-files-found: warn
+          retention-days: 7
