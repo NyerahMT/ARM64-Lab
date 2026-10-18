@@ -77,15 +77,16 @@ def lift_import_sequence(code: bytes, start_rva: int, iat: dict[int, tuple[str, 
             continue
         if mnemonic in ("call", "jmp") and len(ops) == 1:
             dll, name, address = _import_ref(ins, ops[0], iat)
-            if stack_depth < 32 or stack_depth % 16 != 8:
+            if mnemonic == "call" and (stack_depth < 32 or stack_depth % 16 != 8):
                 raise UnsupportedWin64Code("Win64 call needs >=32 shadow bytes and 16-byte aligned caller stack")
-            if mnemonic == "jmp" and n != len(insns)-1:
-                raise UnsupportedWin64Code("Terminal import tail jump must be final instruction")
+            if mnemonic == "jmp" and (n != len(insns)-1 or stack_depth != 0):
+                raise UnsupportedWin64Code("Import tail jump must terminate with unmodified entry stack")
             # Names come through strict validation, not arbitrary code injection.
             src.append(f"    {{ int outcome = mx_dispatch_supported_win64_import(rt, {json.dumps(dll)}, {json.dumps(name)}, state);\n")
             src.append("      if (outcome != 1) return outcome; }\n")
             calls.append({"kind":mnemonic,"iat_rva":hex(address),"dll":dll,"symbol":name})
             if mnemonic == "jmp":
+                src.append("    return 1;\n")
                 terminated = True
             continue
         if mnemonic == "ret" and len(ops) == 0 and n == len(insns)-1:
