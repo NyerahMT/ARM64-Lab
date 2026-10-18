@@ -1,0 +1,105 @@
+name: Remill LLVM lifter feasibility (synthetic only)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/remill-lift-feasibility.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-amd64-lift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      IMAGE: trailofbits/remill:llvm1100-ubuntu20.04-amd64
+    steps:
+      - name: Pull upstream maintained-by-publisher legacy Remill image
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          mkdir -p "$RUNNER_TEMP/remill-report"
+          docker image inspect "$IMAGE" --format '{{json .RepoDigests}}' > "$RUNNER_TEMP/remill-report/image-digests-private.json"
+      - name: Execute isolated synthetic AMD64-to-LLVM probe
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          set +e
+          timeout 180 docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --memory 2g --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --entrypoint /bin/sh "$IMAGE" -c '
+              set -eu
+              lift=""
+              for binary in /usr/local/bin/remill-lift-11.0 /usr/local/bin/remill-lift /usr/bin/remill-lift-11.0 /usr/bin/remill-lift /opt/remill/bin/remill-lift-11.0; do
+                if [ -x "$binary" ]; then lift="$binary";break;fi
+              done
+              if [ -z "$lift" ];then echo "missing-remill-lift-cli";exit 31;fi
+              echo "remill-lift-cli-found"
+              "$lift" --arch amd64 --ir_out /tmp/amd64-lifted.ll --bytes c704ba01000000 >/tmp/lift.stdout 2>/tmp/lift.stderr
+              test -s /tmp/amd64-lifted.ll || exit 32
+              grep -q "^define " /tmp/amd64-lifted.ll || exit 33
+              echo "llvm-define-count=$(grep -c "^define " /tmp/amd64-lifted.ll)"
+              echo "llvm-ir-byte-count=$(wc -c < /tmp/amd64-lifted.ll)"
+              if grep -q "@__remill" /tmp/amd64-lifted.ll; then echo "remill-semantics-references=yes";fi
+            ' > "$RUNNER_TEMP/remill-report/probe.stdout" \
+              2> "$RUNNER_TEMP/remill-report/probe.stderr"
+          rc=$?
+          set -e
+          export PROBE_RC="$rc" ELAPSED="$(( $(date +%s) - start ))"
+          python - <<'PY'
+          import os,pathlib,json,re
+          folder=pathlib.Path(os.environ["RUNNER_TEMP"])/"remill-report"
+          stdout=(folder/"probe.stdout").read_text() if (folder/"probe.stdout").exists() else ""
+          parsed={}
+          for line in stdout.splitlines():
+              if line.startswith(("llvm-define-count=","llvm-ir-byte-count=","remill-semantics-references=")):
+                  k,v=line.split("=",1)
+                  parsed[k]=int(v) if v.isdigit() else v
+          report={
+            "input":"Synthetic documented AMD64 instruction only, no game data",
+            "publisher_image":"trailofbits/remill:llvm1100-ubuntu20.04-amd64",
+            "runtime":"no network, read-only root filesystem, dropped capabilities and isolated tempfs",
+            "probe_exit_code":int(os.environ["PROBE_RC"]),
+            "elapsed_seconds":int(os.environ["ELAPSED"]),
+            "remill_lift_cli_found":"remill-lift-cli-found" in stdout,
+            "llvm_ir_generated":"llvm-define-count" in parsed and parsed["llvm-define-count"]>0,
+            "probe_metrics":parsed,
+            "notes":[
+               "Legacy upstream image uses LLVM 11 and is not an approved production recompiler",
+               "Instruction LLVM IR output alone does not prove complete binary lifting or AArch64 execution",
+               "Use fresh source build and synthetic differential validation before considering integration"
+            ]
+          }
+          (folder/"remill-feasibility.json").write_text(json.dumps(report,indent=2)+"\n")
+          text="\n".join([
+             "# Remill synthetic LLVM lifter probe","",
+             "- Synthetic x64 instruction only; NO game binaries",
+             "- Older published Trail of Bits Remill image with LLVM 11",
+             "- Isolated container: no network, read-only FS, dropped capabilities",
+             "- Remill executable located: "+str(report["remill_lift_cli_found"]),
+             "- LLVM IR generated: "+str(report["llvm_ir_generated"]),
+             "- Probe exit code: "+str(report["probe_exit_code"]),
+             "- Elapsed seconds: "+str(report["elapsed_seconds"]),
+             "- LLVM definitions: "+str(parsed.get("llvm-define-count","unverified")),
+             "",
+             "**An IR smoke test is not whole-game recompilation, an ARM64 test, or an iOS build.**",""
+          ])
+          (folder/"remill-feasibility.md").write_text(text)
+          print(text)
+          PY
+          cat "$RUNNER_TEMP/remill-report/remill-feasibility.md" >> "$GITHUB_STEP_SUMMARY"
+          # This is a feasibility probe, not a production CI correctness gate.
+      - name: Upload sanitized synthetic metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remill-synthetic-lift-metadata
+          path: |
+            ${{ runner.temp }}/remill-report/remill-feasibility.json
+            ${{ runner.temp }}/remill-report/remill-feasibility.md
+          if-no-files-found: warn
+          retention-days: 7
