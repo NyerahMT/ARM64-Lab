@@ -25,6 +25,10 @@ This is a measured workflow decision for the privately owned original Windows x8
 
 Official REA: https://github.com/morluto/rea, published `rea-agents` npm package; use a pinned, genuinely published version and the existing Ghidra installation. REA's main branch and npm releases can differ. Do not copy lookalike/forked setup instructions and do **not** run its agent setup inside GitHub CI. Its Linux Ghidra provider needs Java, Node, procps and a bounded analysis startup deadline.
 
+### Measured REA pilot on the original executable
+
+Private workflow [39102065870](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39102065870) successfully ran official, isolated npm `rea-agents@6.5.0` against the exact verified original PE with existing Ghidra 12.1.4 and JDK 21. The direct Ghidra analysis CLI returned valid parseable JSON and exit 0 after **222 seconds**. The optional/global `doctor` command exited 1 in this ephemeral runner (the separate analysis still succeeded). The GitHub source release v6.6.0 was **not yet available on npm** when first attempted; version 6.5.0 was confirmed on npm and pinned. Only sanitized job metrics were retained. **REA's overview success does not demonstrate a faster workflow than direct Ghidra or the ability to recompile a function.** Avoid a fresh analysis session per routine; batch a selected set of function dossiers in one provider session.
+
 ## How we remove repeated work
 
 1. **Select from immutable analysis facts.** Private scan `39101884840` exported 290 direct caller/callee leads. It determined 77 closed-callee, no-nested-call pairs across just 10 reusable callee identities. The **fast cached triage** workflow `39102025652` consumed these facts without re-downloading `Game.zip`, scanning PE unwind records, or starting Ghidra.
