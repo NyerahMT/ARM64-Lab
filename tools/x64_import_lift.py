@@ -111,3 +111,33 @@ def synthetic_import_sequence(rva=0x1000, sleep_slot=0x1300, tick_slot=0x1308):
     second = first + len(call_sleep)
     call_tick = b"\xff\x15" + struct.pack("<i", tick_slot-(second+6))
     return prelude + call_sleep + call_tick + b"\x48\x83\xc4\x28\xc3"
+
+
+def lift_import_call_site(code: bytes, start_rva: int, iat: dict[int, tuple[str,str]]):
+    """Translate exactly ONE x64 call [RIP+disp] instruction, not its function.
+
+    The caller has already prepared a Win64 call-aligned stack with 32 bytes
+    of shadow space. Guest memory, surrounding instructions, and callsite
+    reachability are external responsibilities.
+    """
+    if not isinstance(code, bytes) or len(code) != 6:
+        raise UnsupportedWin64Code("Expected one six-byte imported CALL instruction")
+    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+    decoder.detail = True
+    instructions = list(decoder.disasm(code, start_rva))
+    if len(instructions)!=1 or instructions[0].size != len(code):
+        raise UnsupportedWin64Code("Callsite bytes do not decode as a single instruction")
+    ins = instructions[0]
+    if ins.mnemonic != "call" or len(ins.operands)!=1:
+        raise UnsupportedWin64Code("Only RIP-relative CALL instruction is supported")
+    dll,name,slot=_import_ref(ins,ins.operands[0],iat)
+    c=(
+       '#include <stdint.h>\n#include "mx_import_registry.h"\n'
+       'int lifted_import_callsite(const mx_import_runtime *rt, mx_win64_call *state) {\n'
+       '    if (!rt || !state || !state->rsp || (state->rsp & 15ULL)) return -1;\n'
+       f'    return mx_dispatch_supported_win64_import(rt, {json.dumps(dll)}, {json.dumps(name)}, state);\n'
+       '}\n'
+    )
+    return c, {"start_rva":hex(start_rva),"iat_rva":hex(slot),
+               "dll":dll,"symbol":name,"instructions":1,
+               "scope":"Single original CALL instruction, NOT translated surrounding game function."}
