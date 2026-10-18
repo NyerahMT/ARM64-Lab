@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install disassembler
-        run: python -m pip install 'capstone>=5,<6' 'unicorn>=2,<3'
+        run: python -m pip install 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
       - name: Test safe local tooling
         run: python -m unittest discover -s tests -v
       - name: Generate tiny synthetic lift
@@ -61,6 +61,10 @@ jobs:
             -c runtime/mx_import_registry.c \
             -o /tmp/mx_import_registry_aarch64.o
           readelf -h /tmp/mx_import_registry_aarch64.o | grep -q 'Machine:.*AArch64'
+      - name: Cross-architecture x64-to-ARM64 native import differential proof
+        run: |
+          python -m tools.import_aot_smoke --output-dir /tmp/win64-import-aot-proof
+          cat /tmp/win64-import-aot-proof/import-aot-proof.md >> "$GITHUB_STEP_SUMMARY"
       - name: Check no proprietary binary inputs were committed
         run: |
           if git ls-files | grep -iE '\.(exe|dll|dli|dlo|pkz|ipa|pdb|dmp)$'; then
