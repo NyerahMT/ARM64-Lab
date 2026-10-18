@@ -81,7 +81,17 @@ int lifted_caller(mx_cfg_state *s,mx_cfg_memory *mem) {
  int callee_status=lifted_callee(s,mem);
  if(callee_status!=1)return callee_status;
  if(s->rip!=UINT64_C(RETURN_RVA) || s->rsp!=original_rsp-40)return -6;
- s->rsp+=40;
+ /* ADD RSP,0x28 is an arithmetic x64 instruction and sets flags. */
+ {
+  const uint64_t a=s->rsp;
+  const uint64_t b=UINT64_C(40);
+  const uint64_t sum=a+b;
+  s->rsp=sum;
+  s->cf=(uint8_t)(sum<a);
+  s->of=(uint8_t)((((~(a^b))&(a^sum))&UINT64_C(9223372036854775808))!=0);
+  s->sf=(uint8_t)((sum>>63)!=0);
+  s->zf=(uint8_t)(sum==0);
+ }
  if(!mx_cfg_transfer(mem,s->rsp,&s->rip,8,0))return -4;
  s->rsp+=8;
  return 1;
