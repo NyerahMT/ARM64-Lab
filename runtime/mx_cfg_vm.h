@@ -26,8 +26,14 @@ static inline int mx_cfg_transfer(mx_cfg_memory *m, uint64_t address,
         if (!r->data || address<r->base || size>r->length) continue;
         uint64_t off=address-r->base;
         if (off>r->length-size) continue;
-        if (write) __builtin_memcpy(r->data+off,host_buf,size);
-        else __builtin_memcpy(host_buf,r->data+off,size);
+        /* Volatile byte operations avoid unresolved libc memcpy in the
+         * freestanding AArch64 test runtime; each access is range-checked. */
+        volatile uint8_t *guest=(volatile uint8_t*)r->data;
+        uint8_t *host=(uint8_t*)host_buf;
+        for (uint32_t j=0;j<size;j++) {
+            if (write) guest[off+j]=host[j];
+            else host[j]=guest[off+j];
+        }
         return 1;
     }
     return 0;
