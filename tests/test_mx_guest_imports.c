@@ -33,7 +33,7 @@ int main(void) {
     fake_host fake = {0};
     fake.monotonic = UINT64_C(12000000000);
     mx_clock_source clock = {&fake,monotonic_ns,realtime_ns,sleep_ns};
-    mx_import_runtime runtime = {&clock,mem_write,&fake};
+    mx_import_runtime runtime = {&clock,mem_write,&fake,0,0,0};
     mx_win64_call call = {0};
 
     CHECK(mx_dispatch_timing_import(&runtime,"KERNEL32.DLL","gEtTiCkCoUnT",&call) == 1);
