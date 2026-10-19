@@ -48,7 +48,7 @@ class StartupGateTests(unittest.TestCase):
         class MissingUnwind(FakePE):
             def directory(self, index):
                 return (0, 0)
-        with self.assertRaisesRegex(ValueError, "unique unwind interval"):
+        with self.assertRaisesRegex(ValueError, "Missing or invalid unwind directory"):
             inspect_entry(MissingUnwind())
 
     def test_incomplete_decode_fails_closed(self):
