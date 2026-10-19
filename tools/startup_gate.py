@@ -28,6 +28,68 @@ def unwind_range(pe, target):
 
 
 
+def static_cfg_blocks(instructions):
+    """Produce a bounded static direct-edge map, not an executable CFG lift.
+
+    Indirect imports are callsite markers; no target/API success is inferred.
+    Dead sequential instructions may still be represented as blocks.
+    """
+    if not instructions or len(instructions) > 5000:
+        raise ValueError("No bounded decoded instruction interval")
+    positions={i.address for i in instructions}
+    if len(positions)!=len(instructions):
+        raise ValueError("Duplicate instruction boundaries")
+    beginnings={instructions[0].address}
+    for n,ins in enumerate(instructions):
+        if n and instructions[n-1].address+instructions[n-1].size!=ins.address:
+            raise ValueError("Noncontiguous instruction interval")
+        next_addr=ins.address+ins.size
+        if ins.group(CS_GRP_JUMP):
+            if len(ins.operands)!=1 or ins.operands[0].type!=X86_OP_IMM:
+                raise ValueError("Indirect or unresolved control-flow jump")
+            target=ins.operands[0].imm
+            if target not in positions:
+                raise ValueError("Direct branch leaves decoded interval")
+            beginnings.add(target)
+            if next_addr in positions:
+                beginnings.add(next_addr)
+        elif ins.group(CS_GRP_CALL) or ins.mnemonic.startswith("ret"):
+            if next_addr in positions:
+                beginnings.add(next_addr)
+    sorted_starts=sorted(beginnings)
+    groups=[]
+    for index,start in enumerate(sorted_starts):
+        limit=sorted_starts[index+1] if index+1<len(sorted_starts) else instructions[-1].address+instructions[-1].size
+        block=[i for i in instructions if start<=i.address<limit]
+        if not block:
+            raise ValueError("Empty basic-block interval")
+        last=block[-1]
+        after=last.address+last.size
+        outgoing=[]
+        if last.group(CS_GRP_JUMP):
+            target=last.operands[0].imm
+            outgoing.append({"type":"jump" if last.mnemonic=="jmp" else "taken","to":hex(target)})
+            if last.mnemonic!="jmp" and after in beginnings:
+                outgoing.append({"type":"fallthrough","to":hex(after)})
+        elif last.mnemonic.startswith("ret"):
+            pass
+        elif after in beginnings:
+            outgoing.append({"type":"call_continuation" if last.group(CS_GRP_CALL) else "fallthrough",
+                             "to":hex(after)})
+        groups.append({
+            "start_rva":hex(start),
+            "end_rva_exclusive":hex(limit),
+            "instructions":len(block),
+            "terminator":"imported_or_indirect_call" if last.group(CS_GRP_CALL) and
+                         last.operands and last.operands[0].type==X86_OP_MEM else last.mnemonic,
+            "outgoing":outgoing,
+        })
+    return {"source":"Static direct edges only; indirect calls are unresolved",
+            "block_count":len(groups),
+            "direct_edges":sum(len(x["outgoing"]) for x in groups),
+            "blocks":groups}
+
+
 def profile_first_callee(pe, callee_rva):
     """Statically decode the complete unwind interval containing the first callee.
 
@@ -86,6 +148,7 @@ def profile_first_callee(pe, callee_rva):
         "rip_relative_memory_instruction_count": rip_memory_references,
         "lock_prefixed_instruction_count": lock_prefixed,
         "native_arm64_executed": False,
+        "static_control_flow": static_cfg_blocks(decoded),
         "limitations": [
             "Unwind interval can differ from an entire callable function.",
             "Static disassembly does not prove instruction execution or CFG reachability.",

@@ -1,7 +1,7 @@
 """Synthetic-only regression tests for startup gate inspection."""
 import struct
 import unittest
-from tools.startup_gate import inspect_entry
+from tools.startup_gate import inspect_entry, static_cfg_blocks
 
 
 class FakePE:
@@ -59,6 +59,28 @@ class StartupGateTests(unittest.TestCase):
                 return super().read_rva(rva, size)
         with self.assertRaisesRegex(ValueError, "cannot be decoded completely"):
             inspect_entry(CorruptCallee())
+
+    def test_direct_branch_block_boundaries(self):
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+        # Synthetic: TEST EAX,EAX; JE +2; XOR EAX,EAX; RET
+        decoder=Cs(CS_ARCH_X86,CS_MODE_64)
+        decoder.detail=True
+        ins=list(decoder.disasm(bytes.fromhex("85c0740231c0c3"),0x3000))
+        graph=static_cfg_blocks(ins)
+        self.assertEqual(graph["block_count"],3)
+        self.assertEqual(graph["direct_edges"],3)
+        self.assertEqual([b["start_rva"] for b in graph["blocks"]],
+                         ["0x3000","0x3004","0x3006"])
+        self.assertEqual(graph["blocks"][0]["outgoing"],
+                         [{"type":"taken","to":"0x3006"},
+                          {"type":"fallthrough","to":"0x3004"}])
+
+    def test_indirect_branch_rejected(self):
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+        md=Cs(CS_ARCH_X86,CS_MODE_64)
+        md.detail=True
+        with self.assertRaisesRegex(ValueError,"Indirect"):
+            static_cfg_blocks(list(md.disasm(bytes.fromhex("ffe0"),0x2000)))
 
     def test_unrecognized_entry_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "not the supported"):
