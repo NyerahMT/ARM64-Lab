@@ -29,7 +29,7 @@ static int denied_write(void *ctx, uint64_t address, const uint8_t *b, uint32_t 
 int smoke(void) {
     clock_state host={UINT64_C(1234000000),0,0};
     mx_clock_source clock={&host,mono,real_time,sleeping};
-    mx_import_runtime runtime={&clock,denied_write,&host};
+    mx_import_runtime runtime={&clock,denied_write,&host,0,0,0};
     mx_win64_call state={0};
     state.rsp=UINT64_C(0x700008);
     if (lifted_import_sequence(&runtime,&state)!=1) return 11;
