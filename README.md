@@ -36,7 +36,9 @@ The original entry wrapper at RVA `0x2AB31C` calls the security-cookie initializ
 - The previous [seven-case Remill branch proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39207913661) remains an independent partial-path result. Its naive whole-span call/return handling was not used for the now-verified complete CFG differential.
 - [ARM64-Lab public CI](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39292823081) passed strict C compilation and synthetic branch/import continuation tests.
 
-**Next gate:** translate the much larger **518-byte, 126-instruction** CRT routine at `0x2AB02C`, including Windows GS/TEB access, atomic `lock cmpxchg`, loader state, and additional Win64 imports. After that, join the translated entry wrapper and both callees into one checked ARM64 entry sequence. Neither a real Steam session nor the MX Bikes engine, graphics, or iOS package has booted.
+**Next CRT routine analyzed:** [Private static inventory](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39293785688) verified 518 bytes, 126 decoded original x64 instructions, **53 candidate blocks**, 20 conditional branches, 28 internal direct branch targets, seven imported callsites, one GS/TEB memory reference, one LOCK-prefixed operation and 11 additional instruction families. Validated imported symbols include `GetStartupInfoA`, `Sleep` and MSVCR90 lifecycle functions. These figures are static metadata only.
+
+**Next gate:** translate that larger CRT routine at `0x2AB02C`, including Windows GS/TEB access, atomic `lock cmpxchg`, loader state and additional Win64 imports. Then join the verified entry wrapper and two CRT callees into one ARM64 entry path. No real Steam session, MX Bikes engine, graphics or iOS package has booted.
 
 ## Local commands
 
