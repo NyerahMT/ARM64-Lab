@@ -147,4 +147,4 @@ def lift_crt_init_state(code:bytes,start:int,image_base:int=0x140000000):
         "supported_paths":["state_1_call_boundary","state_0_call_boundary","other_nonzero_join"],
         "direct_calls_executed":False
     }
-    return "".join(generated).replace("\\\\n","\\n"),meta
+    return "".join(generated).replace("\\n", "\n"),meta
