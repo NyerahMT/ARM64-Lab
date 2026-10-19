@@ -2,7 +2,7 @@
 
 An experiment in ahead-of-time recompilation of Windows x86-64 applications for ARM64. The goal is to preserve original application behavior, not recreate it in a different engine.
 
-**Current status: bounded original x64 startup emulation plus a restricted, compiler-backed ARM64 translation/Win64 import-dispatch proof. Not a playable game, a native iOS build, or a running engine.**
+**Current status: a complete original 39-instruction CRT initializer translated and differentially executed on ARM64, plus additional narrow authentic functions and bounded x64 startup emulation. Not a playable game, a native iOS build, or a running engine.**
 
 ## What works
 
@@ -24,22 +24,19 @@ An experiment in ahead-of-time recompilation of Windows x86-64 applications for 
 
 A byte-pattern match is not proof of a true callable function boundary. A cross-compiled object is not proof that original game code runs on iOS.
 
-## Current startup target (October 18, 2026)
+## Verified first original CRT initializer on ARM64 (October 19, 2026)
 
-The verified private PE entry wrapper at `0x2AB31C` calls the CRT security-cookie initializer at `0x2AB954` before transferring to the larger CRT startup routine at `0x2AB02C`. Run `python -m tools.startup_gate /private/path/mxbikes.exe` for fail-closed read-only inspection of the exact entry chain; do not commit the executable or function bytes.
+The original entry wrapper at RVA `0x2AB31C` calls the security-cookie initializer at RVA `0x2AB954`, then tail-transfers to the **still-untranslated** main CRT routine at RVA `0x2AB02C`.
 
-- **Diagnostics verified in private Actions:** the initializer's 179-byte unwind interval decodes into 39 x64 instructions, with one conditional branch, five indirect calls, nine RIP-relative memory instructions, and sixteen distinct mnemonics.
-- **Remill/LLVM feasibility verified in private Actions:** all nine selected original code regions, including this initializer, generated LLVM IR and compiled into AArch64 objects. An object file does **not** prove the initializer's complete control-flow graph or semantics have been translated; no full original startup function has executed on ARM64.
-- **Native import compatibility:** five Windows calls observed while emulating this initializer on x64 now have callback-backed host dispatch primitives: GetSystemTimeAsFileTime, QueryPerformanceCounter, GetTickCount, GetCurrentProcessId, and GetCurrentThreadId. Process/thread IDs require genuine host callback providers, not guessed constants. A translated original function is not yet connected to these callbacks.
-- **Next acceptance gate:** complete static-to-executable CFG recovery, connect real Win64 API callbacks and verify the full initializer against original x64 behavior. No Steam or engine-initialization success can be inferred from the current tests.
+**The entire 179-byte, 39-instruction first initializer now has an executable, restricted x64-to-C CFG translation that compiles and runs as AArch64 ELF under Unicorn.** The private [original-game differential CI run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39286558413) passed on its second attempt (10/10 reference cases; native smoke exit 0). The pinned original exe and all generated original-code derivatives remain in the private runner.
 
-## Verified startup execution and current blocker (October 19, 2026)
+- Both original security-cookie branches are exercised: eight non-default-cookie inputs and two default-cookie inputs using five tested Kernel32 timing/identity interfaces.
+- Nine static basic blocks and nine direct/control-continuation edges are recovered. Native host C and ARM64 Unicorn outputs match the original Unicorn x64 reference for the tested subset of guest registers and flags, 128 bytes of guest stack, global security-cookie/complement values, executed-instruction bitmap, call count and call order.
+- The native Win64 import registry uses **deterministic injected host callbacks**, not real Windows services or a Steam session. This is a **restricted Capstone instruction-to-C control-flow lift**, not full-function execution by Remill, nor a general x86-64-to-ARM64 recompiler.
+- The previous [seven-case Remill branch proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39207913661) remains an independent partial-path result. Its naive whole-span call/return handling was not used for the now-verified complete CFG differential.
+- [ARM64-Lab public CI](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39292823081) passed strict C compilation and synthetic branch/import continuation tests.
 
-- [Private differential run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39207913661): **7/7** original x64 versus Remill-generated ARM64 fixtures matched on the first CRT initializer's **15-instruction early-return path**. The ARM64 code uses a bounded guest-memory implementation and checks the security-cookie complement, stack writes and return address. This is not all 39 instructions, or complete guest register-state equivalence.
-- [Private CFG check](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39209743713): the original initializer decodes into **nine static basic blocks and nine direct/control-continuation edges**, with five imported-call sites. This is a control-flow *map*, not executable multi-block translation.
-- [Unsupported-branch diagnostic](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39209149365): the default-cookie branch in legacy Remill `--bytes` mode reported five function-call events and four return events, which cannot represent faithful execution of the original one-RET function. This path deliberately fails closed; it must not be reported as working Win64 API integration.
-
-**Next gate:** translate and verify the recovered control-flow blocks and their transitions, then hand off at each Win64 import boundary to the already tested native API registry. Compare the full initializer against original x64 reference traces before advancing into the rest of CRT startup. No Steam session, engine or iPhone app has booted.
+**Next gate:** translate the much larger **518-byte, 126-instruction** CRT routine at `0x2AB02C`, including Windows GS/TEB access, atomic `lock cmpxchg`, loader state, and additional Win64 imports. After that, join the translated entry wrapper and both callees into one checked ARM64 entry sequence. Neither a real Steam session nor the MX Bikes engine, graphics, or iOS package has booted.
 
 ## Local commands
 
