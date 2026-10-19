@@ -54,6 +54,16 @@ jobs:
             runtime/mx_import_registry.c tests/test_mx_import_registry.c \
             -o /tmp/mx_import_registry_test
           /tmp/mx_import_registry_test
+      - name: Verify bounded CRT GS and exclusive CMPXCHG64 primitives
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Iruntime \
+            tests/test_mx_crt_primitives.c -o /tmp/mx_crt_primitives_test
+          /tmp/mx_crt_primitives_test
+          clang --target=aarch64-unknown-linux-gnu -ffreestanding \
+            -fno-stack-protector -O2 -std=c11 -Wall -Wextra -Werror \
+            -Iruntime -c tests/test_mx_crt_primitives.c \
+            -o /tmp/mx_crt_primitives_arm64.o
+          readelf -h /tmp/mx_crt_primitives_arm64.o | grep -q 'Machine:.*AArch64'
       - name: Cross-compile native import registry to AArch64
         run: |
           clang --target=aarch64-unknown-linux-gnu -ffreestanding -std=c11 \
