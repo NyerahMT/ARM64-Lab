@@ -32,6 +32,47 @@ class CRTCFGTests(unittest.TestCase):
         self.assertIn("goto I_200a",c)
         self._compile(c)
 
+    def test_synthetic_branches_execute_on_host(self):
+        body=bytes.fromhex("4883ec284839d8740348f7d04883c428c3")
+        source,_=translate_crt_cfg(body,0x1000,{})
+        sample=r"""
+#include <stdint.h>
+#include "mx_crt_vm.h"
+int lifted_crt_run(mx_crt_state *,mx_cfg_memory *);
+int main(void) {
+    uint8_t stack[128]={0};
+    mx_cfg_region r={UINT64_C(0x500000),stack,sizeof(stack)};
+    mx_cfg_memory mem={&r,1};
+    for(unsigned i=0;i<2;i++) {
+        mx_crt_state s={0};
+        s.rip=UINT64_C(0x140001000);s.rsp=UINT64_C(0x500048);
+        s.rax=(i==0 ? 7U : 0U);s.rbx=(i==0 ? 7U : 1U);
+        uint64_t ret=UINT64_C(0x12345678);
+        if(!mx_cfg_transfer(&mem,s.rsp,&ret,8,1))return 10;
+        if(lifted_crt_run(&s,&mem)!=MX_CRT_RETURNED)return 11;
+        if(s.rip!=ret || s.rsp!=UINT64_C(0x500050))return 12;
+        if(s.rax!=(i==0 ? 7U : UINT64_MAX))return 13;
+    }
+    return 0;
+}
+"""
+        self._execute(source,sample)
+
+    def _execute(self,source,smoke):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            (p/"lifted.c").write_text(source)
+            (p/"smoke.c").write_text(smoke)
+            runtime=ROOT/"runtime"
+            exe=p/"host"
+            cmd=["cc","-std=c11","-O2","-Wall","-Wextra","-Werror",
+                 "-I",str(runtime),str(p/"lifted.c"),str(p/"smoke.c"),
+                 *map(str,[runtime/n for n in
+                     ("mx_time_compat.c","mx_guest_imports.c","mx_import_registry.c")]),
+                 "-o",str(exe)]
+            subprocess.run(cmd,check=True,capture_output=True,text=True)
+            subprocess.run([str(exe)],check=True,capture_output=True,text=True)
+
     def test_unrecognized_import_rejected(self):
         source=bytes.fromhex("4883ec28ff15460000004883c428c3")
         with self.assertRaisesRegex(UnsupportedCRT,"Unverified"):
