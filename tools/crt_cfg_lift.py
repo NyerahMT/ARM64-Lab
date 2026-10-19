@@ -98,6 +98,7 @@ def translate_crt_cfg(code:bytes,start:int,iat:dict,image_base:int=0x140000000):
         lines.append(f' case UINT64_C({image_base+address}): goto I_{address:x};\n')
     lines+=[' default:return MX_CRT_INVALID;\n }\n']
     callnum={address:i+1 for i,(address,_,_,_) in enumerate(imports)}
+    labels=starts | {i.operands[0].imm for i in instructions if i.mnemonic in ('je','jmp')}
     for index,ins in enumerate(instructions):
         mnem=ins.mnemonic;ops=ins.operands
         lines.append(f'I_{ins.address:x}:\n')
