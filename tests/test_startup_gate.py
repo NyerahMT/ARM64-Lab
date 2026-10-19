@@ -24,6 +24,8 @@ class FakePE:
         if rva == 0x2000 and size == 24:
             return (struct.pack("<III", 0x1100, 0x1180, 0x3000) +
                     struct.pack("<III", 0x1200, 0x1400, 0x3100))
+        if rva == 0x1100 and size == 128:
+            return b'\x90' * 128
         if rva in (0x1100, 0x1200) and size == 1:
             return b"\x90"
         raise ValueError("unmapped")
