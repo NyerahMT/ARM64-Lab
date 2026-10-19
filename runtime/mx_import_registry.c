@@ -17,6 +17,9 @@ mx_import_kind mx_classify_win64_import(const char *dll, const char *symbol) {
     if (equal_ascii(dll,"msvcr90.dll") && equal_ascii(symbol,"_acmdln"))
         return MX_IMPORT_DATA_SYMBOL;
     if (equal_ascii(dll,"kernel32.dll")) {
+        if (equal_ascii(symbol,"GetCurrentProcessId") ||
+            equal_ascii(symbol,"GetCurrentThreadId"))
+            return MX_IMPORT_HOST_IDENTITY;
         if (equal_ascii(symbol,"GetTickCount") ||
             equal_ascii(symbol,"QueryPerformanceCounter") ||
             equal_ascii(symbol,"QueryPerformanceFrequency") ||
@@ -37,6 +40,20 @@ int mx_dispatch_supported_win64_import(const mx_import_runtime *rt,
                                        const char *dll, const char *symbol,
                                        mx_win64_call *call) {
     mx_import_kind kind=mx_classify_win64_import(dll,symbol);
+    if (kind==MX_IMPORT_HOST_IDENTITY) {
+        if (!rt || !call) return -1;
+        uint32_t id=0;
+        if (equal_ascii(symbol,"GetCurrentProcessId")) {
+            if (!rt->current_process_id) return -1;
+            id=rt->current_process_id(rt->identity_userdata);
+        } else if (equal_ascii(symbol,"GetCurrentThreadId")) {
+            if (!rt->current_thread_id) return -1;
+            id=rt->current_thread_id(rt->identity_userdata);
+        }
+        if (id==0) return -1;
+        call->rax=id; /* Win32 DWORD return zero-extends to guest RAX. */
+        return 1;
+    }
     if (kind!=MX_IMPORT_PORTABLE_TIMING)
         return 0;
     return mx_dispatch_timing_import(rt,dll,symbol,call);
