@@ -36,6 +36,27 @@ class StartupGateTests(unittest.TestCase):
         self.assertEqual(result["tail_jump_rva"], "0x1200")
         self.assertEqual(result["first_call_unwind"][0]["size"], 128)
         self.assertFalse(result["native_arm64_executed"])
+        profile = result["first_callee_instruction_profile"]
+        self.assertEqual(profile["decoded_instruction_count"], 128)
+        self.assertTrue(profile["fully_decoded"])
+        self.assertEqual(profile["mnemonic_counts"], {"nop": 128})
+        self.assertEqual(profile["conditional_branch_count"], 0)
+
+    def test_missing_unwind_range_fails_closed(self):
+        class MissingUnwind(FakePE):
+            def directory(self, index):
+                return (0, 0)
+        with self.assertRaisesRegex(ValueError, "unique unwind interval"):
+            inspect_entry(MissingUnwind())
+
+    def test_incomplete_decode_fails_closed(self):
+        class CorruptCallee(FakePE):
+            def read_rva(self, rva, size):
+                if rva == 0x1100 and size == 128:
+                    return b"\\x90" * 127 + b"\\x0f"
+                return super().read_rva(rva, size)
+        with self.assertRaisesRegex(ValueError, "cannot be decoded completely"):
+            inspect_entry(CorruptCallee())
 
     def test_unrecognized_entry_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "not the supported"):
