@@ -8,7 +8,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
 | D2 | Establish true callable function boundaries and differential reference behavior | In progress: Ghidra headless startup call graph plus one x64-vs-C-vs-ARM64 200-case cross-product differential proof |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | In progress: restricted scalar SSE lifter translated one 24-instruction original function automatically; most ISA/control flow/runtime features not yet implemented |
-| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 12 instructions of next 126-instruction CRT joined across synthetic GetStartupInfoA and tested 12/12 on ARM64; full executable entry chain not yet running |
+| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 20 instructions of next 126-instruction CRT joined across synthetic GetStartupInfoA, GS/TEB, CAS branches and conditional Sleep/retry, tested 18/18 on ARM64; full executable entry chain not yet running |
 | D5 | Load original archives and bridge OpenGL drawing | Not started |
 | D6 | Render interactive original menu | Not started |
 | D7 | Gameplay, controller input, iOS device build | Not started |
@@ -27,6 +27,13 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Six subsequent original instructions involving GS/TEB pointer access and single-threaded compare-exchange matched x64 reference on **12/12** input fixtures, six successful and six failed comparisons, stopping before the subsequent JE; [private proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39299572277).
 - The two translated sections were **joined across the original imported CALL** with a deterministic synthetic 104-byte `GetStartupInfoA` response. Original x64, host C and AArch64 Unicorn matched register/ZF/global effects and 512 stack bytes on **12/12** runs; [joined private proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39299957358).
 - The joined proof executes **12/126 original instructions**, not the full second CRT. The real Windows API is not implemented; exclusive-access compare-exchange is not a concurrently correct x64 `LOCK` implementation. Branching after the CAS, CRT callbacks, later imports, engine startup and iOS remain unverified. Original binaries and derived sources are private.
+
+## October 19, 2026 — grouped lock/retry control-flow batch
+
+- Added a reusable restricted CRT retry-loop translator covering three related outcomes: immediate lock acquisition, recursively owned lock, and lock contention with a synthetic `Sleep(1000)` callback followed by compare-exchange retry. The original-game [18-case private differential](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39302996044) and [public regression matrix](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39302542858) both passed.
+- Combined prior CRT prologue and GS/compare-exchange blocks with that branch/retry translator, verifying the actual original **20-instruction joined CFG prefix** on x64 / native host C / Unicorn AArch64 for **18/18** deterministic fixtures ([private passing run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39304316274)).
+- Improved the common AArch64 smoke runner with explicit bounded execution budgets and distinct diagnostics for non-return versus incorrect results. One large matrix exceeded the default 100k-instruction cap; it passed when retested with a bounded higher cap ([public test run](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39304158864)).
+- **Next reachable group:** original `0x2AB07F` onward—CRT lock-state checks, initialization direct callees, global-state transitions, and additional Win64 imports. Group unsupported instruction semantics, imports and CFG edges by common cause and verify them together. No claim of full 126-instruction routine, thread-safe x64 LOCK behavior, real Windows APIs, Steam or iOS execution.
 
 ## Local binary diagnostics
 
