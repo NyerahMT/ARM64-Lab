@@ -101,7 +101,7 @@ def translate_crt_cfg(code:bytes,start:int,iat:dict,image_base:int=0x140000000):
     labels=starts | {i.operands[0].imm for i in instructions if i.mnemonic in ('je','jmp')}
     for index,ins in enumerate(instructions):
         mnem=ins.mnemonic;ops=ins.operands
-        lines.append(f'I_{ins.address:x}:\n')
+        if ins.address in labels: lines.append(f'I_{ins.address:x}:\n')
         lines.append(f' if(++s->instructions>128U)return MX_CRT_INVALID; s->visited |= UINT64_C({1<<index});\n')
         if mnem in ("mov","movabs"):
             if len(ops)!=2:raise UnsupportedCRT("Bad MOV operands")
