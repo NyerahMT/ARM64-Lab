@@ -6,6 +6,9 @@ typedef struct {
     uint64_t mono;
     uint64_t real;
     uint64_t ns_slept;
+    uint64_t last_write_addr;
+    uint64_t last_write_val;
+    unsigned int write_count;
 } fake_host;
 static uint64_t mono(void *p) {return ((fake_host*)p)->mono;}
 static uint64_t real(void *p) {return ((fake_host*)p)->real;}
@@ -14,12 +17,20 @@ static uint32_t process_id_cb(void *p) {(void)p; return 0x1234U;}
 static uint32_t thread_id_cb(void *p) {(void)p; return 0x5678U;}
 static uint32_t invalid_id_cb(void *p) {(void)p; return 0U;}
 static int write_cb(void *p, uint64_t address, const uint8_t *b, uint32_t size) {
-    (void)p; (void)address; (void)b; (void)size; return 0;
+    fake_host *host=(fake_host*)p;
+    if (!host || !b || size!=8U || (address!=0x1000ULL && address!=0x1008ULL))
+        return 0;
+    host->last_write_addr=address;
+    host->last_write_val=0;
+    for (unsigned int i=0;i<8;i++)
+        host->last_write_val |= (uint64_t)b[i] << (8U*i);
+    host->write_count+=1U;
+    return 1;
 }
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}}while(0)
 
 int main(void) {
-    fake_host host={12000000000ULL,0,0};
+    fake_host host={.mono=12000000000ULL,.real=1000000000ULL};
     mx_clock_source clock={&host,mono,real,sleep_cb};
     mx_import_runtime rt={&clock,write_cb,&host,&host,process_id_cb,thread_id_cb};
     mx_win64_call call={0};
@@ -45,6 +56,20 @@ int main(void) {
     CHECK(mx_dispatch_supported_win64_import(&rt,"kernel32.dll","GetCurrentThreadId",&call)==-1);
     CHECK(call.rax==0x5678U);
     rt.current_thread_id=thread_id_cb;
+    /* All five imports observed in the original CRT initializer have
+     * callback-backed native dispatch. This is not translated game code. */
+    call.rcx=0x1000U;
+    call.rax=0xfaceU;
+    CHECK(mx_dispatch_supported_win64_import(&rt,"kernel32.dll","GetSystemTimeAsFileTime",&call)==1);
+    CHECK(call.rax==0xfaceU); /* void return preserves guest accumulator */
+    CHECK(host.last_write_addr==0x1000U);
+    CHECK(host.last_write_val==116444736010000000ULL);
+    call.rcx=0x1008U;
+    CHECK(mx_dispatch_supported_win64_import(&rt,"kernel32.dll","QueryPerformanceCounter",&call)==1);
+    CHECK(call.rax==1U);
+    CHECK(host.last_write_addr==0x1008U);
+    CHECK(host.last_write_val==host.mono);
+    CHECK(host.write_count==2U);
     call.rcx=9;
     CHECK(mx_dispatch_supported_win64_import(&rt,"kernel32.dll","Sleep",&call)==1);
     CHECK(host.ns_slept==9000000ULL);
