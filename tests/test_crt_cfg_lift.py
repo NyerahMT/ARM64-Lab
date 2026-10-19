@@ -105,8 +105,13 @@ int main(void) {
                  *map(str,[runtime/n for n in
                      ("mx_time_compat.c","mx_guest_imports.c","mx_import_registry.c")]),
                  "-o",str(exe)]
-            subprocess.run(cmd,check=True,capture_output=True,text=True)
-            subprocess.run([str(exe)],check=True,capture_output=True,text=True)
+            compile_result=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertEqual(compile_result.returncode,0,
+                             "CRT generated C compile failed:\\n"+compile_result.stderr)
+            executed=subprocess.run([str(exe)],capture_output=True,text=True)
+            self.assertEqual(executed.returncode,0,
+                             "CRT native synthetic smoke exit="+str(executed.returncode)+
+                             "\\n"+executed.stderr)
 
     def test_unrecognized_import_rejected(self):
         source=bytes.fromhex("4883ec28ff15460000004883c428c3")
@@ -124,10 +129,12 @@ int main(void) {
         with tempfile.TemporaryDirectory() as temp:
             p=Path(temp)
             (p/"lifted.c").write_text(source)
-            subprocess.run(["cc","-std=c11","-O2","-Wall","-Wextra","-Werror",
-                            "-I",str(ROOT/"runtime"),"-c",
-                            str(p/"lifted.c"),"-o",str(p/"lifted.o")],check=True,
-                           capture_output=True,text=True)
+            result=subprocess.run(["cc","-std=c11","-O2","-Wall","-Wextra","-Werror",
+                                   "-I",str(ROOT/"runtime"),"-c",
+                                   str(p/"lifted.c"),"-o",str(p/"lifted.o")],
+                                  capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,
+                             "CRT generated C compile failed:\\n"+result.stderr)
 
 if __name__=="__main__":
     unittest.main()
