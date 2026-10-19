@@ -42,7 +42,7 @@ int main(void) {
         if(!mx_cfg_transfer(&m,UINT64_C(0x140004110),&starting,8,1))return 10;
         mx_crt_state s={0};
         s.rip=UINT64_C(0x14000400b);
-        s.rsp=UINT64_C(0x500048);
+        s.rsp=UINT64_C(0x500040);
         s.rdi=42;
         s.rsi=98;
         s.rax=(k==0?0U:(k==1?42U:7U));
@@ -61,7 +61,7 @@ int main(void) {
     if(!mx_cfg_transfer(&m,UINT64_C(0x140004110),&occupied,8,1))return 80;
     mx_crt_state blocked={0};
     blocked.rip=UINT64_C(0x14000400b);
-    blocked.rsp=UINT64_C(0x500048);
+    blocked.rsp=UINT64_C(0x500040);
     blocked.rdi=42;
     blocked.rax=7;
     ctx_t no_release={&m,0,0};
@@ -69,7 +69,7 @@ int main(void) {
     if(no_release.calls==0 || no_release.calls>32)return 82;
     blocked=(mx_crt_state){0};
     blocked.rip=UINT64_C(0x14000400b);
-    blocked.rsp=UINT64_C(0x500048);
+    blocked.rsp=UINT64_C(0x500040);
     blocked.rdi=42;
     blocked.rax=7;
     if(lifted_crt_lock_retry(&blocked,&m,0,0,1)!=MX_CRT_INVALID)return 83;
