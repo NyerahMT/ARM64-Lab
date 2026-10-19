@@ -17,4 +17,28 @@ static inline int mx_crt_gs_read64(mx_crt_state *s, mx_cfg_memory *m,
     *output=value;
     return 1;
 }
+/* Exclusive-guest-memory CMPXCHG64 only; not a LOCK atomic model. */
+static inline int mx_crt_cmpxchg64_single_thread(mx_crt_state *s,
+        mx_cfg_memory *m, uint64_t address, uint64_t replacement, int exclusive) {
+    if(!s || !m || !exclusive || (address&7U)) {
+        if(s)s->fault=1;
+        return 0;
+    }
+    uint64_t value=0;
+    if(!mx_cfg_transfer(m,address,&value,8,0)) {
+        s->fault=1;
+        return 0;
+    }
+    if(s->rax==value) {
+        if(!mx_cfg_transfer(m,address,&replacement,8,1)) {
+            s->fault=1;
+            return 0;
+        }
+        s->zf=1;
+    } else {
+        s->rax=value;
+        s->zf=0;
+    }
+    return 1;
+}
 #endif
