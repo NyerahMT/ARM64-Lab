@@ -12,7 +12,7 @@ class UnsupportedCRT(ValueError):
     pass
 
 REGS={"rax":"rax","eax":"rax","rbx":"rbx","rcx":"rcx","rdi":"rdi",
-      "r11":"r11","r11d":"r11","rsp":"rsp"}
+      "r11":"r11","r11d":"r11","rsi":"rsi","esi":"rsi","rsp":"rsp"}
 ALLOWED={"GetSystemTimeAsFileTime","GetCurrentThreadId",
          "GetCurrentProcessId","GetTickCount","QueryPerformanceCounter"}
 
