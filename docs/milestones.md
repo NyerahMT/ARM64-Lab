@@ -8,7 +8,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
 | D2 | Establish true callable function boundaries and differential reference behavior | In progress: Ghidra headless startup call graph plus one x64-vs-C-vs-ARM64 200-case cross-product differential proof |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | In progress: restricted scalar SSE lifter translated one 24-instruction original function automatically; most ISA/control flow/runtime features not yet implemented |
-| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: complete original 39-instruction first CRT initializer differentially executed on ARM64 in 10/10 cases; entry wrapper and 126-instruction next CRT target not yet joined or executed |
+| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 12 instructions of next 126-instruction CRT joined across synthetic GetStartupInfoA and tested 12/12 on ARM64; full executable entry chain not yet running |
 | D5 | Load original archives and bridge OpenGL drawing | Not started |
 | D6 | Render interactive original menu | Not started |
 | D7 | Gameplay, controller input, iOS device build | Not started |
@@ -19,6 +19,14 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Both original cookie paths were exercised, including all five Kernel32 import call sites via deterministic native timing/process/thread-ID callbacks. Checked the specified subset of guest registers/ZF, execution bitmap, guest stack window, two cookie globals and imported-call order. Original PE content and generated game-derived artifacts stayed private.
 - Public [synthetic regression checks](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39292823081) passed. The private workflow pins the corresponding public translator SHA to make the differential reproducible.
 - This is a validated original **function**, not a booting native executable. Full entry wrapper-to-CRT joining, the next larger 126-instruction CRT routine, Windows GS/TEB and exception runtime, actual Steam, graphics and iOS device execution remain pending.
+
+## October 19, 2026 — beginning of second original CRT translated
+
+- The second original CRT unwind span at `0x2AB02C` has 518 bytes / 126 decoded instructions / 53 candidate static blocks; [private pinned inspection](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39297386999).
+- A **five-instruction real original prologue** executed on ARM64 and matched Unicorn x64 in **12/12** independent tests, stopping before `GetStartupInfoA`; [private proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39298579583).
+- Six subsequent original instructions involving GS/TEB pointer access and single-threaded compare-exchange matched x64 reference on **12/12** input fixtures, six successful and six failed comparisons, stopping before the subsequent JE; [private proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39299572277).
+- The two translated sections were **joined across the original imported CALL** with a deterministic synthetic 104-byte `GetStartupInfoA` response. Original x64, host C and AArch64 Unicorn matched register/ZF/global effects and 512 stack bytes on **12/12** runs; [joined private proof](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39299957358).
+- The joined proof executes **12/126 original instructions**, not the full second CRT. The real Windows API is not implemented; exclusive-access compare-exchange is not a concurrently correct x64 `LOCK` implementation. Branching after the CAS, CRT callbacks, later imports, engine startup and iOS remain unverified. Original binaries and derived sources are private.
 
 ## Local binary diagnostics
 
