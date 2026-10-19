@@ -117,7 +117,7 @@ def translate_crt_cfg(code:bytes,start:int,iat:dict,image_base:int=0x140000000):
             op={"sub":"-","add":"+","xor":"^","and":"&"}[mnem]
             mask="UINT64_C(4294967295)" if ops[0].size==4 else "UINT64_MAX"
             lines.append(' {uint64_t x='+a+';uint64_t y='+b+';uint64_t z=(x'+op+'y)&'+mask+';\n')
-            lines.append(' '+_put(ins,ops[0],"z",image_base)+' s->zf=(z==0); }\n')
+            lines.append(' '+_put(ins,ops[0],"z",image_base)+'\n s->zf=(z==0);\n }\n')
         elif mnem=="not":
             if len(ops)!=1:raise UnsupportedCRT("Bad NOT operands")
             lines.append(' '+_put(ins,ops[0],f"(~({_get(ins,ops[0],image_base)}))",image_base)+'\n')
