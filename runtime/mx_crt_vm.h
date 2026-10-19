@@ -2,8 +2,8 @@
 #define MX_CRT_VM_H
 #include "mx_cfg_vm.h"
 #include "mx_import_registry.h"
-typedef struct {uint64_t rax,rbx,rcx,rdi,r11,rsp,rip,visited,resume_pc,import_trace; uint32_t pending_import,instructions,imports; uint8_t zf,fault;} mx_crt_state;
-enum { MX_CRT_RETURNED=1, MX_CRT_PAUSED_IMPORT=2, MX_CRT_INVALID=-1, MX_CRT_MEMORY_FAULT=-2 };
+typedef struct {uint64_t rax,rbx,rcx,rdi,rsi,r11,rsp,rip,visited,resume_pc,import_trace; uint32_t pending_import,instructions,imports; uint8_t zf,fault;} mx_crt_state;
+enum { MX_CRT_RETURNED=1, MX_CRT_PAUSED_IMPORT=2, MX_CRT_INVALID=-1, MX_CRT_MEMORY_FAULT=-2, MX_CRT_IMPORT_BOUNDARY=3 };
 static inline uint64_t mx_crt_read(mx_crt_state *s,mx_cfg_memory *m,uint64_t a,uint32_t size) {
     uint64_t v=0;
     if(!mx_cfg_transfer(m,a,&v,size,0))s->fault=1;
