@@ -67,7 +67,19 @@ def original_x64_reference(code):
     return report
 
 
-def execute_arm64_elf(path):
+def execute_arm64_elf(path, instruction_budget=100000, timeout_us=3000000):
+    """Run a bounded freestanding AArch64 ELF with explicit execution limits.
+
+    Larger multi-fixture differentials may request a higher bounded budget.
+    Stopping before the sentinel means *incomplete execution*, not a behavioral
+    mismatch. Return-value mismatches are checked only after normal return.
+    """
+    if (not isinstance(instruction_budget,int) or isinstance(instruction_budget,bool)
+            or not 1000<=instruction_budget<=2000000):
+        raise ValueError("ARM64 instruction budget must be in [1000, 2000000]")
+    if (not isinstance(timeout_us,int) or isinstance(timeout_us,bool)
+            or not 1000000<=timeout_us<=15000000):
+        raise ValueError("ARM64 timeout must be in [1000000, 15000000] microseconds")
     uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
     mapped=set()
     with path.open("rb") as handle:
@@ -97,10 +109,16 @@ def execute_arm64_elf(path):
     uc.reg_write(UC_ARM64_REG_SP,stack+0x1f000)
     uc.reg_write(UC_ARM64_REG_LR,sentinel)
     uc.reg_write(UC_ARM64_REG_PC,start)
-    uc.emu_start(start,sentinel,timeout=3_000_000,count=100000)
+    uc.emu_start(start,sentinel,timeout=timeout_us,count=instruction_budget)
     result=int(uc.reg_read(UC_ARM64_REG_X0))
-    if uc.reg_read(UC_ARM64_REG_PC)!=sentinel or result!=0:
-        raise RuntimeError(f"ARM64 runtime mismatch: pc={uc.reg_read(UC_ARM64_REG_PC):x}, smoke={result}")
+    pc=int(uc.reg_read(UC_ARM64_REG_PC))
+    if pc!=sentinel:
+        raise RuntimeError(
+            f"ARM64 execution incomplete: pc={pc:x}, budget={instruction_budget}, "
+            f"timeout_us={timeout_us}, x0={result}; no successful return observed"
+        )
+    if result!=0:
+        raise RuntimeError(f"ARM64 guest smoke returned nonzero exit={result}")
     return {"entry_va":hex(start),"arm64_smoke_exit":result,"return_to_sentinel":True,
             "loaded_pages":len(mapped)}
 
