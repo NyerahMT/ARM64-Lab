@@ -143,7 +143,7 @@ def translate_crt_cfg(code:bytes,start:int,iat:dict,image_base:int=0x140000000):
             if ins.address not in callnum:raise UnsupportedCRT("Unmatched IAT call")
             n=callnum[ins.address]
             lines.append(' if((s->rsp&15ULL)!=0)return MX_CRT_INVALID;\n')
-            lines.append(f' if(!mx_crt_write(s,m,s->rsp-8U,8,UINT64_C({image_base+ins.address+ins.size})))return MX_CRT_MEMORY_FAULT;\\n')
+            lines.append(f' if(!mx_crt_write(s,m,s->rsp-8U,8,UINT64_C({image_base+ins.address+ins.size})))return MX_CRT_MEMORY_FAULT;\n')
             lines.append(f' s->pending_import={n}U;s->resume_pc=UINT64_C({image_base+ins.address+ins.size});')
             lines.append(f' s->rip=UINT64_C({image_base+ins.address});return MX_CRT_PAUSED_IMPORT;\n')
         elif mnem=="ret":
