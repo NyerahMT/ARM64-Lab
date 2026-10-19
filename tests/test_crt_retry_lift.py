@@ -4,7 +4,7 @@ import subprocess,tempfile,unittest
 from tools.crt_retry_lift import lift_crt_retry
 from tools.crt_cfg_lift import UnsupportedCRT
 
-RETRY=bytes.fromhex("31c0f0480fb13d00010000")
+RETRY=bytes.fromhex("31c0f0480fb13d05010000")
 BRANCH=bytes.fromhex("74194839f87507be01000000eb0db9e8030000ff1522000000ebda")
 START=0x4000
 BR=START+len(RETRY)
@@ -28,18 +28,18 @@ static int sleep_hook(void *v,uint32_t ms) {
     ctx->calls++;
     if(ctx->release) {
         uint64_t zero=0;
-        if(!mx_cfg_transfer(ctx->memory,UINT64_C(0x14000410b),&zero,8,1))return 0;
+        if(!mx_cfg_transfer(ctx->memory,UINT64_C(0x140004110),&zero,8,1))return 0;
     }
     return 1;
 }
 int main(void) {
     uint8_t shared[8]={0},stack[128]={0};
-    mx_cfg_region regions[2]={{UINT64_C(0x14000410b),shared,8},
+    mx_cfg_region regions[2]={{UINT64_C(0x140004110),shared,8},
                               {UINT64_C(0x500000),stack,128}};
     mx_cfg_memory m={regions,2};
     for(unsigned k=0;k<3;k++){
         uint64_t starting=k==0?42U:(k==1?42U:7U),result=0;
-        if(!mx_cfg_transfer(&m,UINT64_C(0x14000410b),&starting,8,1))return 10;
+        if(!mx_cfg_transfer(&m,UINT64_C(0x140004110),&starting,8,1))return 10;
         mx_crt_state s={0};
         s.rip=UINT64_C(0x14000400b);
         s.rsp=UINT64_C(0x500048);
@@ -50,7 +50,7 @@ int main(void) {
         ctx_t context={&m,0,k==2};
         int status=lifted_crt_lock_retry(&s,&m,sleep_hook,&context,1);
         if(status!=MX_CRT_BRANCH_BOUNDARY || s.rip!=UINT64_C(0x140004026))return 20+k;
-        if(!mx_cfg_transfer(&m,UINT64_C(0x14000410b),&result,8,0) || result!=42)return 30+k;
+        if(!mx_cfg_transfer(&m,UINT64_C(0x140004110),&result,8,0) || result!=42)return 30+k;
         if(s.rsi!=(k==1?1U:98U) || s.rax!=(k==1?42U:0U) || !s.zf)return 40+k;
         if(context.calls!=(k==2?1U:0U) || s.imports!=context.calls)return 50+k;
         if(s.instructions!=(k==0?1U:(k==1?5U:9U)))return 60+k;
@@ -58,7 +58,7 @@ int main(void) {
     }
     /* Contention that never clears must fail closed, not spin forever. */
     uint64_t occupied=7;
-    if(!mx_cfg_transfer(&m,UINT64_C(0x14000410b),&occupied,8,1))return 80;
+    if(!mx_cfg_transfer(&m,UINT64_C(0x140004110),&occupied,8,1))return 80;
     mx_crt_state blocked={0};
     blocked.rip=UINT64_C(0x14000400b);
     blocked.rsp=UINT64_C(0x500048);
