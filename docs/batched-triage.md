@@ -9,4 +9,4 @@
 5. **Report precise milestones:** static decoding is not executable translation; a compiler pass is not a successful guest execution; synthetic Windows callbacks are not complete Win64 implementations; and a green startup test is not a playable iOS app. Preserve previous green evidence.
 6. **Prioritize reachable startup dependency clusters** over counting arbitrary instructions. The next milestone is full correct original CRT and Win64 host behavior, not merely increasing raw translated byte counts.
 
-Current accepted baseline: entire first CRT initializer 39-instruction function (10/10), second CRT 20-instruction joined path (18/18), and adjacent isolated retry and API-boundary differentials. No real Steam/engine/iPhone boot.
+Current accepted baseline: entire first CRT initializer 39-instruction function (10/10), second CRT **38-instruction continuous** original control region (27/27), adjacent **11-instruction independent** lock-release path (21/21), and **9/9 green** batched private regression gates. No direct CRT callee executions, real Steam/engine/iPhone boot or concurrent LOCK correctness.

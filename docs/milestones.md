@@ -8,7 +8,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
 | D2 | Establish true callable function boundaries and differential reference behavior | In progress: Ghidra headless startup call graph plus one x64-vs-C-vs-ARM64 200-case cross-product differential proof |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | In progress: restricted scalar SSE lifter translated one 24-instruction original function automatically; most ISA/control flow/runtime features not yet implemented |
-| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 20 instructions of next 126-instruction CRT joined across synthetic GetStartupInfoA, GS/TEB, CAS branches and conditional Sleep/retry, tested 18/18 on ARM64; full executable entry chain not yet running |
+| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 38 original instructions of next 126-instruction CRT joined and verified 27/27; adjacent 11-instruction lock-release paths verified separately 21/21, but direct CRT callees remain unexecuted; full executable entry chain not yet running |
 | D5 | Load original archives and bridge OpenGL drawing | Not started |
 | D6 | Render interactive original menu | Not started |
 | D7 | Gameplay, controller input, iOS device build | Not started |
@@ -34,6 +34,13 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Combined prior CRT prologue and GS/compare-exchange blocks with that branch/retry translator, verifying the actual original **20-instruction joined CFG prefix** on x64 / native host C / Unicorn AArch64 for **18/18** deterministic fixtures ([private passing run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39304316274)).
 - Improved the common AArch64 smoke runner with explicit bounded execution budgets and distinct diagnostics for non-return versus incorrect results. One large matrix exceeded the default 100k-instruction cap; it passed when retested with a bounded higher cap ([public test run](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39304158864)).
 - **Next reachable group:** original `0x2AB07F` onward—CRT lock-state checks, initialization direct callees, global-state transitions, and additional Win64 imports. Group unsupported instruction semantics, imports and CFG edges by common cause and verify them together. No claim of full 126-instruction routine, thread-safe x64 LOCK behavior, real Windows APIs, Steam or iOS execution.
+
+## October 19, 2026 — grouped state machine and lock-release frontier
+
+- First **38-instruction continuous original second-CRT region** verified against original x64 on AArch64 Unicorn **27/27** across 3 initialization-state groups and 3 lock/retry groups. Preserved guest memory and selected CPU register/flag state, and stopped before unverified CRT direct calls. [Private passing integration run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39322207787).
+- Built a reusable fail-closed three-way CRT-state translator (32-bit state global, already-initializing boundary, zero-state transition, alternate global flag), with public synthetic native tests and a private **27-case** isolated original-game proof in the same consolidated CI run.
+- Added exclusive-use `XCHG64` guest-memory primitive and bounded 11-instruction post-initialization release translator. Original x64/native host/AArch64 matched **21/21** across a direct-call boundary, recursive lock preservation and normal unlock. [Private nine-gate passing run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39323159937).
+- Both unfinished direct CRT callees and the remaining original startup code still need authentic semantics and joined verification. **38 continuous original instructions is not 38/126 overall coverage** and says nothing about game-frame execution. Real Win64 scheduler atomicity, Steam/engine/graphics and iOS remain absent.
 
 ## Local binary diagnostics
 
