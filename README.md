@@ -38,6 +38,8 @@ The original entry wrapper at RVA `0x2AB31C` calls the security-cookie initializ
 
 **Next CRT routine analyzed:** [Private static inventory](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39293785688) verified 518 bytes, 126 decoded original x64 instructions, **53 candidate blocks**, 20 conditional branches, 28 internal direct branch targets, seven imported callsites, one GS/TEB memory reference, one LOCK-prefixed operation and 11 additional instruction families. Validated imported symbols include `GetStartupInfoA`, `Sleep` and MSVCR90 lifecycle functions. These figures are static metadata only.
 
+**New native runtime primitives:** [Public CI](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39294624028) also validates bounded GS-relative guest TEB reads and a **strictly single-threaded** 64-bit compare-exchange helper (success, mismatch, unmapped memory and exclusive-access refusal). The tests run natively under GCC and cross-compile for AArch64. These helpers are not yet wired into translated original second-CRT code; in particular, the helper does **not** implement the x64 `LOCK` prefix's concurrency guarantees or full flags semantics.
+
 **Next gate:** translate that larger CRT routine at `0x2AB02C`, including Windows GS/TEB access, atomic `lock cmpxchg`, loader state and additional Win64 imports. Then join the verified entry wrapper and two CRT callees into one ARM64 entry path. No real Steam session, MX Bikes engine, graphics or iOS package has booted.
 
 ## Local commands
