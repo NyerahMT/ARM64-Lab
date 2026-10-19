@@ -33,6 +33,12 @@ The verified private PE entry wrapper at `0x2AB31C` calls the CRT security-cooki
 - **Native import compatibility:** five Windows calls observed while emulating this initializer on x64 now have callback-backed host dispatch primitives: GetSystemTimeAsFileTime, QueryPerformanceCounter, GetTickCount, GetCurrentProcessId, and GetCurrentThreadId. Process/thread IDs require genuine host callback providers, not guessed constants. A translated original function is not yet connected to these callbacks.
 - **Next acceptance gate:** execute the complete original first callee from the entry wrapper as translated ARM64 code, then compare imported-call sequence, guest stack, memory writes, and control transfer against a deterministic original x64 run. No Steam or engine-initialization success can be inferred from these infrastructure tests.
 
+## Latest verified native startup execution
+
+[Private run 39186798007](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39186798007) compiled and linked Remill-generated ARM64 code for the **39-instruction first CRT initializer** with four bounded guest runtime helpers. Under Unicorn ARM64, an artificial zero-memory/no-Windows-import path returned through the lifted function-return helper.
+
+This is a stricter milestone than an AArch64 object merely existing, but **it is not a full-function semantic differential or a real startup**. Guest reads currently return zero, writes are counted rather than backed by a guest address space, and Windows imports are not executed in the Remill-linked path. Next gate: compare exact guest-memory and return-PC effects against original Unicorn x64 reference cases using a real bounded guest-memory model.
+
 ## Local commands
 
 Run these commands from the repository root:
