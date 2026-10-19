@@ -41,4 +41,26 @@ static inline int mx_crt_cmpxchg64_single_thread(mx_crt_state *s,
     }
     return 1;
 }
+/* Exclusive single-thread guest XCHG64; x64 XCHG mem operand is
+ * implicitly atomic, so concurrent memory is deliberately unsupported.
+ * This leaves guest condition flags unchanged. */
+static inline int mx_crt_xchg64_single_thread(mx_crt_state *s,
+        mx_cfg_memory *m,uint64_t address,int exclusive) {
+    if(!s||!m||!exclusive||(address&7U)) {
+        if(s)s->fault=1;
+        return 0;
+    }
+    uint64_t before=0;
+    if(!mx_cfg_transfer(m,address,&before,8,0)) {
+        s->fault=1;
+        return 0;
+    }
+    uint64_t replacement=s->rax;
+    if(!mx_cfg_transfer(m,address,&replacement,8,1)) {
+        s->fault=1;
+        return 0;
+    }
+    s->rax=before;
+    return 1;
+}
 #endif
