@@ -58,6 +58,41 @@ int main(void) {
 """
         self._execute(source,sample)
 
+    def test_synthetic_win64_import_resume_executes(self):
+        body=bytes.fromhex("4883ec28ff15460000004883c428c3")
+        code,_=translate_crt_cfg(body,0x2000,
+                                 {0x2050:("kernel32.dll","GetTickCount")})
+        smoke=r"""
+#include <stdint.h>
+#include "mx_crt_vm.h"
+int lifted_crt_run(mx_crt_state *,mx_cfg_memory *);
+int lifted_crt_resume_import(mx_crt_state *,const mx_import_runtime *);
+static uint64_t monotonic(void *p){return *(uint64_t*)p;}
+int main(void) {
+    uint8_t stack[128]={0};
+    mx_cfg_region region={UINT64_C(0x500000),stack,sizeof(stack)};
+    mx_cfg_memory memory={&region,1};
+    uint64_t ret=UINT64_C(0x12345678);
+    uint64_t time_ns=UINT64_C(42000000);
+    mx_clock_source clock={&time_ns,monotonic,0,0};
+    mx_import_runtime rt={&clock,0,0,0,0,0};
+    mx_crt_state s={0};
+    s.rip=UINT64_C(0x140002000);s.rsp=UINT64_C(0x500048);
+    if(!mx_cfg_transfer(&memory,s.rsp,&ret,8,1))return 10;
+    if(lifted_crt_run(&s,&memory)!=MX_CRT_PAUSED_IMPORT)return 11;
+    if(s.pending_import!=1U || s.rsp!=UINT64_C(0x500020))return 12;
+    uint64_t callee_return=0;
+    if(!mx_cfg_transfer(&memory,UINT64_C(0x500018),&callee_return,8,0))return 13;
+    if(callee_return!=UINT64_C(0x14000200a))return 14;
+    if(lifted_crt_resume_import(&s,&rt)!=1)return 15;
+    if(lifted_crt_run(&s,&memory)!=MX_CRT_RETURNED)return 16;
+    if(s.rax!=42U || s.import_trace!=1U || s.imports!=1U)return 17;
+    if(s.rip!=ret || s.rsp!=UINT64_C(0x500050))return 18;
+    return 0;
+}
+"""
+        self._execute(code,smoke)
+
     def _execute(self,source,smoke):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)
