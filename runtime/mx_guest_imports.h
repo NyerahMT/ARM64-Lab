@@ -23,6 +23,10 @@ typedef struct {
     const mx_clock_source *clock;
     mx_guest_write write;
     void *write_userdata;
+    /* Host-provided IDs; zero means unavailable. Never synthesize defaults. */
+    void *identity_userdata;
+    uint32_t (*current_process_id)(void *userdata);
+    uint32_t (*current_thread_id)(void *userdata);
 } mx_import_runtime;
 
 /* Outcomes: 1 handled successfully, 0 unknown API, -1 recognized but failed. */
