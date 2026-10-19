@@ -11,7 +11,8 @@ typedef enum {
     MX_IMPORT_UNRESOLVED = 0,
     MX_IMPORT_PORTABLE_TIMING = 1,
     MX_IMPORT_DATA_SYMBOL = 2,
-    MX_IMPORT_STEAM_SERVICE_REQUIRED = 3
+    MX_IMPORT_STEAM_SERVICE_REQUIRED = 3,
+    MX_IMPORT_HOST_IDENTITY = 4
 } mx_import_kind;
 
 mx_import_kind mx_classify_win64_import(const char *dll, const char *symbol);
