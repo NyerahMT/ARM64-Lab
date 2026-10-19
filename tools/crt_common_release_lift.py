@@ -104,4 +104,4 @@ def lift_crt_common_release(code:bytes,start:int,image_base:int=0x140000000):
         "direct_call_executed":False,
         "concurrent_exchange_supported":False
     }
-    return "".join(C).replace("\\\\n","\\n"),meta
+    return "".join(C).replace("\\n", "\n"),meta
