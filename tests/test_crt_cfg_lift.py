@@ -29,7 +29,6 @@ class CRTCFGTests(unittest.TestCase):
         self.assertEqual(meta["decoded_instructions"],4)
         self.assertEqual(meta["imports"][0]["iat_symbol"],"GetTickCount")
         self.assertIn("MX_CRT_PAUSED_IMPORT",c)
-        self.assertIn("case UINT64_C(5368717322)",c) if False else None
         self.assertIn("goto I_200a",c)
         self._compile(c)
 
