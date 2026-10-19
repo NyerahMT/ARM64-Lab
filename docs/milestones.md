@@ -8,7 +8,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
 | D2 | Establish true callable function boundaries and differential reference behavior | In progress: Ghidra headless startup call graph plus one x64-vs-C-vs-ARM64 200-case cross-product differential proof |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | In progress: restricted scalar SSE lifter translated one 24-instruction original function automatically; most ISA/control flow/runtime features not yet implemented |
-| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 38 original instructions of next 126-instruction CRT joined and verified 27/27; adjacent 11-instruction lock-release paths verified separately 21/21, but direct CRT callees remain unexecuted; full executable entry chain not yet running |
+| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; first 49-instruction contiguous region of 126-instruction second CRT joined and verified 27/27 (including lock release); 10/10 private original-game gates pass. Direct imported CRT calls have been identified as thunks, but not yet executed; full executable entry chain not yet running |
 | D5 | Load original archives and bridge OpenGL drawing | Not started |
 | D6 | Render interactive original menu | Not started |
 | D7 | Gameplay, controller input, iOS device build | Not started |
@@ -41,6 +41,13 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Built a reusable fail-closed three-way CRT-state translator (32-bit state global, already-initializing boundary, zero-state transition, alternate global flag), with public synthetic native tests and a private **27-case** isolated original-game proof in the same consolidated CI run.
 - Added exclusive-use `XCHG64` guest-memory primitive and bounded 11-instruction post-initialization release translator. Original x64/native host/AArch64 matched **21/21** across a direct-call boundary, recursive lock preservation and normal unlock. [Private nine-gate passing run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39323159937).
 - Both unfinished direct CRT callees and the remaining original startup code still need authentic semantics and joined verification. **38 continuous original instructions is not 38/126 overall coverage** and says nothing about game-frame execution. Real Win64 scheduler atomicity, Steam/engine/graphics and iOS remain absent.
+
+## October 19, 2026 — 49-instruction joined CRT and imported-thunk discovery
+
+- **Continuous 49-instruction original second-CRT source interval** verified in a bounded original x64 vs native host C vs Unicorn AArch64 **27/27** case matrix, including three state outcomes, synthetic `GetStartupInfoA`/`Sleep` callbacks, exclusive `CMPXCHG` ownership, and recursive/nonrecursive `XCHG` lock release. [Passing private 10/10 differential regression](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39339416139).
+- Five original CRT direct callsites were inventoried as one dependency cluster. Three are import-table jump thunks, **not functions requiring independent translation**: `msvcr90.dll::_amsg_exit`, `msvcr90.dll::_initterm_e`, and `msvcr90.dll::_initterm`. The remaining two have identifiable unwind-bounded source spans. [Verified private survey plus 10/10 baseline](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39340104204).
+- Added reusable fail-closed callback integration for the two **returning** initialization imports, preserving original guest CALL return-slot semantics and refusing to simulate a return from fatal `_amsg_exit`. [Public synthetic native/AArch64 compiler tests](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39340574698) passed. Original-game execution through these imported calls is still a **future** validation gate.
+- No actual MSVCR90 loader, Windows scheduler, full CRT entry chain, Steam, graphics, native iOS app, or gameplay is available.
 
 ## Local binary diagnostics
 
