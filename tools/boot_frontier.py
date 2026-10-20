@@ -143,6 +143,18 @@ def analyze_frontier(data: dict) -> dict:
     for category in grouped:
         grouped[category].sort(key=lambda x: (-x["observed_x64_calls"], x["import"]))
     stop = data["stop_reason"]
+    return_rva = data.get("unsupported_import_stack_return_rva")
+    if return_rva is not None:
+        if (not isinstance(return_rva, str) or
+                not return_rva.startswith("0x") or
+                len(return_rva) > 12):
+            raise ValueError("Invalid guest return RVA at unsupported import")
+        try:
+            return_addr = int(return_rva, 16)
+        except ValueError as exc:
+            raise ValueError("Malformed guest return RVA") from exc
+        if return_addr < 0 or return_addr > 0xffffffff:
+            raise ValueError("Unsupported return RVA outside 32-bit PE range")
     first = data.get("unimplemented_import")
     if first is not None:
         dll, symbol = split_import(first)
@@ -184,6 +196,7 @@ def analyze_frontier(data: dict) -> dict:
             "name": first,
             "category": blocker_group,
             "native_readiness": blocker_status,
+            "original_guest_stack_return_rva_unexecuted": return_rva,
         },
         "x64_progress_signals": {
             "original_entry_instructions_executed": instructions > 0,
@@ -225,7 +238,10 @@ def make_summary(report: dict) -> str:
         "- First unresolved frontier: **" +
         report["first_blocker"]["name"] + "**",
         "- Blocker family: **" +
-        report["first_blocker"]["category"] + "**", "",
+        report["first_blocker"]["category"] + "**",
+        "- Original guest return RVA at import (NOT executed): **" +
+        str(report["first_blocker"]["original_guest_stack_return_rva_unexecuted"]) +
+        "**", "",
         "| Dynamically exercised dependency group | Distinct symbols | Import calls |",
         "| --- | ---: | ---: |",
     ]
