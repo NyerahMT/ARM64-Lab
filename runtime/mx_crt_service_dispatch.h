@@ -20,7 +20,15 @@ typedef enum {
     MX_CRT_SERVICE_ONEXIT=3,
     MX_CRT_SERVICE_DLLONEXIT=4,
     MX_CRT_SERVICE_LOCK=5,
-    MX_CRT_SERVICE_UNLOCK=6
+    MX_CRT_SERVICE_UNLOCK=6,
+    /* Recognized external Win64 ABI boundaries, explicitly NOT implemented
+     * by the synthetic service adapter. The importer must provide a genuine
+     * process/CRT context or return unsupported without changing guest RAX.
+     */
+    MX_CRT_SERVICE_GETMAINARGS=7,
+    MX_CRT_SERVICE_SET_APP_TYPE=8,
+    MX_CRT_SERVICE_SET_USERMATHERR=9,
+    MX_CRT_SERVICE_CONFIGTHREADLOCALE=10
 } mx_crt_service_id;
 
 typedef struct {
