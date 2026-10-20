@@ -8,14 +8,15 @@ class AggregateGapTests(unittest.TestCase):
     def test_single_profile_groups_related_instruction_families(self):
         profile=summarize_mnemonics({
             "mov":7, "cmp":3, "jne":2, "ret":1,
-            "xor":4, "or":1, "movzx":2, "test":1, "jns":1,
+            "ror":4, "sar":1, "movsx":2, "cmovg":1, "jg":1,
         })
         self.assertEqual(profile["instruction_total"],22)
         self.assertEqual(profile["mnemonics_currently_recognized"],13)
         self.assertEqual(profile["mnemonics_needing_extensions"],9)
         self.assertEqual(profile["extension_families"],{
-            "flags_and_predicates":2,
-            "integer_logic":5,
+            "conditional_moves":1,
+            "flags_and_predicates":1,
+            "integer_shift_rotate":5,
             "integer_width_conversion":2,
         })
         self.assertFalse(profile["native_translation_claimed"])
@@ -23,14 +24,14 @@ class AggregateGapTests(unittest.TestCase):
 
     def test_grouped_profiles_do_not_lose_repeated_mnemonics(self):
         result=aggregate_callbacks({
-            "callback-a":{"mov":4,"xor":2,"ret":1},
-            "callback-b":{"mov":6,"jns":1,"test":1,"ret":1},
-            "callback-c":{"mov":1,"movsxd":1,"ret":1},
+            "callback-a":{"mov":4,"sar":2,"ret":1},
+            "callback-b":{"mov":6,"jg":1,"sbb":1,"ret":1},
+            "callback-c":{"mov":1,"movsx":1,"ret":1},
         })
         shared=result["grouped_instruction_profile"]
         self.assertEqual(shared["instruction_total"],19)
         self.assertEqual(shared["unsupported_mnemonics"],{
-            "jns":1,"movsxd":1,"test":1,"xor":2,
+            "jg":1,"movsx":1,"sar":2,"sbb":1,
         })
         self.assertEqual(shared["mnemonics_needing_extensions"],5)
         self.assertEqual(len(result["callbacks"]),3)
