@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import Counter
 
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
-from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_OP_REG
 
 from .pe_call_clusters import unwind_functions
 
@@ -106,6 +106,38 @@ def find_handoff(pe, return_rva: int, imports: dict,
         x.mnemonic.startswith("j") and x.mnemonic != "jmp"
         for x in instructions)
     immediate=after[:12]
+    # Only accept immediately adjacent x64 TEST REG,REG or CMP REG,0
+    # followed by JE/JNE. Anything more complicated stays unclassified;
+    # these are *static* nonexecuted edges, not a successful Steam return.
+    post_call_zero_branch = None
+    if len(after) >= 2:
+        predicate, jump=after[0],after[1]
+        tested_register = None
+        if len(predicate.operands)==2:
+            a,b=predicate.operands
+            if (predicate.mnemonic=="test" and
+                a.type==X86_OP_REG and b.type==X86_OP_REG and
+                a.reg==b.reg):
+                tested_register=predicate.reg_name(a.reg)
+            elif (predicate.mnemonic=="cmp" and
+                  a.type==X86_OP_REG and b.type==X86_OP_IMM and
+                  b.imm==0):
+                tested_register=predicate.reg_name(a.reg)
+        if (tested_register in {"al","ax","eax","rax"} and
+            jump.mnemonic in {"je","jne"} and
+            len(jump.operands)==1 and jump.operands[0].type==X86_OP_IMM and
+            predicate.address+predicate.size==jump.address):
+            taken=jump.operands[0].imm
+            other=jump.address+jump.size
+            if all(start<=x<end for x in (taken,other)):
+                post_call_zero_branch={
+                    "predicate_register":tested_register,
+                    "zero_result_continuation_rva":hex(
+                        taken if jump.mnemonic=="je" else other),
+                    "nonzero_result_continuation_rva":hex(
+                        other if jump.mnemonic=="je" else taken),
+                    "both_continuations_unexecuted":True,
+                }
     return {
         "mode": "unexecuted_return_address_static_recovery",
         "unwind_caller_rva": hex(start),
@@ -120,6 +152,7 @@ def find_handoff(pe, return_rva: int, imports: dict,
         "nearby_next_12_has_conditional_branch": any(
             x.mnemonic.startswith("j") and x.mnemonic!="jmp"
             for x in immediate),
+        "post_import_accumulator_zero_branch":post_call_zero_branch,
         "static_conditional_branches_in_function": conditional_branches,
         "function_static_import_calls":[
             {"name": name, "sites": count}
