@@ -18,16 +18,16 @@ class UnsupportedCluster(ValueError):
 
 UINT64 = (1 << 64) - 1
 REGS = {
-    "rax": ("rax", 8), "eax": ("rax", 4),
-    "rbx": ("rbx", 8), "ebx": ("rbx", 4),
-    "rcx": ("rcx", 8), "ecx": ("rcx", 4),
-    "rdx": ("rdx", 8), "edx": ("rdx", 4),
-    "r8": ("r8", 8), "r8d": ("r8", 4),
-    "rdi": ("rdi", 8), "edi": ("rdi", 4),
-    "rsi": ("rsi", 8), "esi": ("rsi", 4),
-    "r11": ("r11", 8), "r11d": ("r11", 4),
-    "r9": ("r9", 8), "r9d": ("r9", 4),
-    "rsp": ("rsp", 8),
+    "rax": ("rax",8), "eax": ("rax",4), "ax": ("rax",2), "al": ("rax",1),
+    "rbx": ("rbx",8), "ebx": ("rbx",4), "bx": ("rbx",2), "bl": ("rbx",1),
+    "rcx": ("rcx",8), "ecx": ("rcx",4), "cx": ("rcx",2), "cl": ("rcx",1),
+    "rdx": ("rdx",8), "edx": ("rdx",4), "dx": ("rdx",2), "dl": ("rdx",1),
+    "r8": ("r8",8), "r8d": ("r8",4), "r8w": ("r8",2), "r8b": ("r8",1),
+    "r9": ("r9",8), "r9d": ("r9",4), "r9w": ("r9",2), "r9b": ("r9",1),
+    "rdi": ("rdi",8), "edi": ("rdi",4), "di": ("rdi",2), "dil": ("rdi",1),
+    "rsi": ("rsi",8), "esi": ("rsi",4), "si": ("rsi",2), "sil": ("rsi",1),
+    "r11": ("r11",8), "r11d": ("r11",4), "r11w": ("r11",2), "r11b": ("r11",1),
+    "rsp": ("rsp",8),
 }
 SERVICES = {
     "_encode_pointer": "MX_CRT_SERVICE_ENCODE_POINTER",
@@ -58,24 +58,33 @@ def _address(ins, operand, image_base):
         return f"UINT64_C({va})"
     if reg == "rsp":
         return f"(s->rsp + UINT64_C({displacement & UINT64}))"
-    raise UnsupportedCluster("Only RIP-relative image or RSP stack addresses")
+    if reg in {"rax","rbx","rcx","rdx","r8","r9","rdi","rsi","r11"}:
+        return f"(s->{reg} + UINT64_C({displacement & UINT64}))"
+    raise UnsupportedCluster("Unmodeled guest memory base register")
 
 def _get(ins, operand, image_base):
     if operand.type == X86_OP_REG:
-        field, size = _reg(ins, operand)
-        return f"((uint32_t)s->{field})" if size == 4 else f"s->{field}"
+        field,size = _reg(ins,operand)
+        if size == 8:
+            return f"s->{field}"
+        return f"((uint{8*size}_t)s->{field})"
     if operand.type == X86_OP_IMM:
         return f"UINT64_C({operand.imm & UINT64})"
-    if operand.type == X86_OP_MEM and operand.size in (4, 8):
+    if operand.type == X86_OP_MEM and operand.size in (1,2,4,8):
         return f"mx_crt_cluster_read(s,m,{_address(ins,operand,image_base)},{operand.size})"
     raise UnsupportedCluster("Unsupported source operand")
 
 def _put(ins, operand, value, image_base):
     if operand.type == X86_OP_REG:
-        field, size = _reg(ins, operand)
-        rhs = f"((uint32_t)({value}))" if size == 4 else f"({value})"
-        return f"s->{field} = {rhs};"
-    if operand.type == X86_OP_MEM and operand.size in (4, 8):
+        field,size = _reg(ins,operand)
+        if size == 8:
+            return f"s->{field}=({value});"
+        if size == 4:
+            return f"s->{field}=((uint32_t)({value}));"
+        mask=(1<<(size*8))-1
+        return (f"s->{field}=(s->{field}&~UINT64_C({mask}))|"
+                f"(((uint64_t)({value}))&UINT64_C({mask}));")
+    if operand.type == X86_OP_MEM and operand.size in (1,2,4,8):
         return (f"if (!mx_crt_cluster_write(s,m,"
                 f"{_address(ins,operand,image_base)},{operand.size},({value})))"
                 f" return MX_CRT_CLUSTER_MEMORY_FAULT;")
@@ -155,11 +164,14 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             imports.append({"rva":hex(ins.address),"iat_slot":hex(slot),
                             "symbol":name,"kind":kind,
                             "service":SERVICES[name]})
-        elif mn not in ("mov","lea","cmp","test","push","pop","add","sub","nop","ret"):
+        elif mn not in ("mov","movzx","movsxd","lea","cmp","test","setne",
+                         "xor","or","push","pop","add","sub","nop","ret"):
             raise UnsupportedCluster("Unsupported x64 instruction: "+mn)
-        if mn in ("mov","lea","cmp","test","add","sub"):
+        if mn in ("mov","movzx","movsxd","lea","cmp","test","xor","or","add","sub"):
             if len(ops)!=2:
                 raise UnsupportedCluster("Unexpected two-operand shape: "+mn)
+        if mn=="setne" and len(ops)!=1:
+            raise UnsupportedCluster("SETNE requires one byte destination")
         if mn in ("push","pop") and (len(ops)!=1 or ops[0].type!=X86_OP_REG or
                                    ops[0].size!=8):
             raise UnsupportedCluster("Stack operation requires 64-bit register")
@@ -189,6 +201,19 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             if (ops[0].size!=ops[1].size and ops[1].type!=X86_OP_IMM):
                 raise UnsupportedCluster("MOV operand width mismatch")
             lines.append(' '+_put(ins,ops[0],_get(ins,ops[1],image_base),image_base)+'\n')
+        elif mn in ("movzx","movsxd"):
+            dst,src=ops
+            if dst.type!=X86_OP_REG:
+                raise UnsupportedCluster("Integer extension needs register destination")
+            if mn=="movzx":
+                if dst.size not in (4,8) or src.size not in (1,2):
+                    raise UnsupportedCluster("MOVZX supports 8/16 to 32/64 bits")
+                value=_get(ins,src,image_base)
+            else:
+                if dst.size!=8 or src.size!=4:
+                    raise UnsupportedCluster("MOVSXD supports sign extension 32 to 64")
+                value=f"((uint64_t)(int64_t)(int32_t)({_get(ins,src,image_base)}))"
+            lines.append(' '+_put(ins,dst,value,image_base)+'\n')
         elif mn=="lea":
             if (ops[0].type!=X86_OP_REG or ops[1].type!=X86_OP_MEM or
                 ops[0].size!=8):
@@ -211,6 +236,24 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             lines.append(f' s->sf=(flags_result&UINT64_C({1<<(bits-1)}))!=0U;\n')
             lines.append(' s->cf=(lhs<rhs);\n' if mn=="cmp" else ' s->cf=0U;\n')
             lines.append(' }\n')
+        elif mn=="setne":
+            if ops[0].size!=1:
+                raise UnsupportedCluster("SETNE only writes a byte")
+            lines.append(' '+_put(ins,ops[0],'(s->zf==0U)',image_base)+'\n')
+        elif mn in ("xor","or"):
+            lhs,rhs=ops
+            if lhs.type!=X86_OP_REG or lhs.size not in (1,2,4,8):
+                raise UnsupportedCluster("Bitwise destination must be a register")
+            if rhs.type!=X86_OP_IMM and rhs.size!=lhs.size:
+                raise UnsupportedCluster("Bitwise operands have different widths")
+            bits=lhs.size*8
+            mask=(1<<bits)-1
+            operator='^' if mn=="xor" else '|'
+            lines.append(f' {{uint64_t value=(({_get(ins,lhs,image_base)}){operator}({_get(ins,rhs,image_base)}))&UINT64_C({mask});\n')
+            lines.append(' '+_put(ins,lhs,'value',image_base)+'\n')
+            lines.append(' s->zf=(value==0U);\n')
+            lines.append(f' s->sf=(value&UINT64_C({1<<(bits-1)}))!=0U;\n')
+            lines.append(' s->cf=0U;}\n')
         elif mn in ("je","jne","jns","js","jbe","jb","ja","jmp"):
             target=ops[0].imm
             condition={
