@@ -67,4 +67,34 @@ static inline int mx_crt_joined_wrapper8(
     s->instructions += 8U;
     return MX_CRT_CLUSTER_RETURNED;
 }
+/* Bounded two-instruction guest callback:
+ * LEA RCX,[RIP+disp32]; JMP rel32 to wrapper.
+ *
+ * This is a TAIL jump, not a nested CALL: original return address is already
+ * on the callback entry stack, so no extra stack slot is pushed. The caller
+ * must verify both instructions/target of the real binary independently.
+ */
+static inline int mx_crt_tail_callback2_to_wrapper(
+        mx_crt_cluster_state *s, mx_cfg_memory *mem,
+        uint64_t callback_pc, uint64_t callback_target_arg,
+        uint64_t wrapper_pc, uint64_t child_pc,
+        mx_crt_joined_child_fn child,
+        mx_crt_cluster_import_fn import_callback,
+        void *context) {
+    if (!s || !mem || !child || !import_callback ||
+        s->fault || s->rip != callback_pc ||
+        !callback_target_arg || callback_pc == wrapper_pc ||
+        callback_pc == child_pc)
+        return MX_CRT_CLUSTER_INVALID;
+    /* Preserve all other guest registers until the nested wrapper executes. */
+    s->rcx = callback_target_arg;
+    s->rip = wrapper_pc;
+    const int result=mx_crt_joined_wrapper8(
+        s,mem,wrapper_pc,child_pc,child,import_callback,context);
+    if (result != MX_CRT_CLUSTER_RETURNED) return result;
+    if (s->instructions > UINT32_MAX - 2U)
+        return MX_CRT_CLUSTER_INVALID;
+    s->instructions += 2U;
+    return MX_CRT_CLUSTER_RETURNED;
+}
 #endif
