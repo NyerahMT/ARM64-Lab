@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r"""
 #include <stdint.h>
-#include "mx_crt_services.h"
+#include "mx_crt_service_dispatch.h"
 
 #define BASE UINT64_C(0x70001000)
 #define KEY UINT64_C(0x91c653e86da420f7)
@@ -82,6 +82,43 @@ int smoke(void) {
     if(!mx_cfg_transfer(&memory,BASE+0x28U,&wrong,8,1))return 37;
     if(mx_crt_service_dllonexit(&memory,5,BASE+0x20U,
                                 BASE+0x28U,heap,4)!=0)return 38;
+    /* Typed Win64 RCX/RDX/R8 adapter with explicit RAX and memory effects. */
+    mx_crt_service_adapter adapter={&s,&memory,222,heap,4};
+    uint64_t rax=UINT64_C(0xfeedface);
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_UNSUPPORTED,
+                               0,0,0,&rax)!=0||rax!=UINT64_C(0xfeedface))
+        return 40;
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_ENCODE_POINTER,
+                               0x12345678U,0,0,&rax)!=1||
+       mx_crt_decode_pointer(&s,rax)!=0x12345678U)return 41;
+    uint64_t token=rax;
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_DECODE_POINTER,
+                               token,0,0,&rax)!=1||rax!=0x12345678U)
+       return 42;
+    rax=UINT64_C(0xfeedface);
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_LOCK,
+                               8,0,0,&rax)!=1||rax!=UINT64_C(0xfeedface))
+       return 43;
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_UNLOCK,
+                               8,0,0,&rax)!=1||rax!=UINT64_C(0xfeedface))
+       return 44;
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_LOCK,
+                               99,0,0,&rax)!=-1||
+       mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_UNLOCK,
+                               UINT64_C(0x100000000),0,0,&rax)!=-1)
+       return 45;
+    if(mx_crt_services_init(&s,KEY)!=MX_CRT_SVC_OK)return 46;
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_ONEXIT,
+                               UINT64_C(0x140005000),0,0,&rax)!=1||
+       rax!=UINT64_C(0x140005000)||s.onexit_count!=1)
+       return 47;
+    if(!mx_cfg_transfer(&memory,BASE+0x28U,&heap,8,1))return 48;
+    if(mx_crt_dispatch_service(&adapter,MX_CRT_SERVICE_DLLONEXIT,
+                               UINT64_C(0x140006000),
+                               BASE+0x20U,BASE+0x28U,&rax)!=1||
+       rax!=UINT64_C(0x140006000))return 49;
+    if(mx_crt_dispatch_service(0,MX_CRT_SERVICE_LOCK,8,0,0,&rax)!=-1)
+       return 50;
     return 0;
 }
 #ifdef HOST
