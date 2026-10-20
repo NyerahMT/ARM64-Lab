@@ -161,21 +161,34 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
     insns=list(decoder.disasm(code,start))
     if (not insns or sum(i.size for i in insns)!=len(code) or
         not 1<=len(insns)<=63 or
-        sum(i.mnemonic=="ret" for i in insns)!=1 or
-        insns[-1].mnemonic!="ret"):
-        raise UnsupportedCluster("Incomplete bounded x64 function or terminal RET")
+        not (sum(i.mnemonic=="ret" for i in insns)==1 and
+             insns[-1].mnemonic=="ret" or
+             sum(i.mnemonic=="ret" for i in insns)==0 and
+             insns[-1].mnemonic=="jmp" and
+             len(insns[-1].operands)==1 and
+             insns[-1].operands[0].type==X86_OP_IMM and
+             insns[-1].operands[0].imm in local_targets)):
+        raise UnsupportedCluster(
+            "Incomplete bounded x64 function or no validated terminal RET/tail JMP")
     addrs={i.address for i in insns}
     edges=[]
+    tail_calls=[]
     imports=[]
     calls=[]
     for ins in insns:
         ops=ins.operands
         mn=ins.mnemonic
         if mn in ("je","jne","jns","js","jbe","jb","ja","jmp"):
-            if (len(ops)!=1 or ops[0].type!=X86_OP_IMM or
-                ops[0].imm not in addrs):
+            if len(ops)!=1 or ops[0].type!=X86_OP_IMM:
+                raise UnsupportedCluster("Branch must have a direct local target")
+            if ops[0].imm in addrs:
+                edges.append((ins.address,ops[0].imm))
+            elif mn=="jmp" and ops[0].imm in local_targets:
+                if ins is not insns[-1]:
+                    raise UnsupportedCluster("Only terminal direct tail JMP is supported")
+                tail_calls.append(ops[0].imm)
+            else:
                 raise UnsupportedCluster("Branch leaves bounded original CFG")
-            edges.append((ins.address,ops[0].imm))
         elif mn=="call":
             if (len(ops)==1 and ops[0].type==X86_OP_IMM and
                     ops[0].imm in local_targets):
@@ -291,13 +304,30 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             lines.append(' s->cf=0U;}\n')
         elif mn in ("je","jne","jns","js","jbe","jb","ja","jmp"):
             target=ops[0].imm
-            condition={
-                "je":"if(s->zf)","jne":"if(!s->zf)",
-                "jns":"if(!s->sf)","js":"if(s->sf)",
-                "jbe":"if(s->cf||s->zf)","jb":"if(s->cf)",
-                "ja":"if(!s->cf&&!s->zf)","jmp":""
-            }[mn]
-            lines.append(f' {condition}goto I_{target:x};\n')
+            if target in tail_calls:
+                target_va=image_base+target
+                lines.extend([
+                    ' if(!direct_callback||s->local_depth>=8U||',
+                    's->rsp>UINT64_MAX-8U)',
+                    'return MX_CRT_CLUSTER_IMPORT_UNSUPPORTED;\n',
+                    f' {{uint64_t guest_rsp=s->rsp;\n',
+                    f' s->rip=UINT64_C({target_va});\n',
+                    ' s->local_depth++;\n',
+                    f' int outcome=direct_callback(ctx,UINT64_C({target_va}),s,m);\n',
+                    ' s->local_depth--;\n',
+                    ' if(outcome!=MX_CRT_CLUSTER_RETURNED)return outcome;\n',
+                    ' if(s->rsp!=guest_rsp+8U)return MX_CRT_CLUSTER_INVALID;\n',
+                    ' s->local_calls++;\n',
+                    ' return MX_CRT_CLUSTER_RETURNED;}\n',
+                ])
+            else:
+                condition={
+                    "je":"if(s->zf)","jne":"if(!s->zf)",
+                    "jns":"if(!s->sf)","js":"if(s->sf)",
+                    "jbe":"if(s->cf||s->zf)","jb":"if(s->cf)",
+                    "ja":"if(!s->cf&&!s->zf)","jmp":""
+                }[mn]
+                lines.append(f' {condition}goto I_{target:x};\n')
         elif mn=="push":
             if ins.reg_name(ops[0].reg)=="rsp":
                 raise UnsupportedCluster("PUSH RSP needs pre-decrement snapshot")
@@ -381,6 +411,7 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             if x.mnemonic=="call" and len(x.operands)==1 and
             x.operands[0].type==X86_OP_IMM and
             x.operands[0].imm in local_targets),
+        "verified_terminal_tail_jumps":len(tail_calls),
         "allowed_local_targets":[hex(rva) for rva in sorted(local_targets)],
         "unique_import_services":sorted({item["symbol"] for item in imports}),
         "native_code_generated":True,
