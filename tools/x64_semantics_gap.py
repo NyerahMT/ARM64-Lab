@@ -10,21 +10,25 @@ from collections import Counter
 
 # The deliberately narrow public translator's currently modeled families.
 SUPPORTED = frozenset({
-    "mov", "lea", "cmp", "push", "pop", "add", "sub",
-    "je", "jne", "jmp", "call", "ret", "nop"
+    "mov", "movzx", "movsxd", "lea", "cmp", "test", "setne",
+    "xor", "or", "push", "pop", "add", "sub",
+    "je", "jne", "jns", "js", "jbe", "jb", "ja", "jmp", "call", "ret", "nop"
 })
 FAMILIES = {
-    "test": "flags_and_predicates",
-    "jns": "flags_and_predicates",
-    "js": "flags_and_predicates",
-    "jbe": "flags_and_predicates",
-    "ja": "flags_and_predicates",
-    "movzx": "integer_width_conversion",
-    "movsxd": "integer_width_conversion",
-    "setne": "integer_width_conversion",
-    "or": "integer_logic",
-    "xor": "integer_logic",
-    "and": "integer_logic",
+    "jg": "flags_and_predicates",
+    "jge": "flags_and_predicates",
+    "jl": "flags_and_predicates",
+    "jle": "flags_and_predicates",
+    "movsx": "integer_width_conversion",
+    "shl": "integer_shift_rotate",
+    "shr": "integer_shift_rotate",
+    "sar": "integer_shift_rotate",
+    "rol": "integer_shift_rotate",
+    "ror": "integer_shift_rotate",
+    "adc": "arithmetic_flags",
+    "sbb": "arithmetic_flags",
+    "cmovg": "conditional_moves",
+    "cmove": "conditional_moves",
 }
 MAX_INSTRUCTIONS = 4096
 
