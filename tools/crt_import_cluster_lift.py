@@ -208,10 +208,10 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
                        'if(!s->zf)' if mn=="jne" else '')
             lines.append(f' {condition}goto I_{target:x};\n')
         elif mn=="push":
-            lines.append(' if(s->rsp<8U)return MX_CRT_CLUSTER_MEMORY_FAULT;\n')
-            lines.append(f' s->rsp-=8U;'+
-                         _put(ins,_StackOperand(),_get(ins,ops[0],image_base),image_base)
-                         .replace("STACK_PLACEHOLDER","s->rsp")+'\n')
+            if ins.reg_name(ops[0].reg)=="rsp":
+                raise UnsupportedCluster("PUSH RSP needs pre-decrement snapshot")
+            lines.append(' if(s->rsp<8U)return MX_CRT_CLUSTER_MEMORY_FAULT;\\n')
+            lines.append(f' s->rsp-=8U; if(!mx_crt_cluster_write(s,m,s->rsp,8,{_get(ins,ops[0],image_base)}))return MX_CRT_CLUSTER_MEMORY_FAULT;\\n')
         elif mn=="pop":
             field,size=_reg(ins,ops[0])
             lines.append(' {uint64_t v=mx_crt_cluster_read(s,m,s->rsp,8);\n')
@@ -220,8 +220,12 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
         elif mn in ("add","sub"):
             immediate=ops[1].imm
             op="+" if mn=="add" else "-"
+            if mn=="sub":
+                lines.append(f' if(s->rsp<UINT64_C({immediate}))return MX_CRT_CLUSTER_MEMORY_FAULT;\\n')
+            else:
+                lines.append(f' if(s->rsp>UINT64_MAX-UINT64_C({immediate}))return MX_CRT_CLUSTER_MEMORY_FAULT;\\n')
             lines.append(f' s->rsp=s->rsp{op}UINT64_C({immediate});')
-            lines.append(' s->zf=(s->rsp==0);\n')
+            lines.append(' s->zf=(s->rsp==0);\\n')
         elif mn=="nop":
             pass
         elif mn=="call":
@@ -259,8 +263,3 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
     }
     return "".join(lines),metadata
 
-class _StackOperand:
-    """Internal synthetic stack-memory destination, never from the binary."""
-    type=X86_OP_MEM
-    size=8
-    mem=None
