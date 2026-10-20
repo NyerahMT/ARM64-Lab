@@ -10,10 +10,10 @@
 #include "mx_crt_service_dispatch.h"
 
 typedef struct {
-    uint64_t rax, rbx, rcx, rdx, r8, rdi, rsi, r11;
+    uint64_t rax, rbx, rcx, rdx, r8, r9, rdi, rsi, r11;
     uint64_t rsp, rip, visited;
     uint32_t instructions, imports;
-    uint8_t zf, fault;
+    uint8_t zf, sf, cf, fault;
 } mx_crt_cluster_state;
 
 typedef int (*mx_crt_cluster_import_fn)(
