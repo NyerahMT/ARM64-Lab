@@ -358,7 +358,7 @@ class CRTClusterLiftTests(unittest.TestCase):
             blob,code,iat,thunks,symbols=assemble(work)
             generated,meta=lift_crt_import_cluster(code,START,iat,thunks,BASE)
             self.assertGreaterEqual(meta["decoded_instructions"],25)
-            self.assertEqual(meta["import_calls"],9)
+            self.assertEqual(meta["import_calls"],10)
             self.assertEqual(len(meta["unique_import_services"]),6)
             rows=[(case,reference_original(blob,symbols,case))
                   for case in fixtures()]
