@@ -31,7 +31,7 @@ static int smoke(void) {
   const uint64_t sp=BASE+0x88U;
   const uint64_t ret=UINT64_C(0x500000100);
   for(unsigned i=0;i<4;i++) {
-    memset(stack,0,sizeof(stack)); calls=0;
+    for(unsigned j=0;j<sizeof(stack);j++)stack[j]=0; calls=0;
     mx_crt_state s={0};
     s.rip=PC;s.rsp=sp;s.rax=0xcccc;s.rcx=0xdddd;s.zf=1;
     if(!mx_cfg_transfer(&memory,sp,(void*)&ret,8,1))return 1;
