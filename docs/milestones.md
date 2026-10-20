@@ -8,7 +8,7 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 | D1 | Extract limited x86-64 return-sequence candidates, generate C, compile AArch64 object | Verified in private CI against original MX Bikes input; still only isolated byte-pattern lift |
 | D2 | Establish true callable function boundaries and differential reference behavior | In progress: Ghidra headless startup call graph plus one x64-vs-C-vs-ARM64 200-case cross-product differential proof |
 | D3 | Scalable lifting of original code, indirect branches, guest stack, Windows x64 ABI and exceptions | In progress: restricted scalar SSE lifter translated one 24-instruction original function automatically; most ISA/control flow/runtime features not yet implemented |
-| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; 49-instruction contiguous second-CRT source region joined through synthetic MSVCR90 imported call/return continuations and verified 54/54 against original x64; 13/13 private real-game gates green. Initializer callback arrays, remaining 126-instruction routine, and true entry/engine boot are not yet running |
+| D4 | Execute real original entry path in host/native ARM64 runtime | In progress: entire original first 39-instruction CRT initializer matched 10/10; 49-instruction contiguous second-CRT source region joined through synthetic MSVCR90 imported call/return continuations and verified 54/54 against original x64; 15/15 private real-game gates green (including two isolated callback-wrapper differentials, not yet joined to the startup path). Initializer callback arrays, remaining 126-instruction routine, and true entry/engine boot are not yet running |
 | D5 | Load original archives and bridge OpenGL drawing | Not started |
 | D6 | Render interactive original menu | Not started |
 | D7 | Gameplay, controller input, iOS device build | Not started |
@@ -63,6 +63,13 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - `_initterm`: slot 1 `0x2AAFC4` has 19 instructions, depends on `__getmainargs` and direct CRT helpers; slot 2 `0x320770` has 6 instructions, invokes `0x2D2A70` then tail-jumps to `0x2AB7E4`; slot 3 `0x320790` begins as a short LEA/JMP thunk to `0x2AB7E4`, without a standalone unwind interval. The fallback inventory contains padding after the short thunk, not a 27-instruction runnable function.
 - The shared helper `0x2AB7E4` is also called from the `0x2AAFC4` callback, making it a **three-path reusable dependency**. Prioritize this helper and the six-instruction exception-filter callback together, then group the CRT application/locale and main-arguments services. These are **static observations**, not successful real original callback execution.
 - The prior **54/54** joined startup results use **synthetic initializer return values** and therefore do not substitute for actual callback traversal. The CRT and iOS game are not complete.
+
+## October 20, 2026 — original CRT callback wrappers executed in cross-architecture tests
+
+- [Private 15/15 grouped regression](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39370512325) preserved the earlier 13 CRT gates and added two isolated original-machine-code callback proofs. [Public ARM64 tooling checks](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39370339712) passed on the pinned runtime.
+- The **six-instruction original `SetUnhandledExceptionFilter` callback** at RVA `0x2AB714` matched original x64 against native C and compiled/executed AArch64 ELF in **16/16** deterministic fixtures, including guest CALL/RET stack slots and register outcomes. The underlying Windows API is an injected deterministic hook.
+- The **eight-instruction original shared CRT helper** at RVA `0x2AB7E4` matched **16/16** original x64 / host C / AArch64 fixtures for zero and nonzero callee results, preserving Win64 guest stack and register effects. The direct child at RVA `0x2AB734` is a **synthetic return stub**, not translated original code. Three initializer routes reach the wrapper.
+- Both wrappers are independent verified units, **not joined to real `_initterm_e`/`_initterm` table traversal**. Earlier 54/54 joined startup comparisons still use synthetic initializer returns. The remaining callbacks, actual child `0x2AB734`, original MSVCR90 services, full CRT startup, Steam, renderer and iOS runtime remain unverified.
 
 ## Local binary diagnostics
 
