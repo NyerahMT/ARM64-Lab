@@ -37,6 +37,10 @@ SERVICES = {
     "__dllonexit": "MX_CRT_SERVICE_DLLONEXIT",
     "_lock": "MX_CRT_SERVICE_LOCK",
     "_unlock": "MX_CRT_SERVICE_UNLOCK",
+    "__getmainargs": "MX_CRT_SERVICE_GETMAINARGS",
+    "__set_app_type": "MX_CRT_SERVICE_SET_APP_TYPE",
+    "__setusermatherr": "MX_CRT_SERVICE_SET_USERMATHERR",
+    "_configthreadlocale": "MX_CRT_SERVICE_CONFIGTHREADLOCALE",
 }
 
 def _reg(ins, operand):
