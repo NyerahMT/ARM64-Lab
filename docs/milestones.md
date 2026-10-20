@@ -85,6 +85,12 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - Isolated [private angr symbolic CRT pilot](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39375232352) passed after pinning compatible `bitstring==4.3.1` and explicitly overriding angr's default PE import hooks. It loaded the pinned real original PE, explored the 39-instruction child with six symbolic service stubs, and discovered **2 completed paths and 2 unique candidate import-return models**; 14 original child block addresses were visited in 0.74 seconds of analysis. No native original child has yet been translated or executed.
 - Next gate: use discovered path candidates and service contracts for a true original x64 vs native C/AArch64 differential, then integrate and verify actual CRT initializer table traversal. No Steam, rendering or iOS startup is claimed.
 
+## October 20, 2026 — symbolic witness normalization and staged original-x64 reference
+
+- The public `tools/angr_fixture_bridge.py` validates explicit `angr` service-call traces and all modeled return values, preserves import order, bounds model sizes/unsigned 64-bit values, and removes duplicate fixtures without claiming equivalence to authentic imported DLL behavior. [Public CI passes](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39377206366).
+- A new private `scripts/mxbikes_crt_child_path_reference.py` was committed to run the exact 39-instruction owned original x64 child under bounded Unicorn with six deterministic CRT import hooks, checking both branches. The follow-up attempt to add it to the existing CI workflow was blocked, **so that script has not been executed or independently verified in this milestone**.
+- Confirmed prior baseline is [16/16 passing private startup gates](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39375551167) plus public native/AArch64 synthetic service tests. Do not report a 17th passing gate, the whole original child translated, or its Windows-service semantics verified.
+
 ## Local binary diagnostics
 
 - User-supplied executable SHA-256: 4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6
