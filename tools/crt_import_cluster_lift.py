@@ -10,6 +10,7 @@ The source of any real commercial input and its generated native derivative
 MUST remain private. This public module and its synthetic tests contain no
 original game instruction bytes.
 """
+import re
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
 
@@ -127,7 +128,9 @@ def _import(ins, iat, thunks, decoder):
     return slot,name.lower(),kind
 
 def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
-                            image_base:int=0x140000000):
+                            image_base:int=0x140000000, *,
+                            local_targets=None,
+                            function_name="lifted_crt_import_cluster"):
     """Emit standalone freestanding C for a bounded, verified x64 function.
 
     Returns generated C source and structural metadata. Import callbacks are
@@ -140,6 +143,15 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
         not isinstance(iat,dict) or not isinstance(thunks,dict) or
         len(iat)>512 or len(thunks)>32):
         raise UnsupportedCluster("Invalid or oversized CRT cluster input")
+    if (not isinstance(function_name,str) or
+        not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}",function_name)):
+        raise UnsupportedCluster("Unsafe or invalid C function name")
+    local_targets=set() if local_targets is None else local_targets
+    if (not isinstance(local_targets,(set,frozenset)) or
+        len(local_targets)>32 or
+        any(not isinstance(rva,int) or isinstance(rva,bool) or
+            not 0<=rva<0x10000000 for rva in local_targets)):
+        raise UnsupportedCluster("Invalid bounded direct-call target allowlist")
     decoder=Cs(CS_ARCH_X86,CS_MODE_64)
     decoder.detail=True
     insns=list(decoder.disasm(code,start))
@@ -151,6 +163,7 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
     addrs={i.address for i in insns}
     edges=[]
     imports=[]
+    calls=[]
     for ins in insns:
         ops=ins.operands
         mn=ins.mnemonic
@@ -160,10 +173,16 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
                 raise UnsupportedCluster("Branch leaves bounded original CFG")
             edges.append((ins.address,ops[0].imm))
         elif mn=="call":
-            slot,name,kind=_import(ins,iat,thunks,decoder)
-            imports.append({"rva":hex(ins.address),"iat_slot":hex(slot),
-                            "symbol":name,"kind":kind,
-                            "service":SERVICES[name]})
+            if (len(ops)==1 and ops[0].type==X86_OP_IMM and
+                    ops[0].imm in local_targets):
+                calls.append({"kind":"verified_local", "target_rva":ops[0].imm,
+                              "rva":hex(ins.address)})
+            else:
+                slot,name,kind=_import(ins,iat,thunks,decoder)
+                entry={"rva":hex(ins.address),"iat_slot":hex(slot),
+                       "symbol":name,"kind":kind,"service":SERVICES[name]}
+                imports.append(entry)
+                calls.append(entry)
         elif mn not in ("mov","movzx","movsxd","lea","cmp","test","setne",
                          "xor","or","push","pop","add","sub","nop","ret"):
             raise UnsupportedCluster("Unsupported x64 instruction: "+mn)
@@ -180,12 +199,17 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             ops[1].type==X86_OP_IMM and 0<ops[1].imm<=256
         ):
             raise UnsupportedCluster("Only constant Win64 RSP adjustment supported")
-    if not imports or len(imports)>16:
-        raise UnsupportedCluster("One to sixteen explicit CRT import callsites required")
+    if not 1<=len(calls)<=24 or len(imports)>16:
+        raise UnsupportedCluster("One to 24 verified callsites, at most 16 imports")
+    signature=(
+        f' int {function_name}(mx_crt_cluster_state *s,'
+        ' mx_cfg_memory *m,mx_crt_cluster_import_fn callback,'
+        + ('mx_crt_cluster_direct_fn direct_callback,' if local_targets else '')
+        + 'void *ctx) {\n'
+    )
     lines=[
         '#include <stdint.h>\n#include "mx_crt_cluster_guest.h"\n',
-        'int lifted_crt_import_cluster(mx_crt_cluster_state *s,',
-        ' mx_cfg_memory *m,mx_crt_cluster_import_fn callback,void *ctx) {\n',
+        signature,
         f' if(!s||!m||!callback||s->fault||s->rip!=UINT64_C({image_base+start}))',
         ' return MX_CRT_CLUSTER_INVALID;\n',
         f' goto I_{start:x};\n'
@@ -286,16 +310,36 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
         elif mn=="nop":
             pass
         elif mn=="call":
-            entry=imports.pop(0)
+            entry=calls.pop(0)
             lines.extend([
                 ' if(s->rsp<8U||(s->rsp&15U)!=0U)return MX_CRT_CLUSTER_INVALID;\n',
                 f' {{uint64_t pc=UINT64_C({image_base+ins.address+ins.size});\n',
                 ' if(!mx_crt_cluster_write(s,m,s->rsp-8U,8,pc))',
                 ' return MX_CRT_CLUSTER_MEMORY_FAULT;\n',
-                f' if(!callback(ctx,{entry["service"]},s,m,s->rsp-8U))',
-                ' return MX_CRT_CLUSTER_IMPORT_UNSUPPORTED;\n',
-                ' s->imports++;}\n',
             ])
+            if entry["kind"]=="verified_local":
+                target_va=image_base+entry["target_rva"]
+                lines.extend([
+                    ' if(!direct_callback||s->local_depth>=8U)',
+                    'return MX_CRT_CLUSTER_IMPORT_UNSUPPORTED;\n',
+                    ' uint64_t caller_rsp=s->rsp;\n',
+                    ' s->rsp=caller_rsp-8U;\n',
+                    f' s->rip=UINT64_C({target_va});\n',
+                    ' s->local_depth++;\n',
+                    f' int result=direct_callback(ctx,UINT64_C({target_va}),s,m);\n',
+                    ' s->local_depth--;\n',
+                    ' if(result!=MX_CRT_CLUSTER_RETURNED)return result;\n',
+                    ' if(s->rsp!=caller_rsp||s->rip!=pc)',
+                    ' return MX_CRT_CLUSTER_INVALID;\n',
+                    ' s->local_calls++;\n',
+                ])
+            else:
+                lines.extend([
+                    f' if(!callback(ctx,{entry["service"]},s,m,s->rsp-8U))',
+                    ' return MX_CRT_CLUSTER_IMPORT_UNSUPPORTED;\n',
+                    ' s->imports++;\n',
+                ])
+            lines.append(' }\n')
         elif mn=="ret":
             lines.extend([
                 ' s->rip=mx_crt_cluster_read(s,m,s->rsp,8);\n',
@@ -309,10 +353,13 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
         "decoded_instructions":len(insns),
         "original_code_bytes":len(code),
         "verified_internal_branches":len(edges),
-        "import_calls":sum(x.mnemonic=="call" for x in insns),
-        "unique_import_services":sorted({
-            _import(x,iat,thunks,decoder)[1] for x in insns
-            if x.mnemonic=="call"}),
+        "import_calls":len(imports),
+        "local_call_sites":sum(1 for x in insns
+            if x.mnemonic=="call" and len(x.operands)==1 and
+            x.operands[0].type==X86_OP_IMM and
+            x.operands[0].imm in local_targets),
+        "allowed_local_targets":[hex(rva) for rva in sorted(local_targets)],
+        "unique_import_services":sorted({item["symbol"] for item in imports}),
         "native_code_generated":True,
         "real_imports_executed":False,
         "original_x64_vs_arm64_verified":False,
