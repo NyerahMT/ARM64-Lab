@@ -198,11 +198,17 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
         if mn in ("push","pop") and (len(ops)!=1 or ops[0].type!=X86_OP_REG or
                                    ops[0].size!=8):
             raise UnsupportedCluster("Stack operation requires 64-bit register")
-        if mn in ("add","sub") and not (
-            ops[0].type==X86_OP_REG and ins.reg_name(ops[0].reg)=="rsp" and
-            ops[1].type==X86_OP_IMM and 0<ops[1].imm<=256
-        ):
-            raise UnsupportedCluster("Only constant Win64 RSP adjustment supported")
+        if mn in ("add","sub"):
+            if (ops[0].type!=X86_OP_REG or ops[0].size not in (4,8) or
+                (ops[1].type!=X86_OP_IMM and
+                 (ops[1].type!=X86_OP_REG or
+                  ops[1].size!=ops[0].size))):
+                raise UnsupportedCluster(
+                    "Arithmetic limited to 32/64-bit register + register/immediate")
+            if ins.reg_name(ops[0].reg)=="rsp" and not (
+                ops[1].type==X86_OP_IMM and 0<ops[1].imm<=256):
+                raise UnsupportedCluster(
+                    "Win64 guest stack adjustments require a bounded constant")
     if not 1<=len(calls)<=24 or len(imports)>16:
         raise UnsupportedCluster("One to 24 verified callsites, at most 16 imports")
     signature=(
@@ -303,14 +309,27 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             lines.append(' if(s->fault)return MX_CRT_CLUSTER_MEMORY_FAULT;\n')
             lines.append(f' s->{field}=v;s->rsp+=8U;}}\n')
         elif mn in ("add","sub"):
-            immediate=ops[1].imm
+            dst,src=ops
+            bits=8*dst.size
+            mask=(1<<bits)-1
+            sign=1<<(bits-1)
+            left=_get(ins,dst,image_base)
+            right=_get(ins,src,image_base)
             op="+" if mn=="add" else "-"
+            lines.append(f' {{uint64_t lhs=({left})&UINT64_C({mask});\n')
+            lines.append(f' uint64_t rhs=({right})&UINT64_C({mask});\n')
+            if ins.reg_name(dst.reg)=="rsp":
+                guard=('lhs<rhs' if mn=="sub" else 'lhs>UINT64_MAX-rhs')
+                lines.append(f' if({guard})return MX_CRT_CLUSTER_MEMORY_FAULT;\n')
+            lines.append(f' uint64_t value=(lhs{op}rhs)&UINT64_C({mask});\n')
+            lines.append(' '+_put(ins,dst,'value',image_base)+'\n')
+            lines.append(' s->zf=(value==0U);\n')
+            lines.append(f' s->sf=(value&UINT64_C({sign}))!=0U;\n')
             if mn=="sub":
-                lines.append(f' if(s->rsp<UINT64_C({immediate}))return MX_CRT_CLUSTER_MEMORY_FAULT;\n')
+                lines.append(' s->cf=(lhs<rhs);\n')
             else:
-                lines.append(f' if(s->rsp>UINT64_MAX-UINT64_C({immediate}))return MX_CRT_CLUSTER_MEMORY_FAULT;\n')
-            lines.append(f' s->rsp=s->rsp{op}UINT64_C({immediate});')
-            lines.append(' s->zf=(s->rsp==0);s->sf=((s->rsp>>63U)&1U);s->cf=0U;\n')
+                lines.append(f' s->cf=(lhs>UINT64_C({mask})-rhs);\n')
+            lines.append(' }\n')
         elif mn=="nop":
             pass
         elif mn=="call":
