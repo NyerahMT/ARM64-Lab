@@ -18,6 +18,7 @@ SOURCE=r"""
 #define SP UINT64_C(0x7000fb08)
 #define WRAPPER UINT64_C(0x140002000)
 #define CHILD UINT64_C(0x140003000)
+#define CALLBACK UINT64_C(0x140004000)
 #define EXIT UINT64_C(0x500000100)
 #define GLOBAL UINT64_C(0x140020000)
 static uint8_t stack_data[512];
@@ -105,6 +106,30 @@ int smoke(void) {
            s.instructions!=8U)
             return 40+i;
     }
+    /* Execute a two-instruction LEA RCX; JMP wrapper callback together
+     * with the nested wrapper and real side-effecting synthetic callee. */
+    for(unsigned j=0;j<512;j++)stack_data[j]=0;
+    for(unsigned j=0;j<16;j++)globals[j]=0;
+    mx_crt_cluster_state callback_state={0};
+    callback_state.rip=CALLBACK;callback_state.rsp=SP;
+    callback_state.rcx=UINT64_C(0xbadc0de);
+    if(!copy64(&mem,SP,EXIT))return 49;
+    called=0;imported=0;
+    if(mx_crt_tail_callback2_to_wrapper(
+        &callback_state,&mem,CALLBACK,UINT64_C(0x12345678),
+        WRAPPER,CHILD,real_guest_side_effects,fake_import,
+        (void*)&callback_state)!=MX_CRT_CLUSTER_RETURNED ||
+       callback_state.rip!=EXIT || callback_state.rsp!=SP+8U ||
+       callback_state.rax!=0 || callback_state.instructions!=10U ||
+       callback_state.rcx!=UINT64_C(0xabcd) ||
+       called!=1 || imported!=1)return 50;
+    mx_crt_cluster_state invalid_callback={0};
+    invalid_callback.rip=CALLBACK;invalid_callback.rsp=SP;
+    if(mx_crt_tail_callback2_to_wrapper(
+        &invalid_callback,&mem,CALLBACK,0,
+        WRAPPER,CHILD,real_guest_side_effects,fake_import,0)
+        !=MX_CRT_CLUSTER_INVALID)return 55;
+
     mx_crt_cluster_state s={0};
     s.rip=WRAPPER;s.rsp=SP;s.rcx=UINT64_C(0x12345678);
     if(!copy64(&mem,SP,EXIT))return 51;
