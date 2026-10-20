@@ -119,6 +119,14 @@ int smoke(void) {
        rax!=UINT64_C(0x140006000))return 49;
     if(mx_crt_dispatch_service(0,MX_CRT_SERVICE_LOCK,8,0,0,&rax)!=-1)
        return 50;
+    rax=UINT64_C(0xdeadbeef98765432);
+    const mx_crt_service_id external[]={
+        MX_CRT_SERVICE_GETMAINARGS,MX_CRT_SERVICE_SET_APP_TYPE,
+        MX_CRT_SERVICE_SET_USERMATHERR,MX_CRT_SERVICE_CONFIGTHREADLOCALE};
+    for(unsigned i=0;i<sizeof(external)/sizeof(external[0]);i++){
+        if(mx_crt_dispatch_service(&adapter,external[i],1,2,3,&rax)!=0||
+           rax!=UINT64_C(0xdeadbeef98765432))return 51+i;
+    }
     return 0;
 }
 #ifdef HOST
