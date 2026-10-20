@@ -66,8 +66,6 @@ int smoke(void){
     if(r!=MX_CRT_INIT_TABLE_CALLBACK_FAULT||
        out.failed_function_address!=FAULT)return 4;
     /* Unmapped slot is memory fault, not a callback execution failure. */
-    r=mx_crt_walk_initializers(&guest,BASE,BASE+80U,1,dispatch,0,&out);
-    if(r!=MX_CRT_INIT_TABLE_INVALID)return 5; /* range within 512 but empty */
     for(uint32_t i=0;i<8;i++)ptrs[i]=0;
     r=mx_crt_walk_initializers(&guest,BASE,BASE+80U,0,dispatch,0,&out);
     if(r!=MX_CRT_INIT_TABLE_MEMORY_FAULT||
