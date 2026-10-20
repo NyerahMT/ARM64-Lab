@@ -11,6 +11,7 @@ def sample_trace():
         "native_arm64_executed": False,
         "stop_reason": "unsupported_external_api",
         "unimplemented_import": "steam_api64.dll::SteamAPI_Init",
+        "unsupported_import_stack_return_rva": "0x2abe40",
         "windows_imports_called": {
             "KERNEL32.dll::GetTickCount": 2,
             "MSVCR90.dll::fread": 251,
@@ -31,6 +32,10 @@ class BootFrontierTests(unittest.TestCase):
                          "steam_api64.dll::SteamAPI_Init")
         self.assertEqual(report["first_blocker"]["category"],
                          "steam_or_external_runtime")
+        self.assertEqual(
+            report["first_blocker"]["original_guest_stack_return_rva_unexecuted"],
+            "0x2abe40"
+        )
         self.assertEqual(report["original_x64_instructions_executed"], 4270000)
         self.assertEqual(report["observed_x64_unique_imports"], 5)
         self.assertEqual(report["observed_x64_import_events"], 259)
@@ -108,6 +113,14 @@ class BootFrontierTests(unittest.TestCase):
         data["windows_imports_called"]["some malformed import"]=1
         with self.assertRaises(ValueError):
             analyze_frontier(data)
+
+    def test_bad_return_rva_rejected(self):
+        for value in ("after", "0x", "0x100000000", 4, True):
+            data = sample_trace()
+            data["unsupported_import_stack_return_rva"] = value
+            with self.subTest(value=str(value)):
+                with self.assertRaises(ValueError):
+                    analyze_frontier(data)
 
     def test_no_supported_import_and_memory_fault(self):
         data = sample_trace()
