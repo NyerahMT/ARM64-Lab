@@ -220,8 +220,9 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
                 raise UnsupportedCluster("LEA requires 64-bit register destination")
             lines.append(' '+_put(ins,ops[0],_address(ins,ops[1],image_base),image_base)+'\n')
         elif mn in ("cmp","test"):
-            if ops[0].type!=X86_OP_REG or ops[0].size not in (4,8):
-                raise UnsupportedCluster("Flag operation needs a 32/64-bit register")
+            if (ops[0].type not in (X86_OP_REG,X86_OP_MEM) or
+                    ops[0].size not in (1,2,4,8)):
+                raise UnsupportedCluster("Flag operation requires 8/16/32/64-bit operand")
             if ops[1].type!=X86_OP_IMM and ops[1].size!=ops[0].size:
                 raise UnsupportedCluster("Flag operand widths differ")
             bits=8*ops[0].size
