@@ -45,4 +45,8 @@ static inline int mx_crt_cluster_write(
     }
     return 1;
 }
+/* The generated function is linked into the same native executable as the
+ * guest-memory runtime and host's explicit service callback. */
+int lifted_crt_import_cluster(mx_crt_cluster_state *s, mx_cfg_memory *m,
+                              mx_crt_cluster_import_fn callback, void *ctx);
 #endif
