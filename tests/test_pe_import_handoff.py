@@ -17,6 +17,11 @@ class ImportedCallsiteTests(unittest.TestCase):
         self.assertEqual(result["unwind_caller_rva"], "0x2000")
         self.assertEqual(result["next_instruction_rva"], "0x2006")
         self.assertTrue(result["nearby_next_12_has_conditional_branch"])
+        branch=result["post_import_accumulator_zero_branch"]
+        self.assertEqual(branch["predicate_register"],"eax")
+        self.assertEqual(branch["zero_result_continuation_rva"],"0x200b")
+        self.assertEqual(branch["nonzero_result_continuation_rva"],"0x200a")
+        self.assertTrue(branch["both_continuations_unexecuted"])
         self.assertEqual(result["function_static_import_calls"],
                          [{"name":"synthetic.dll::Init","sites":1}])
         self.assertFalse(result["native_engine_execution"])
@@ -30,6 +35,7 @@ class ImportedCallsiteTests(unittest.TestCase):
                          "direct_call_via_iat_jmp_thunk")
         self.assertEqual(result["import"]["symbol"],"synthetic.dll::Start")
         self.assertEqual(result["import"]["thunk_rva"],"0x2000")
+        self.assertIsNone(result["post_import_accumulator_zero_branch"])
 
     def test_reject_unverified_or_missing_return_site(self):
         pe=FakePE({0x2100: bytes.fromhex("31c0c3")})
