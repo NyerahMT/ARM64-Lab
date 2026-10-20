@@ -12,7 +12,6 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 SRC=r"""
 #include <stdint.h>
-#include <string.h>
 #include "mx_crt_exception_callback.h"
 #define BASE UINT64_C(0x700001000)
 #define PC UINT64_C(0x140002000)
