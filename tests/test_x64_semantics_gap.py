@@ -28,7 +28,7 @@ class AggregateGapTests(unittest.TestCase):
             "callback-c":{"mov":1,"movsxd":1,"ret":1},
         })
         shared=result["grouped_instruction_profile"]
-        self.assertEqual(shared["instruction_total"],18)
+        self.assertEqual(shared["instruction_total"],19)
         self.assertEqual(shared["unsupported_mnemonics"],{
             "jns":1,"movsxd":1,"test":1,"xor":2,
         })
