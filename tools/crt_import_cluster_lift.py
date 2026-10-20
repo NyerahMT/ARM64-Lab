@@ -26,6 +26,7 @@ REGS = {
     "rdi": ("rdi", 8), "edi": ("rdi", 4),
     "rsi": ("rsi", 8), "esi": ("rsi", 4),
     "r11": ("r11", 8), "r11d": ("r11", 4),
+    "r9": ("r9", 8), "r9d": ("r9", 4),
     "rsp": ("rsp", 8),
 }
 SERVICES = {
@@ -144,7 +145,7 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
     for ins in insns:
         ops=ins.operands
         mn=ins.mnemonic
-        if mn in ("je","jne","jmp"):
+        if mn in ("je","jne","jns","js","jbe","jb","ja","jmp"):
             if (len(ops)!=1 or ops[0].type!=X86_OP_IMM or
                 ops[0].imm not in addrs):
                 raise UnsupportedCluster("Branch leaves bounded original CFG")
@@ -154,9 +155,9 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             imports.append({"rva":hex(ins.address),"iat_slot":hex(slot),
                             "symbol":name,"kind":kind,
                             "service":SERVICES[name]})
-        elif mn not in ("mov","lea","cmp","push","pop","add","sub","nop","ret"):
+        elif mn not in ("mov","lea","cmp","test","push","pop","add","sub","nop","ret"):
             raise UnsupportedCluster("Unsupported x64 instruction: "+mn)
-        if mn in ("mov","lea","cmp","add","sub"):
+        if mn in ("mov","lea","cmp","test","add","sub"):
             if len(ops)!=2:
                 raise UnsupportedCluster("Unexpected two-operand shape: "+mn)
         if mn in ("push","pop") and (len(ops)!=1 or ops[0].type!=X86_OP_REG or
@@ -193,19 +194,31 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
                 ops[0].size!=8):
                 raise UnsupportedCluster("LEA requires 64-bit register destination")
             lines.append(' '+_put(ins,ops[0],_address(ins,ops[1],image_base),image_base)+'\n')
-        elif mn=="cmp":
-            if (ops[0].type!=X86_OP_REG or ops[0].size not in (4,8)):
-                raise UnsupportedCluster("CMP limited to register operands")
+        elif mn in ("cmp","test"):
+            if ops[0].type!=X86_OP_REG or ops[0].size not in (4,8):
+                raise UnsupportedCluster("Flag operation needs a 32/64-bit register")
             if ops[1].type!=X86_OP_IMM and ops[1].size!=ops[0].size:
-                raise UnsupportedCluster("CMP operand width mismatch")
-            bits=ops[0].size*8
-            mask=f' & UINT64_C({(1<<bits)-1})' if bits==32 else ''
-            lines.append(f' s->zf=((({_get(ins,ops[0],image_base)}){mask})'
-                         f'==(({_get(ins,ops[1],image_base)}){mask}));\n')
-        elif mn in ("je","jne","jmp"):
+                raise UnsupportedCluster("Flag operand widths differ")
+            bits=8*ops[0].size
+            mask=(1<<bits)-1
+            left=_get(ins,ops[0],image_base)
+            right=_get(ins,ops[1],image_base)
+            lines.append(f' {{uint64_t lhs=({left})&UINT64_C({mask});\n')
+            lines.append(f' uint64_t rhs=({right})&UINT64_C({mask});\n')
+            operation='lhs-rhs' if mn=="cmp" else 'lhs&rhs'
+            lines.append(f' uint64_t flags_result=({operation})&UINT64_C({mask});\n')
+            lines.append(' s->zf=(flags_result==0U);\n')
+            lines.append(f' s->sf=(flags_result&UINT64_C({1<<(bits-1)}))!=0U;\n')
+            lines.append(' s->cf=(lhs<rhs);\n' if mn=="cmp" else ' s->cf=0U;\n')
+            lines.append(' }\n')
+        elif mn in ("je","jne","jns","js","jbe","jb","ja","jmp"):
             target=ops[0].imm
-            condition=('if(s->zf)' if mn=="je" else
-                       'if(!s->zf)' if mn=="jne" else '')
+            condition={
+                "je":"if(s->zf)","jne":"if(!s->zf)",
+                "jns":"if(!s->sf)","js":"if(s->sf)",
+                "jbe":"if(s->cf||s->zf)","jb":"if(s->cf)",
+                "ja":"if(!s->cf&&!s->zf)","jmp":""
+            }[mn]
             lines.append(f' {condition}goto I_{target:x};\n')
         elif mn=="push":
             if ins.reg_name(ops[0].reg)=="rsp":
@@ -225,7 +238,7 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             else:
                 lines.append(f' if(s->rsp>UINT64_MAX-UINT64_C({immediate}))return MX_CRT_CLUSTER_MEMORY_FAULT;\n')
             lines.append(f' s->rsp=s->rsp{op}UINT64_C({immediate});')
-            lines.append(' s->zf=(s->rsp==0);\n')
+            lines.append(' s->zf=(s->rsp==0);s->sf=((s->rsp>>63U)&1U);s->cf=0U;\n')
         elif mn=="nop":
             pass
         elif mn=="call":
