@@ -6,8 +6,9 @@ from tools.pe_call_clusters import scan, strongly_connected, unwind_functions
 
 
 class FakePE:
-    def __init__(self, chunks):
+    def __init__(self, chunks, extras=None):
         self.chunks = dict(chunks)
+        self.chunks.update(extras or {})
         self.rows = [(r, r + len(blob), 0) for r, blob in sorted(chunks.items())]
         self.pdata = b"".join(struct.pack("<III", *r) for r in self.rows)
 
@@ -69,6 +70,20 @@ class ClusterTests(unittest.TestCase):
         self.assertEqual(three["nodes"][0]["status"], "missing_exact_unwind_entry")
         four = scan(self.pe, [0x1000], max_bytes=5)
         self.assertEqual(four["nodes"][0]["status"], "too_large")
+
+    def test_verified_import_thunk_is_not_an_unresolved_function(self):
+        pe = FakePE({0x1200: bytes.fromhex("e8fb0d0000c3")},
+                    extras={0x2000: bytes.fromhex("ff25fa0f0000")})
+        result = scan(pe, [0x1200], imports={0x3000: "msvcr90.dll::_synthetic"})
+        node = result["nodes"][0]
+        self.assertEqual(node["unresolved"], [])
+        self.assertEqual(node["import_thunks"], [{
+            "thunk_rva": "0x2000", "slot_rva": "0x3000",
+            "name": "msvcr90.dll::_synthetic"}])
+        self.assertEqual(result["translation_batches"][0]["external_blockers"], 1)
+        no_import = scan(pe, [0x1200])
+        self.assertEqual(no_import["nodes"][0]["unresolved"][0]["kind"],
+                         "no_unwind_target")
 
     def test_invalid_depth_and_overlap(self):
         with self.assertRaises(ValueError):

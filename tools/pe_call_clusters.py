@@ -81,6 +81,29 @@ def scan(pe, roots, imports=None, max_depth=3, max_nodes=64,
     decoder.detail = True
     queue = deque((int(root), 0) for root in roots)
     seen, overflow = {}, []
+
+    def verified_import_thunk(target):
+        """Recognize only a six-byte JMP [RIP+disp32] into a known IAT slot."""
+        try:
+            raw = pe.read_rva(target, 6)
+            decoded = list(decoder.disasm(raw, target))
+        except (ValueError, OSError):
+            return None
+        if len(decoded) != 1 or decoded[0].size != 6:
+            return None
+        inst = decoded[0]
+        if inst.mnemonic != "jmp" or len(inst.operands) != 1:
+            return None
+        operand = inst.operands[0]
+        if (operand.type != X86_OP_MEM or
+                inst.reg_name(operand.mem.base) != "rip" or
+                operand.mem.index):
+            return None
+        slot = inst.address + inst.size + operand.mem.disp
+        if slot not in imports:
+            return None
+        return {"thunk_rva": hex(target), "slot_rva": hex(slot),
+                "name": imports[slot]}
     while queue:
         entry, depth = queue.popleft()
         if entry in seen:
@@ -89,8 +112,8 @@ def scan(pe, roots, imports=None, max_depth=3, max_nodes=64,
             overflow.append(hex(entry))
             continue
         info = {"rva": hex(entry), "depth": depth, "calls": [],
-                "imports": [], "unresolved": [], "local_branches": 0,
-                "features": [], "status": "pending"}
+                "imports": [], "import_thunks": [], "unresolved": [],
+                "local_branches": 0, "features": [], "status": "pending"}
         seen[entry] = info
         end = bounds.get(entry)
         if end is None:
@@ -129,8 +152,12 @@ def scan(pe, roots, imports=None, max_depth=3, max_nodes=64,
                         info["unresolved"].append({"kind": "depth_limit",
                                                    "target": hex(target)})
                 else:
-                    info["unresolved"].append({"kind": "no_unwind_target",
-                                               "target": hex(target)})
+                    thunk = verified_import_thunk(target) if ins.mnemonic == "call" else None
+                    if thunk is not None:
+                        info["import_thunks"].append(thunk)
+                    else:
+                        info["unresolved"].append({"kind": "no_unwind_target",
+                                                   "target": hex(target)})
             elif op.type == X86_OP_MEM and ins.reg_name(op.mem.base) == "rip" and not op.mem.index:
                 slot = ins.address + ins.size + op.mem.disp
                 info["imports"].append({"slot_rva": hex(slot),
@@ -147,8 +174,8 @@ def scan(pe, roots, imports=None, max_depth=3, max_nodes=64,
     for i, group in enumerate(groups):
         outward = sorted(set(group_of[t] for r in group for t in seen[r]["calls"]
                              if t in group_of and group_of[t] != i))
-        blockers = sum(len(seen[r]["imports"]) + len(seen[r]["unresolved"])
-                       for r in group)
+        blockers = sum(len(seen[r]["imports"]) + len(seen[r]["import_thunks"]) +
+                       len(seen[r]["unresolved"]) for r in group)
         batches.append({"id": i, "members": [hex(r) for r in group],
                         "depends_on_batches": outward,
                         "external_blockers": blockers,
