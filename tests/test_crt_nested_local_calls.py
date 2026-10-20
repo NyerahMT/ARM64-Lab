@@ -53,14 +53,12 @@ after:
   ret
 .globl synthetic_parent_end
 synthetic_parent_end:
-.globl synthetic_child
 synthetic_child:
   sub rsp,0x28
   mov rcx,r9
   call QWORD PTR [rip+onexit_slot]
   add rsp,0x28
   ret
-.globl synthetic_child_end
 synthetic_child_end:
 .org 0x200
 decode_slot: .quad 0
