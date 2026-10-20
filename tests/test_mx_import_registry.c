@@ -41,6 +41,7 @@ int main(void) {
     CHECK(mx_classify_win64_import("kernel32.dll","GetCurrentThreadId")==MX_IMPORT_HOST_IDENTITY);
     CHECK(mx_classify_win64_import("steam_api64.dll","SteamAPI_Init")==MX_IMPORT_STEAM_SERVICE_REQUIRED);
     CHECK(mx_classify_win64_import("steam_api64.dll","SteamAPI_RestartAppIfNecessary")==MX_IMPORT_STEAM_SERVICE_REQUIRED);
+    CHECK(mx_classify_win64_import("STEAM_API64.DLL","SteamInternal_ContextInit")==MX_IMPORT_STEAM_SERVICE_REQUIRED);
     CHECK(mx_classify_win64_import("OPENGL32.DLL","wglCreateContext")==MX_IMPORT_UNRESOLVED);
     CHECK(mx_classify_win64_import(0,"Sleep")==MX_IMPORT_UNRESOLVED);
     CHECK(mx_dispatch_supported_win64_import(&rt,"kernel32.dll","GetTickCount",&call)==1);
@@ -75,7 +76,9 @@ int main(void) {
     CHECK(host.ns_slept==9000000ULL);
     uint64_t previous=call.rax;
     CHECK(mx_dispatch_supported_win64_import(&rt,"steam_api64.dll","SteamAPI_Init",&call)==0);
-    CHECK(call.rax==previous); /* Never synthesize Steam success */
+    CHECK(mx_dispatch_supported_win64_import(&rt,"steam_api64.dll","SteamAPI_RestartAppIfNecessary",&call)==0);
+    CHECK(mx_dispatch_supported_win64_import(&rt,"steam_api64.dll","SteamInternal_ContextInit",&call)==0);
+    CHECK(call.rax==previous); /* Never synthesize Steam success or pointers */
     CHECK(mx_dispatch_supported_win64_import(&rt,"msvcr90.dll","_acmdln",&call)==0);
     CHECK(mx_dispatch_supported_win64_import(&rt,"OPENGL32.dll","wglCreateContext",&call)==0);
     puts("PASS: native import registry refuses Steam and data as executable shims");

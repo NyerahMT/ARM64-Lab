@@ -31,7 +31,8 @@ mx_import_kind mx_classify_win64_import(const char *dll, const char *symbol) {
         return MX_IMPORT_PORTABLE_TIMING;
     if (equal_ascii(dll,"steam_api64.dll") &&
         (equal_ascii(symbol,"SteamAPI_Init") ||
-         equal_ascii(symbol,"SteamAPI_RestartAppIfNecessary")))
+         equal_ascii(symbol,"SteamAPI_RestartAppIfNecessary") ||
+         equal_ascii(symbol,"SteamInternal_ContextInit")))
         return MX_IMPORT_STEAM_SERVICE_REQUIRED;
     return MX_IMPORT_UNRESOLVED;
 }
