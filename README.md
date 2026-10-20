@@ -77,6 +77,8 @@ The example RVA refers to a specific local executable revision; offsets may chan
 
 Scale beyond one-instruction import calls: translate full functions and control flow, preserve guest memory/Win64 ABI/exception state, connect a production-compatible host runtime, and only then tackle original assets, OpenGL-to-Metal rendering, controller input, and iOS packaging. Steam initialization remains unresolved. Keep all original game binaries and derived native objects private.
 
+**Development priority: [The Four Commandments](docs/four-commandments.md)** — batch related work, automate lifting and verification, investigate engine entry in parallel, and prioritize native startup → engine startup → first rendered frame → interactive menu.
+
 [See evidence-based milestones](docs/milestones.md) [grouped issue-resolution policy](docs/batched-triage.md), and [CI checks](../../actions).
 
 ## Project boundaries
