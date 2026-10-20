@@ -106,6 +106,14 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - This does **not** execute the complete original `_initterm` table nor the other 4 non-null callback functions, and no real `msvcr90.dll`, Steam, renderer or iPhone game launch has succeeded.
 - In parallel, `SteamAPI_RestartAppIfNecessary`, `SteamAPI_Init`, and `SteamInternal_ContextInit` are all explicitly blocked without a genuine Steamworks integration. See [Steam bootstrap integration constraints](mxbikes-steam-boundary.md).
 
+## October 20, 2026 — authentic CRT tables, two supported callback slices, fail-closed next frontier
+
+- The independent portable `runtime/mx_crt_initializer_walk.h` implements bounded guest-table dispatch (64-slot hard cap), missing-memory diagnostics, null callback skipping, strict unknown-callback failures, `_initterm_e` first-nonzero 32-bit return, and void `_initterm` callback semantics. [Synthetic native C/AArch64 test](https://github.com/NyerahMT/ARM64-Lab/actions/runs/39424828790) succeeds.
+- [Private original MX Bikes grouped run 39425858777](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39425858777) **21/21 pass**: both SHA-pinned original pointer tables are mapped into guest memory (total **7 slots, 5 non-null**). Full `_initterm_e` stops correctly at first unsupported slot 1 `0x2AB234`; full `_initterm` stops correctly at slot 1 `0x2AAFC4`. No callback is silently skipped.
+- The same native execution test uses scoped ranges of the **real** tables, executing original `_initterm_e` **slot 2** callback `0x2AB714` (SetUnhandledExceptionFilter registration, **six source instructions**) and original `_initterm` **slot 3** `0x320790` (two-instruction tail → 8-instruction wrapper → 39-instruction generated child; **49 source instructions**) with **16/16 authentic original x64 → host C → executed AArch64 differential fixtures for each**. These are independent snapshots, **not a full contiguous traversal** of either callback array.
+- Remaining original non-null callbacks to integrate **3/5**: `_initterm_e` slot 1 (52 decoded instructions, `__set_app_type`, `_encode_pointer`, `__setusermatherr`, `_configthreadlocale` dependencies and internal branches); `_initterm` slot 1 (19 instructions, previously verified wrapper call and `__getmainargs` plus direct helper); `_initterm` slot 2 (six instructions, calls independent original routine then tail-jumps to verified wrapper). **These are the two full-table earliest blockers and their adjacent dependency family**.
+- All imported CRT/Windows services used by these original comparisons are still deterministic injected test doubles. No real `msvcr90.dll`, full CRT initialization, Steam bootstrap, engine, graphics, or iOS gameplay has executed.
+
 ## Local binary diagnostics
 
 - User-supplied executable SHA-256: 4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6
