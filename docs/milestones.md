@@ -56,6 +56,14 @@ The percentages in project updates refer to explicit milestones, not a fraction 
 - [Full joined original-game test](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39348733554): **54/54** x64 / host / AArch64 original-code comparisons from the second-CRT entry into actual original import-thunk machine code, simulated imported returns and subsequent initialization branches. This includes successful initialization, nonzero initializer status/error path, already-initialized state, and the unexecuted fatal-`_amsg_exit` call boundary. All **13 private gates passed** in one grouped workflow.
 - **Unverified:** actual C/C++ initializer arrays, true MSVCR90 imported implementations, all 126 original second-CRT instructions, native Windows loader/CRT semantics, iOS, Steam and graphics. Do not equate the 49-instruction source interval with per-test executed-instruction count or percent of the game port.
 
+## October 19, 2026 — real original MSVCR90 initializer callback dependencies
+
+- [Original private callback-table survey](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39349893684) verified **7 actual table slots**, **5 non-null callback pointers**, and **13/13 passing original-game differential gates**. The callback ranges were computed from the four original RIP-relative `LEA` instructions, avoiding hardcoded miscalculated addresses.
+- `_initterm_e`: slot 1 callback `0x2AB234` has 52 decoded instructions and calls MSVCR90 `__set_app_type`, `_encode_pointer`, `__setusermatherr`, `_configthreadlocale` plus direct helpers; slot 2 callback `0x2AB714` has 6 instructions and calls `Kernel32!SetUnhandledExceptionFilter`.
+- `_initterm`: slot 1 `0x2AAFC4` has 19 instructions, depends on `__getmainargs` and direct CRT helpers; slot 2 `0x320770` has 6 instructions, invokes `0x2D2A70` then tail-jumps to `0x2AB7E4`; slot 3 `0x320790` begins as a short LEA/JMP thunk to `0x2AB7E4`, without a standalone unwind interval. The fallback inventory contains padding after the short thunk, not a 27-instruction runnable function.
+- The shared helper `0x2AB7E4` is also called from the `0x2AAFC4` callback, making it a **three-path reusable dependency**. Prioritize this helper and the six-instruction exception-filter callback together, then group the CRT application/locale and main-arguments services. These are **static observations**, not successful real original callback execution.
+- The prior **54/54** joined startup results use **synthetic initializer return values** and therefore do not substitute for actual callback traversal. The CRT and iOS game are not complete.
+
 ## Local binary diagnostics
 
 - User-supplied executable SHA-256: 4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6
