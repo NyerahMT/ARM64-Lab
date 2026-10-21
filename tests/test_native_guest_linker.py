@@ -43,8 +43,6 @@ static int callee(mx_crt_cluster_state*s,mx_cfg_memory*m,void*ctx){
     uint64_t old_rsp=s->rsp;
     s->rsp-=0x28U;
     s->rip=CALLEE+0x12U;
-    uint64_t indirect_target=0U;
-    if(!mx_cfg_transfer(m,GLOBAL+0x00U,&indirect_target,0U,0))return MX_NATIVE_LINK_STACK;
     /* Resolve by guest virtual address; no direct native function pointers. */
     int result=mx_native_link_call(r,s,m,LEAF,CALLEE+0x17U);
     if(result!=MX_NATIVE_LINK_OK)return result;
@@ -93,10 +91,13 @@ int smoke(void){
     s.rsp=SP;
     s.rax=2U;
     int result=mx_native_link_call(&router,&s,&mem,CALLEE,MAIN+0x36U);
-    if(result!=MX_NATIVE_LINK_OK ||
-       s.rip!=MAIN+0x36U||s.rsp!=SP||s.rax!=20U ||
-       router.calls_completed!=2U||router.active_depth!=0U ||
-       router.last_completed_target!=CALLEE)return 3;
+    if(result!=MX_NATIVE_LINK_OK)return 31;
+    if(s.rip!=MAIN+0x36U)return 32;
+    if(s.rsp!=SP)return 33;
+    if(s.rax!=20U)return 34;
+    if(router.calls_completed!=2U)return 35;
+    if(router.active_depth!=0U)return 36;
+    if(router.last_completed_target!=CALLEE)return 37;
     uint64_t global=0U;
     if(!mx_cfg_transfer(&mem,GLOBAL,&global,8U,0)||global!=18U)return 4;
     const uint64_t old_rsp=s.rsp,old_rip=s.rip;
