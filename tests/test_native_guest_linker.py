@@ -86,6 +86,8 @@ int smoke(void){
     if(mx_native_link_validate(&router)!=MX_NATIVE_LINK_OK)return 2;
     entries[0].context=&router;
     entries[1].context=&router;
+    if(mx_native_link_seal(&router)!=MX_NATIVE_LINK_OK ||
+       !router.table_sealed)return 2;
     mx_crt_cluster_state s={0};
     s.rip=MAIN+0x31U;
     s.rsp=SP;
