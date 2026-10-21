@@ -42,7 +42,7 @@ int smoke(void){
     h.onexit_state_va=GATE;
     if(mx_crt_advance_to_main_call(&s,&memory,&h)!=MX_CRT_BRANCH_BOUNDARY ||
        !h.reached_main_call||s.rip!=MAIN||s.rsp!=RSP ||
-       s.rdi!=text||s.rsi!=4U||s.rcx!=BASE||s.rax!=ptr ||
+       s.rdi!=text||s.rsi!=4U||s.rcx!=BASE||s.rax!=72U ||
        h.rdx!=0||h.r8!=text||h.r9!=72U||s.zf!=1U)return 2;
     uint64_t written=0;
     if(!mx_cfg_transfer(&memory,RSP+0x28U,&written,8U,0) ||
@@ -66,7 +66,7 @@ int smoke(void){
     if(!wr(&memory,RSP+0x6cU,&flag,4U))return 9;
     s.rip=POST;
     if(mx_crt_advance_to_main_call(&s,&memory,&h)!=MX_CRT_BRANCH_BOUNDARY||
-       h.r9!=10U)return 10;
+       h.r9!=10U||s.rax!=72U)return 10;
     return 0;
 }
 #ifdef HOST
