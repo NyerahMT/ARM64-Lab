@@ -64,7 +64,9 @@ static inline int mx_crt_advance_to_main_call(
     uint64_t show=(show_flags&1U)?show_command:10U;
     if (!mx_cfg_transfer(memory,s->rsp+0x28U,&command_line,8U,1))
         return MX_CRT_MEMORY_FAULT;
-    s->rax=command_slot;
+    /* The original MOVZX EAX,WORD PTR [RSP+70h] overwrites RAX,
+     * even when the subsequent CMOVNE keeps R9D at its default of 10. */
+    s->rax=(uint64_t)show_command;
     s->rdi=command_line;
     s->rsi=initial_mode;
     s->rcx=out->executable_base;
