@@ -187,6 +187,62 @@ static inline int mx_native_link_call_frontier(
 }
 
 /*
+ * The same native callee can RETURN on one verified input and reach an
+ * untranslated control frontier on another. The callback must explicitly
+ * signal RETURNED or FRONTIER_REACHED; no fabricated stub responses.
+ */
+static inline int mx_native_link_call_until_return_or_frontier(
+        mx_native_link_registry*r,mx_crt_cluster_state*s,mx_cfg_memory*m,
+        uint64_t target_va,uint64_t continuation_va,
+        uint64_t frontier_a,uint64_t frontier_b){
+    if(mx_native_link_prepared(r)!=MX_NATIVE_LINK_OK)
+        return MX_NATIVE_LINK_BAD_TABLE;
+    if(!s||!m||s->fault||!target_va||!continuation_va||
+       !frontier_a||!frontier_b||frontier_a==frontier_b||
+       !s->rip||s->rsp<8U||(s->rsp&15U)!=0U)
+        return MX_NATIVE_LINK_INVALID;
+    r->calls_attempted++;
+    const mx_native_link_entry*entry=mx_native_link_find(r,target_va);
+    if(!entry){
+        r->unresolved_calls++;
+        r->last_unresolved_target=target_va;
+        return MX_NATIVE_LINK_UNRESOLVED;
+    }
+    if(r->active_depth>=r->max_depth)
+        return MX_NATIVE_LINK_RECURSION;
+    const uint64_t caller_rsp=s->rsp;
+    const uint64_t callee_rsp=caller_rsp-8U;
+    uint64_t previous=0U;
+    if(!mx_cfg_transfer(m,callee_rsp,&previous,8U,0)||
+       !mx_cfg_transfer(m,callee_rsp,&continuation_va,8U,1))
+        return MX_NATIVE_LINK_STACK;
+    s->rsp=callee_rsp;s->rip=target_va;
+    r->active_depth++;
+    const int status=entry->entry(s,m,entry->context);
+    r->active_depth--;
+    uint64_t stored_ret=0U;
+    if(s->fault||
+       !mx_cfg_transfer(m,callee_rsp,&stored_ret,8U,0)||
+       stored_ret!=continuation_va)
+        return MX_NATIVE_LINK_BAD_RETURN;
+    if(status==MX_NATIVE_LINK_OK){
+        if(s->rsp!=caller_rsp||s->rip!=continuation_va)
+            return MX_NATIVE_LINK_BAD_RETURN;
+        r->calls_completed++;
+        r->last_completed_target=target_va;
+        return MX_NATIVE_LINK_OK;
+    }
+    if(status==MX_NATIVE_LINK_FRONTIER_REACHED){
+        if(s->rsp!=callee_rsp||
+           (s->rip!=frontier_a&&s->rip!=frontier_b))
+            return MX_NATIVE_LINK_BAD_FRONTIER;
+        r->last_completed_target=target_va;
+        return MX_NATIVE_LINK_FRONTIER_REACHED;
+    }
+    return status;
+}
+
+/*
  * Handles an original JMP / tail CALL without pushing another return slot.
  * Registered callee must consume the preexisting guest return address.
  */
