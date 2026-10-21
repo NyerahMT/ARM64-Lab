@@ -54,7 +54,7 @@ int smoke(void){
         if(s.rsp!=expected_rsp)return 23;
         if(s.rip!=layout.call_site)return 24;
         if(s.rcx!=UINT64_C(0x600010180)+i)return 25;
-        if(s.rdx!=UINT64_C(0x32345)+i)return 26;
+        if(s.rdx!=UINT64_C(0x32345)+i*3U)return 26;
         if(s.r8!=UINT64_C(0x600010180)+i)return 27;
         if(s.instructions!=8U)return 28;
         if(s.zf!=(expected_rax==0U))return 29;
