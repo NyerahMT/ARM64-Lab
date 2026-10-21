@@ -20,7 +20,7 @@ enum {
 };
 typedef struct {
     uint64_t rip,rsp,rax,rcx,rdx,r8,r9;
-    uint32_t zf;
+    uint32_t zf,cf,sf;
     uint32_t instructions;
 } mx_main_prefix_state;
 typedef struct {
@@ -78,7 +78,10 @@ static inline int mx_main_execute_prefix(mx_main_prefix_state *s,
     s->rsp=new_rsp;
     s->rax=mixed;
     s->rcx=s->r8;
+    /* Original XOR RAX,RSP updates SF/ZF/CF (and clears OF). */
     s->zf=(mixed==0U);
+    s->sf=(uint32_t)((mixed>>63U)&1U);
+    s->cf=0U;
     s->rip=layout->call_site;
     s->instructions=8U;
     return MX_MAIN_PREFIX_CALL_BOUNDARY;
