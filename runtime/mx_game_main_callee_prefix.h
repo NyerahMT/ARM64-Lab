@@ -74,4 +74,28 @@ static inline int mx_game_main_callee_branch(
     out->executed_original_instructions=7U;
     return MX_GAME_PREFIX_BRANCH_REACHED;
 }
+/*
+ * Original JE-taken successor is exactly XOR EAX,EAX; RET.
+ * This helper is valid ONLY for the separately PE-verified 0x136207
+ * empty-command-line successor, and consumes its original guest CALL slot.
+ * Other callee branches remain untranslated.
+ */
+static inline int mx_game_main_callee_finish_empty(
+   mx_crt_cluster_state*s,mx_cfg_memory*m,
+   const mx_game_main_callee_layout*layout){
+    if(!s||!m||!layout||s->fault||
+       s->rip!=layout->branch_taken_va||s->rsp>UINT64_MAX-8U||
+       (s->rsp&15U)!=8U||!s->zf||s->rax!=0U)
+        return MX_GAME_PREFIX_BAD_STATE;
+    uint64_t ret=0U;
+    if(!mx_cfg_transfer(m,s->rsp,&ret,8U,0)||!ret)
+        return MX_GAME_PREFIX_UNMAPPED;
+    /* XOR EAX,EAX is 32-bit zero extending and sets CF=SF=0, ZF=1. */
+    s->rax=0U;
+    s->cf=0U;s->sf=0U;s->zf=1U;
+    s->rip=ret;
+    s->rsp+=8U;
+    s->instructions+=2U;
+    return MX_CRT_CLUSTER_RETURNED;
+}
 #endif
