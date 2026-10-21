@@ -19,7 +19,9 @@ enum {
     MX_NATIVE_LINK_STACK=-42,
     MX_NATIVE_LINK_BAD_RETURN=-43,
     MX_NATIVE_LINK_RECURSION=-44,
-    MX_NATIVE_LINK_BAD_TABLE=-45
+    MX_NATIVE_LINK_BAD_TABLE=-45,
+    MX_NATIVE_LINK_FRONTIER_REACHED=2,
+    MX_NATIVE_LINK_BAD_FRONTIER=-46
 };
 typedef int (*mx_native_guest_function)(
     mx_crt_cluster_state *state, mx_cfg_memory *guest, void *context);
@@ -130,6 +132,58 @@ static inline int mx_native_link_call(
     r->calls_completed++;
     r->last_completed_target=target_va;
     return MX_NATIVE_LINK_OK;
+}
+
+/*
+ * A verified native function may stop at an UNTRANSLATED branch without
+ * returning. This deliberately does NOT use mx_native_link_call's successful
+ * return contract. Both permitted frontiers must come from original machine
+ * instruction validation, and the original guest return slot stays intact.
+ *
+ * The callback returns MX_NATIVE_LINK_FRONTIER_REACHED only if it executed a
+ * verified prefix. Arbitrary return values, unregistered source targets,
+ * mismatched stack states or unexpected PCs must fail closed.
+ */
+static inline int mx_native_link_call_frontier(
+        mx_native_link_registry *r,mx_crt_cluster_state *s,
+        mx_cfg_memory *mem,uint64_t target_va,uint64_t continuation_va,
+        uint64_t stop_taken_va,uint64_t stop_fallthrough_va){
+    if(mx_native_link_prepared(r)!=MX_NATIVE_LINK_OK)
+        return MX_NATIVE_LINK_BAD_TABLE;
+    if(!s||!mem||s->fault||!continuation_va||!target_va||
+       !stop_taken_va||!stop_fallthrough_va||
+       stop_taken_va==stop_fallthrough_va||
+       !s->rip||s->rsp<8U||(s->rsp&15U)!=0U)
+        return MX_NATIVE_LINK_INVALID;
+    r->calls_attempted++;
+    const mx_native_link_entry*entry=mx_native_link_find(r,target_va);
+    if(!entry){
+        r->unresolved_calls++;
+        r->last_unresolved_target=target_va;
+        return MX_NATIVE_LINK_UNRESOLVED;
+    }
+    if(r->active_depth>=r->max_depth)
+        return MX_NATIVE_LINK_RECURSION;
+    uint64_t prior=0U;
+    if(!mx_cfg_transfer(mem,s->rsp-8U,&prior,8U,0) ||
+       !mx_cfg_transfer(mem,s->rsp-8U,&continuation_va,8U,1))
+        return MX_NATIVE_LINK_STACK;
+    uint64_t guest_entry_rsp=s->rsp-8U;
+    s->rsp=guest_entry_rsp;
+    s->rip=target_va;
+    r->active_depth++;
+    int status=entry->entry(s,mem,entry->context);
+    r->active_depth--;
+    if(status!=MX_NATIVE_LINK_FRONTIER_REACHED)
+        return status==MX_NATIVE_LINK_OK?MX_NATIVE_LINK_BAD_FRONTIER:status;
+    uint64_t return_slot=0U;
+    if(s->fault||s->rsp!=guest_entry_rsp||
+       (s->rip!=stop_taken_va && s->rip!=stop_fallthrough_va)||
+       !mx_cfg_transfer(mem,guest_entry_rsp,&return_slot,8U,0) ||
+       return_slot!=continuation_va)
+        return MX_NATIVE_LINK_BAD_FRONTIER;
+    r->last_completed_target=target_va;
+    return MX_NATIVE_LINK_FRONTIER_REACHED;
 }
 
 /*
