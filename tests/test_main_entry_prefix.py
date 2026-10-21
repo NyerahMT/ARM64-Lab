@@ -48,11 +48,16 @@ int smoke(void){
         s.r9=UINT64_C(0xab00000000)+i;
         uint64_t expected_rsp=SP-0x288U;
         uint64_t expected_rax=c^expected_rsp;
-        if(mx_main_execute_prefix(&s,&m,&layout)!=MX_MAIN_PREFIX_CALL_BOUNDARY ||
-           s.rax!=expected_rax || s.rsp!=expected_rsp ||
-           s.rip!=layout.call_site || s.rcx!=UINT64_C(0x600010180)+i ||
-           s.rdx!=UINT64_C(0x32345)+i || s.r8!=UINT64_C(0x600010180)+i ||
-           s.instructions!=8U || s.zf!=(expected_rax==0U))return 2;
+        int outcome=mx_main_execute_prefix(&s,&m,&layout);
+        if(outcome!=MX_MAIN_PREFIX_CALL_BOUNDARY)return 21;
+        if(s.rax!=expected_rax)return 22;
+        if(s.rsp!=expected_rsp)return 23;
+        if(s.rip!=layout.call_site)return 24;
+        if(s.rcx!=UINT64_C(0x600010180)+i)return 25;
+        if(s.rdx!=UINT64_C(0x32345)+i)return 26;
+        if(s.r8!=UINT64_C(0x600010180)+i)return 27;
+        if(s.instructions!=8U)return 28;
+        if(s.zf!=(expected_rax==0U))return 29;
         uint64_t memory_cookie=0,arg_a=0,arg_b=0;
         uint32_t winshow=0;
         if(!rd(&m,expected_rsp+0x250U,&memory_cookie,8U) ||
