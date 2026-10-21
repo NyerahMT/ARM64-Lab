@@ -35,6 +35,7 @@ typedef struct {
     uint32_t count, max_depth, active_depth;
     uint32_t calls_attempted, calls_completed, unresolved_calls;
     uint64_t last_unresolved_target, last_completed_target;
+    uint8_t table_sealed; /* immutable registry sorted and verified once */
 } mx_native_link_registry;
 
 static inline int mx_native_link_validate(const mx_native_link_registry *r){
@@ -48,6 +49,27 @@ static inline int mx_native_link_validate(const mx_native_link_registry *r){
             return MX_NATIVE_LINK_BAD_TABLE;
     }
     return MX_NATIVE_LINK_OK;
+}
+
+/* Verify table once for constant-time validation on subsequent calls.
+ * Caller must not mutate registry entries after sealing. */
+static inline int mx_native_link_seal(mx_native_link_registry *r){
+    if(!r)return MX_NATIVE_LINK_BAD_TABLE;
+    if(r->table_sealed)return MX_NATIVE_LINK_OK;
+    if(mx_native_link_validate(r)!=MX_NATIVE_LINK_OK)
+        return MX_NATIVE_LINK_BAD_TABLE;
+    r->table_sealed=1U;
+    return MX_NATIVE_LINK_OK;
+}
+static inline int mx_native_link_prepared(const mx_native_link_registry *r){
+    if(!r)return MX_NATIVE_LINK_BAD_TABLE;
+    if(r->table_sealed){
+        if(!r->entries||!r->count||r->count>131072U ||
+           !r->max_depth||r->max_depth>256U ||
+           r->active_depth>r->max_depth)return MX_NATIVE_LINK_BAD_TABLE;
+        return MX_NATIVE_LINK_OK;
+    }
+    return mx_native_link_validate(r);
 }
 
 static inline const mx_native_link_entry *mx_native_link_find(
@@ -76,7 +98,7 @@ static inline const mx_native_link_entry *mx_native_link_find(
 static inline int mx_native_link_call(
         mx_native_link_registry *r,mx_crt_cluster_state *s,
         mx_cfg_memory *mem,uint64_t target_va,uint64_t continuation_va){
-    if(mx_native_link_validate(r)!=MX_NATIVE_LINK_OK)return MX_NATIVE_LINK_BAD_TABLE;
+    if(mx_native_link_prepared(r)!=MX_NATIVE_LINK_OK)return MX_NATIVE_LINK_BAD_TABLE;
     if(!s||!mem||s->fault||!continuation_va||!target_va||
        !s->rip||s->rsp<8U ||(s->rsp & 15U)!=0U)
         return MX_NATIVE_LINK_INVALID;
@@ -90,7 +112,6 @@ static inline int mx_native_link_call(
     if(r->active_depth>=r->max_depth)
         return MX_NATIVE_LINK_RECURSION;
     const uint64_t original_rsp=s->rsp;
-    const uint64_t original_rip=s->rip;
     const uint64_t new_rsp=original_rsp-8U;
     uint64_t old_stack=0U;
     if(!mx_cfg_transfer(mem,new_rsp,&old_stack,8U,0) ||
@@ -106,7 +127,6 @@ static inline int mx_native_link_call(
         /* This is a hard semantic mismatch; do not pretend we returned. */
         return MX_NATIVE_LINK_BAD_RETURN;
     }
-    (void)original_rip;
     r->calls_completed++;
     r->last_completed_target=target_va;
     return MX_NATIVE_LINK_OK;
@@ -119,7 +139,7 @@ static inline int mx_native_link_call(
 static inline int mx_native_link_tail_jump(
         mx_native_link_registry *r,mx_crt_cluster_state *s,
         mx_cfg_memory *mem,uint64_t target_va){
-    if(mx_native_link_validate(r)!=MX_NATIVE_LINK_OK)return MX_NATIVE_LINK_BAD_TABLE;
+    if(mx_native_link_prepared(r)!=MX_NATIVE_LINK_OK)return MX_NATIVE_LINK_BAD_TABLE;
     if(!s||!mem||s->fault||!target_va||s->rsp>UINT64_MAX-8U ||
        (s->rsp&15U)!=8U)return MX_NATIVE_LINK_INVALID;
     r->calls_attempted++;
