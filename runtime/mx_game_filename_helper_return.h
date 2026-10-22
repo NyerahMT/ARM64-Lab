@@ -45,10 +45,16 @@ static inline int mx_game_filename_helper_return(
         return MX_GAME_HELPER_EPILOGUE_UNMAPPED;
     if(return_va!=l->continuation_pc)
         return MX_GAME_HELPER_EPILOGUE_BAD_RETURN;
+    const uint64_t sum=ret_rsp;
+    /* Original ADD RSP,0x38 changes arithmetic flags. Model the
+     * exposed CF/SF/ZF subset; OF/AF/PF are not yet in guest state.
+     * RET itself leaves arithmetic flags unchanged. */
+    s->cf=(uint8_t)(sum<s->rsp);
+    s->sf=(uint8_t)((sum>>63U)&1U);
+    s->zf=(uint8_t)(sum==0U);
     s->rsp=l->caller_rsp;
     s->rip=return_va;
     s->instructions+=2U;
-    /* x64 ADD RSP,imm and RET do not mutate arithmetic flags. */
     return MX_GAME_HELPER_EPILOGUE_RETURNED;
 }
 #endif
