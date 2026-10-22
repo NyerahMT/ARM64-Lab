@@ -83,6 +83,7 @@ int smoke(void){
         &s,&memory,CALL,THUNK,NEXT,23U)!=
        MX_GAME_STRRCHR_BAD_STATE||s.rax!=prev.rax)return 11;
     s.rsp-=8U;
+    for(uint32_t i=250U;i<256U;i++)letters[i]='x';
     s.rcx=SRC+250U;
     if(mx_game_crt_bounded_strrchr(&s,&memory,23U)!=
        MX_GAME_STRRCHR_MEMORY||s.rax!=prev.rax)return 12;
