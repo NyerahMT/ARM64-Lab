@@ -83,7 +83,7 @@ int smoke(void){
      state.rip!=RETURN||state.rsp!=SP+8U||
      state.instructions!=12U)return 4;
   state=(mx_crt_cluster_state){0};
-  state.rip=PC;state.rsp=BASE+4U;state.rax=5U;
+  state.rip=PC;state.rsp=32U;state.rax=5U;
   if(native_empty_crt_table(&state,&memory)!=MX_CRT_CLUSTER_INVALID||
      state.rax!=5U)return 5;
   state=(mx_crt_cluster_state){0};
