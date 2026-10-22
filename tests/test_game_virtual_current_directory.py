@@ -80,7 +80,7 @@ int smoke(void){
     int approved=1;ctx.opaque=&approved;
     for(uint32_t i=252U;i<260U;i++)path[i]='x';
     if(mx_game_setcwd_import_call(&s,&memory,&ctx,CALL,AFTER,260U)!=
-       MX_GAME_CWD_INVALID||s.rip!=CALL)return 13;
+       MX_GAME_CWD_UNMAPPED||s.rip!=CALL)return 13;
     s.rcx=GLOBAL;
     const uint8_t before=path[0];path[0]='Q';
     if(mx_game_setcwd_import_call(&s,&memory,&ctx,CALL,AFTER,260U)!=
