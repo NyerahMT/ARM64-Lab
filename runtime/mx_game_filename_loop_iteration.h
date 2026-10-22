@@ -39,7 +39,7 @@ static inline int mx_game_filename_loop_iteration(
  if(!mx_cfg_transfer(m,s->rsp+0x28U,&current,8U,0)||
     !current||current==UINT64_MAX)
     return MX_GAME_LOOP_ITERATION_UNMAPPED;
- const uint64_t next=current+1U;
+ uint64_t next=current+1U;
  uint8_t value=0U;
  if(!mx_cfg_transfer(m,next,&value,1U,0))
     return MX_GAME_LOOP_ITERATION_UNMAPPED;
