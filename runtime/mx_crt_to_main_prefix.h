@@ -29,8 +29,6 @@ static inline int mx_crt_enter_main_prefix(
         !hand->executable_base || !hand->r8 ||
         crt->rip!=layout->crt_direct_call_pc ||
         hand->main_call_pc!=layout->crt_direct_call_pc ||
-        layout->prefix.entry!=hand->executable_base+
-                              (layout->prefix.entry-hand->executable_base) ||
         layout->prefix.entry<hand->executable_base ||
         !layout->crt_return_pc ||
         layout->crt_direct_call_pc>UINT64_MAX-5U ||
@@ -46,11 +44,12 @@ static inline int mx_crt_enter_main_prefix(
      */
     const uint64_t call_rsp=crt->rsp-8U;
     const uint64_t frame_rsp=call_rsp-layout->prefix.stack_alloc;
+    if (frame_rsp>UINT64_MAX-layout->prefix.cookie_stack_offset)
+        return MX_MAIN_PREFIX_INVALID;
     const uint64_t cookie_dest=frame_rsp+layout->prefix.cookie_stack_offset;
     uint64_t checked=0U;
     uint32_t checked32=0U;
-    if (frame_rsp>UINT64_MAX-layout->prefix.cookie_stack_offset ||
-        !mx_cfg_transfer(memory,call_rsp,&checked,8U,0) ||
+    if (!mx_cfg_transfer(memory,call_rsp,&checked,8U,0) ||
         !mx_cfg_transfer(memory,cookie_dest,&checked,8U,0) ||
         !mx_cfg_transfer(memory,layout->prefix.cookie_va,&checked,8U,0) ||
         !mx_cfg_transfer(memory,layout->prefix.arg0_global,&checked,8U,0) ||
