@@ -70,13 +70,13 @@ def original_x64_reference(code):
 def execute_arm64_elf(path, instruction_budget=100000, timeout_us=3000000):
     """Run a bounded freestanding AArch64 ELF with explicit execution limits.
 
-    Larger multi-fixture differentials may request a higher bounded budget.
+    Larger multi-fixture differentials can request up to six million instructions; this remains explicitly bounded and does not treat budget exhaustion as success.
     Stopping before the sentinel means *incomplete execution*, not a behavioral
     mismatch. Return-value mismatches are checked only after normal return.
     """
     if (not isinstance(instruction_budget,int) or isinstance(instruction_budget,bool)
-            or not 1000<=instruction_budget<=2000000):
-        raise ValueError("ARM64 instruction budget must be in [1000, 2000000]")
+            or not 1000<=instruction_budget<=6000000):
+        raise ValueError("ARM64 instruction budget must be in [1000, 6000000]")
     if (not isinstance(timeout_us,int) or isinstance(timeout_us,bool)
             or not 1000000<=timeout_us<=15000000):
         raise ValueError("ARM64 timeout must be in [1000000, 15000000] microseconds")
