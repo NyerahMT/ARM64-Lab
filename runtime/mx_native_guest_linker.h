@@ -243,6 +243,53 @@ static inline int mx_native_link_call_until_return_or_frontier(
 }
 
 /*
+ * Execute one verified callee PROLOGUE through its next untranslated
+ * original transfer, retaining any verified local stack allocation.
+ * Unlike a leaf-call frontier, an authentic prologue may change RSP.
+ * The expected delta is an exact instruction-derived amount (not a guess).
+ */
+static inline int mx_native_link_call_prologue_frontier(
+        mx_native_link_registry*r,mx_crt_cluster_state*s,mx_cfg_memory*m,
+        uint64_t target_va,uint64_t continuation_va,
+        uint64_t original_stop_va,uint32_t local_stack_alloc){
+    if(mx_native_link_prepared(r)!=MX_NATIVE_LINK_OK)
+        return MX_NATIVE_LINK_BAD_TABLE;
+    if(!s||!m||s->fault||!s->rip||!target_va||!continuation_va||
+       !original_stop_va||!local_stack_alloc||
+       local_stack_alloc>32768U||!s->rsp||
+       (s->rsp&15U)!=0U||s->rsp<(uint64_t)local_stack_alloc+8U)
+        return MX_NATIVE_LINK_INVALID;
+    r->calls_attempted++;
+    const mx_native_link_entry*entry=mx_native_link_find(r,target_va);
+    if(!entry){
+        r->unresolved_calls++;
+        r->last_unresolved_target=target_va;
+        return MX_NATIVE_LINK_UNRESOLVED;
+    }
+    if(r->active_depth>=r->max_depth)return MX_NATIVE_LINK_RECURSION;
+    const uint64_t callee_rsp=s->rsp-8U;
+    const uint64_t expected_rsp=callee_rsp-(uint64_t)local_stack_alloc;
+    uint64_t previous=0U;
+    if(!mx_cfg_transfer(m,callee_rsp,&previous,8U,0) ||
+       !mx_cfg_transfer(m,expected_rsp,&previous,8U,0) ||
+       !mx_cfg_transfer(m,callee_rsp,&continuation_va,8U,1))
+        return MX_NATIVE_LINK_STACK;
+    s->rsp=callee_rsp;s->rip=target_va;
+    r->active_depth++;
+    const int status=entry->entry(s,m,entry->context);
+    r->active_depth--;
+    uint64_t returned_va=0U;
+    if(status!=MX_NATIVE_LINK_FRONTIER_REACHED)
+        return status==MX_NATIVE_LINK_OK?MX_NATIVE_LINK_BAD_FRONTIER:status;
+    if(s->fault||s->rip!=original_stop_va||s->rsp!=expected_rsp||
+       !mx_cfg_transfer(m,callee_rsp,&returned_va,8U,0) ||
+       returned_va!=continuation_va)
+        return MX_NATIVE_LINK_BAD_FRONTIER;
+    r->last_completed_target=target_va;
+    return MX_NATIVE_LINK_FRONTIER_REACHED;
+}
+
+/*
  * Handles an original JMP / tail CALL without pushing another return slot.
  * Registered callee must consume the preexisting guest return address.
  */
