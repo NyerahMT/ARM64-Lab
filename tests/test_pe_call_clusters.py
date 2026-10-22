@@ -44,6 +44,9 @@ class ClusterTests(unittest.TestCase):
         self.assertEqual(nodes["0x1000"]["calls"], ["0x1010"])
         self.assertEqual(nodes["0x1010"]["instruction_count"], 2)
         self.assertTrue(all(x["ready_for_translation"] for x in result["translation_batches"]))
+        self.assertEqual(result["translation_order"], [1, 0])
+        self.assertTrue(all(x["dependency_closure_ready"]
+                            for x in result["translation_batches"]))
 
     def test_iat_dependency_and_missing_name(self):
         result = scan(self.pe, [0x1040], imports={0x1030: "kernel32.dll::Synthetic"})
@@ -52,6 +55,10 @@ class ClusterTests(unittest.TestCase):
                          "kernel32.dll::Synthetic")
         self.assertEqual(nodes["0x1020"]["imports"][0]["slot_rva"], "0x1030")
         self.assertTrue(any(x["external_blockers"] for x in result["translation_batches"]))
+        by_member = {b["members"][0]:b for b in result["translation_batches"]}
+        self.assertTrue(by_member["0x1040"]["ready_for_translation"])
+        self.assertFalse(by_member["0x1040"]["dependency_closure_ready"])
+        self.assertTrue(by_member["0x1040"]["blocked_by_batches"])
 
     def test_recursion_is_one_cycle(self):
         result = scan(self.pe, [0x1100])
@@ -66,6 +73,10 @@ class ClusterTests(unittest.TestCase):
         self.assertEqual(one["nodes"][0]["unresolved"][0]["kind"], "depth_limit")
         two = scan(self.pe, [0x1000], max_nodes=1)
         self.assertEqual(two["truncated_frontier"], ["0x1010"])
+        self.assertEqual(two["translation_batches"][0]["missing_dependency_targets"],
+                         ["0x1010"])
+        self.assertFalse(two["translation_batches"][0]["dependency_closure_ready"])
+        self.assertFalse(two["translation_batches"][0]["ready_for_translation"])
         three = scan(self.pe, [0x1111])
         self.assertEqual(three["nodes"][0]["status"], "missing_exact_unwind_entry")
         four = scan(self.pe, [0x1000], max_bytes=5)
