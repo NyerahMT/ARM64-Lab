@@ -10,7 +10,7 @@ from collections import Counter
 
 # The deliberately narrow public translator's currently modeled families.
 SUPPORTED = frozenset({
-    "mov", "movzx", "movsxd", "lea", "cmp", "test", "setne",
+    "mov", "movzx", "movsx", "movsxd", "lea", "cmp", "test", "setne",
     "xor", "or", "push", "pop", "add", "sub",
     "je", "jne", "jns", "js", "jbe", "jb", "ja", "jmp", "call", "ret", "nop"
 })
