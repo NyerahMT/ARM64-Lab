@@ -28,8 +28,8 @@ int smoke(void) {
     };
     mx_crt_cluster_state s={0};
     s.rip=EPILOGUE;s.rsp=LOCAL_SP;s.rax=BASE+0x3968a0U;
-    s.rcx=0x12345U;s.rdx=0x87654U;s.zf=0U;
-    s.cf=0U;s.sf=0U;s.imports=2U;s.instructions=394U;
+    s.rcx=0x12345U;s.rdx=0x87654U;s.zf=1U;
+    s.cf=1U;s.sf=1U;s.imports=2U;s.instructions=394U;
     if(mx_game_filename_helper_return(&s,&mem,&layout)!=
         MX_GAME_HELPER_EPILOGUE_RETURNED)return 2;
     if(s.rip!=RETURN||s.rsp!=CALLER_SP||s.rax!=BASE+0x3968a0U||
