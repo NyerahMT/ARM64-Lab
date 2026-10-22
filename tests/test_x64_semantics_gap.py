@@ -11,13 +11,12 @@ class AggregateGapTests(unittest.TestCase):
             "ror":4, "sar":1, "movsx":2, "cmovg":1, "jg":1,
         })
         self.assertEqual(profile["instruction_total"],22)
-        self.assertEqual(profile["mnemonics_currently_recognized"],13)
-        self.assertEqual(profile["mnemonics_needing_extensions"],9)
+        self.assertEqual(profile["mnemonics_currently_recognized"],15)
+        self.assertEqual(profile["mnemonics_needing_extensions"],7)
         self.assertEqual(profile["extension_families"],{
             "conditional_moves":1,
             "flags_and_predicates":1,
             "integer_shift_rotate":5,
-            "integer_width_conversion":2,
         })
         self.assertFalse(profile["native_translation_claimed"])
         self.assertFalse(profile["operand_and_import_semantics_verified"])
@@ -31,9 +30,9 @@ class AggregateGapTests(unittest.TestCase):
         shared=result["grouped_instruction_profile"]
         self.assertEqual(shared["instruction_total"],19)
         self.assertEqual(shared["unsupported_mnemonics"],{
-            "jg":1,"movsx":1,"sar":2,"sbb":1,
+            "jg":1,"sar":2,"sbb":1,
         })
-        self.assertEqual(shared["mnemonics_needing_extensions"],5)
+        self.assertEqual(shared["mnemonics_needing_extensions"],4)
         self.assertEqual(len(result["callbacks"]),3)
 
     def test_bad_counts_fail_closed(self):

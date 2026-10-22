@@ -174,15 +174,45 @@ def scan(pe, roots, imports=None, max_depth=3, max_nodes=64,
     for i, group in enumerate(groups):
         outward = sorted(set(group_of[t] for r in group for t in seen[r]["calls"]
                              if t in group_of and group_of[t] != i))
-        blockers = sum(len(seen[r]["imports"]) + len(seen[r]["import_thunks"]) +
-                       len(seen[r]["unresolved"]) for r in group)
+        # A node cap can omit a discovered call target altogether. Such a
+        # missing dependency must block the batch, not appear executable.
+        missing_targets = sorted(set(
+            t for r in group for t in seen[r]["calls"] if t not in seen))
+        blockers = (sum(len(seen[r]["imports"]) +
+                        len(seen[r]["import_thunks"]) +
+                        len(seen[r]["unresolved"]) for r in group)
+                    + len(missing_targets))
         batches.append({"id": i, "members": [hex(r) for r in group],
                         "depends_on_batches": outward,
                         "external_blockers": blockers,
+                        "missing_dependency_targets": [hex(t) for t in missing_targets],
                         "instruction_count": sum(seen[r].get("instruction_count", 0)
                                                  for r in group),
                         "ready_for_translation": blockers == 0 and
                         all(seen[r]["status"] == "decoded" for r in group)})
+    # The SCC condensation graph is acyclic. Schedule verified leaf
+    # dependencies before callers and propagate blockers through callers.
+    order, visiting, visited = [], set(), set()
+    def schedule(batch_id):
+        if batch_id in visited:
+            return
+        if batch_id in visiting:
+            raise ValueError("Cycle remained after SCC grouping")
+        visiting.add(batch_id)
+        for dependency in batches[batch_id]["depends_on_batches"]:
+            schedule(dependency)
+        visiting.remove(batch_id)
+        visited.add(batch_id)
+        order.append(batch_id)
+    for batch_id in range(len(batches)):
+        schedule(batch_id)
+    for batch_id in order:
+        batch = batches[batch_id]
+        blocked = [dep for dep in batch["depends_on_batches"]
+                   if not batches[dep]["dependency_closure_ready"]]
+        batch["blocked_by_batches"] = blocked
+        batch["dependency_closure_ready"] = (
+            batch["ready_for_translation"] and not blocked)
     all_nodes = [{**data, "calls": [hex(x) for x in data["calls"]]}
                  for _, data in sorted(seen.items())]
     statuses = Counter(x["status"] for x in all_nodes)
@@ -192,9 +222,13 @@ def scan(pe, roots, imports=None, max_depth=3, max_nodes=64,
             "function_count": len(all_nodes),
             "status_counts": dict(sorted(statuses.items())),
             "nodes": all_nodes, "translation_batches": batches,
+            "translation_order": order,
             "truncated_frontier": sorted(set(overflow)),
             "limitations": [
                 "Static direct-call and tail-jump graph, not full control flow.",
                 "Indirect dispatch and dynamically loaded code are unresolved.",
+                "ready_for_translation checks static local blockers only;",
+                "dependency_closure_ready also requires all mapped callees;",
+                "Scheduling is static, not evidence that code is executable.",
                 "Decoding is not translation, equivalence, startup, or gameplay."
             ]}

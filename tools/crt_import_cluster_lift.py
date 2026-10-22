@@ -1,7 +1,7 @@
 """Restricted x64 CRT import-cluster to native C/ARM64 compiler frontend.
 
 Supports only explicitly verified small Win64 function bodies consisting of
-register/guest-memory moves, LEA, one equality branch family, balanced stack
+register/guest-memory moves, signed integer extension, LEA, bounded branches, balanced stack
 setup/epilogue, and imports into six opt-in CRT services. Each imported call
 is a *callback boundary*, never a fabricated Windows result. An unknown
 mnemonic, symbol, indirect target, incomplete CFG or oversized function fails.
@@ -200,10 +200,10 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
                        "symbol":name,"kind":kind,"service":SERVICES[name]}
                 imports.append(entry)
                 calls.append(entry)
-        elif mn not in ("mov","movzx","movsxd","lea","cmp","test","setne",
+        elif mn not in ("mov","movzx","movsx","movsxd","lea","cmp","test","setne",
                          "xor","or","push","pop","add","sub","nop","ret"):
             raise UnsupportedCluster("Unsupported x64 instruction: "+mn)
-        if mn in ("mov","movzx","movsxd","lea","cmp","test","xor","or","add","sub"):
+        if mn in ("mov","movzx","movsx","movsxd","lea","cmp","test","xor","or","add","sub"):
             if len(ops)!=2:
                 raise UnsupportedCluster("Unexpected two-operand shape: "+mn)
         if mn=="setne" and len(ops)!=1:
@@ -248,7 +248,7 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
             if (ops[0].size!=ops[1].size and ops[1].type!=X86_OP_IMM):
                 raise UnsupportedCluster("MOV operand width mismatch")
             lines.append(' '+_put(ins,ops[0],_get(ins,ops[1],image_base),image_base)+'\n')
-        elif mn in ("movzx","movsxd"):
+        elif mn in ("movzx","movsx","movsxd"):
             dst,src=ops
             if dst.type!=X86_OP_REG:
                 raise UnsupportedCluster("Integer extension needs register destination")
@@ -256,6 +256,16 @@ def lift_crt_import_cluster(code:bytes,start:int,iat:dict,thunks:dict,
                 if dst.size not in (4,8) or src.size not in (1,2):
                     raise UnsupportedCluster("MOVZX supports 8/16 to 32/64 bits")
                 value=_get(ins,src,image_base)
+            elif mn=="movsx":
+                if (src.type not in (X86_OP_REG,X86_OP_MEM) or
+                    src.size not in (1,2) or
+                    dst.size not in (2,4,8) or dst.size<=src.size):
+                    raise UnsupportedCluster("MOVSX only supports 8/16-bit signed sources to wider registers")
+                # Unsigned XOR/subtract performs defined two's-complement sign
+                # extension without implementation-defined unsigned-to-signed casts.
+                sign=1<<(src.size*8-1)
+                value=(f"((({_get(ins,src,image_base)}) ^ UINT64_C({sign}))"
+                       f" - UINT64_C({sign}))")
             else:
                 if dst.size!=8 or src.size!=4:
                     raise UnsupportedCluster("MOVSXD supports sign extension 32 to 64")

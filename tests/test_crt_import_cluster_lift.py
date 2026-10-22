@@ -48,6 +48,8 @@ ASM=r"""
 .section .text
 .globl synthetic_crt_entry
 synthetic_crt_entry:
+  movsx r11d,r11b
+  movsx r11,r11w
   push rbx
   sub rsp,0x20
   mov rbx,rcx
@@ -358,6 +360,8 @@ class CRTClusterLiftTests(unittest.TestCase):
             blob,code,iat,thunks,symbols=assemble(work)
             generated,meta=lift_crt_import_cluster(code,START,iat,thunks,BASE)
             self.assertGreaterEqual(meta["decoded_instructions"],25)
+            self.assertIn("UINT64_C(128)",generated)
+            self.assertIn("UINT64_C(32768)",generated)
             self.assertEqual(meta["import_calls"],10)
             self.assertEqual(len(meta["unique_import_services"]),6)
             rows=[(case,reference_original(blob,symbols,case))
