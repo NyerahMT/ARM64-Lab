@@ -1,4 +1,6 @@
-# MX Bikes iOS — public source snapshot
+# MX Bikes iOS — main ARM64-Lab development workspace
+
+**Canonical source:** `NyerahMT/ARM64-Lab` `main`, `mxbikes-ios/`. All MX Bikes development continues here; the private `ReflexBuildInput` repo stores user-owned game files and is not our working source tree.
 
 Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering project.
 **Not affiliated with or endorsed by PiBoSo, Valve or Apple.**
@@ -43,7 +45,7 @@ python tests/mxb_gl_win64_unicorn_import_test.py
 python tests/mxb_gl_win64_indexed_guest_test.py
 ```
 
-The containing public `ARM64-Lab` repository has a dedicated source-only
+The public `ARM64-Lab` `main` branch has a dedicated source-only
 workflow at `.github/workflows/mxbikes-ios-public-checks.yml`. It does
 **not** fetch or test against the original commercial game files.
 Private original-game acceptance tests must run in a separately authorized

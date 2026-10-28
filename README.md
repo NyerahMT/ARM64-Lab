@@ -1,5 +1,21 @@
 # ARM64-Lab
 
+## Repository responsibilities (canonical workflow)
+
+**This public repository is the working codebase for the MX Bikes ARM64/iOS port.**
+All new implementation, translation tools, Win64 compatibility work, Metal graphics,
+tests, documentation, and CI changes belong here, on `main`.
+
+- **[MX Bikes iOS development](mxbikes-ios/)** — full migrated renderer, original-instruction analysis tooling, startup harnesses and source-only tests. The subfolder prevents name collisions with the existing ARM64-Lab runtime and preserves those tools.
+- **[Public source-only CI](.github/workflows/mxbikes-ios-public-checks.yml)** — synthetic tests, host C and ARM64 cross-compilation; never downloads the commercial game.
+- **Private `NyerahMT/ReflexBuildInput`** — original owned game executables, Windows DLLs, archives, and private test inputs **only**. The old copied scripts there are legacy history, not the development source of truth. No more development commits or CI runs are needed there.
+- **Authentic game tests** — run manually with lawfully obtained inputs in an authorized private/local environment. Don't move game assets, credentials, original generated code, private ZIPs or artifacts to this public repo.
+
+**Actual game status:** The SHA-verified original x64 startup reaches an unsupported Steamworks import before any verified real OpenGL call. The iOS Metal screenshots are synthetic fixture renders, **not a game startup**.
+
+---
+
+
 An experiment in ahead-of-time recompilation of Windows x86-64 applications for ARM64. The goal is to preserve original application behavior, not recreate it in a different engine.
 
 **Current status: a complete original 39-instruction CRT initializer translated and differentially executed on ARM64, plus additional narrow authentic functions and bounded x64 startup emulation. Not a playable game, a native iOS build, or a running engine.**

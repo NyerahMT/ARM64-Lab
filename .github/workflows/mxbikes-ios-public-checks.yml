@@ -3,7 +3,7 @@ name: MX Bikes iOS — public source-only checks
 on:
   workflow_dispatch:
   push:
-    branches: [public/mxbikes-ios-source]
+    branches: [main, public/mxbikes-ios-source]
     paths:
       - "mxbikes-ios/**"
       - ".github/workflows/mxbikes-ios-public-checks.yml"
