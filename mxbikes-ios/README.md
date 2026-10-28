@@ -32,6 +32,10 @@ Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering pr
   definitions, **not active GitHub Actions**. They refer to a separate
   private source repository and require user-owned original game data.
 
+## Run the actual original game code locally
+
+See [the private-input local runner](docs/run-original-locally.md). It executes the SHA-verified original x64 startup from an owned ZIP or installed files, produces metadata-only evidence, and stops fail-closed at unsupported Steamworks. **Never upload the game archive to this public repository.**
+
 ## Run source-only tests
 
 From this directory (Linux + clang/gcc + Python):

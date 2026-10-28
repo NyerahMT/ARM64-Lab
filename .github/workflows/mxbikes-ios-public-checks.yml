@@ -44,6 +44,10 @@ jobs:
             tests/mxb_gl_texture_batch_smoke.c \
             -o /tmp/mxb-gl-texture
           /tmp/mxb-gl-texture
+      - name: Validate local owned-game runner without commercial files
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_mxbikes_run_owned_local.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
