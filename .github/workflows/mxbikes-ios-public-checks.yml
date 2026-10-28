@@ -51,6 +51,7 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_standalone_import_audit.py -v
           python -m pip install --disable-pip-version-check 'capstone>=5,<6'
           python -m unittest discover -s tests -p test_mxbikes_real_frame_frontier.py -v
+          python -m unittest discover -s tests -p test_mxbikes_real_runtime_imports.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
