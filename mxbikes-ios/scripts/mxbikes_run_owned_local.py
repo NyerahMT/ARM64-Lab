@@ -163,6 +163,10 @@ def run_cli(argv=None) -> int:
     parser.add_argument("--steam-dll", type=Path, help="Original steam_api64.dll (with --game-exe)")
     parser.add_argument("--out", type=Path, required=True,
                         help="Metadata-only directory outside the public repository")
+    parser.add_argument("--map-graphics-paths", action="store_true",
+                        help="Also statically index original direct-call paths toward Steam/graphics; no guessed execution")
+    parser.add_argument("--static-graphics-only", action="store_true",
+                        help="Run genuine original-PE static graph without executing the game")
     parser.add_argument("--validate-only", action="store_true",
                         help="Verify owned inputs without running any original instructions")
     args = parser.parse_args(argv)
@@ -187,7 +191,24 @@ def run_cli(argv=None) -> int:
                                   "dll_bytes": manifest["owned_dll_size_bytes"],
                                   "original_code_executed": False}, indent=2))
                 return 0
+            if args.static_graphics_only or args.map_graphics_paths:
+                from mxbikes_real_frame_frontier import audit_owned_exe
+                # Local metadata derived from the owned original PE only. Static
+                # paths are not execution of Steamworks or the game engine.
+                graph = audit_owned_exe(exe, out)
+                graph_overview = {
+                    "static_graph_function_nodes": graph["static_main_direct_call_graph_nodes"],
+                    "candidate_static_graphics_imports": graph[
+                        "candidate_imports_on_direct_call_graph"]["graphics"][
+                            "candidate_import_calls_from_main_graph"],
+                    "static_code_executed": False,
+                }
+                if args.static_graphics_only:
+                    print(json.dumps(graph_overview, indent=2))
+                    return 0
             report = make_report(exe, dll, out, mode)
+            if args.map_graphics_paths:
+                report["static_graph"] = graph_overview
             print(json.dumps(report, indent=2))
             return 0
     except (InputRejected, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:

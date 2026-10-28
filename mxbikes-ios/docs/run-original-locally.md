@@ -33,6 +33,21 @@ python mxbikes-ios/scripts/mxbikes_run_owned_local.py \
   --out /tmp/mxb-real-original-report
 ```
 
+Inspect original-game executable graphics/Steam callgraph **without running
+Steam or any game instructions** (the results are static candidates, not
+proven runtime paths):
+
+```sh
+python mxbikes-ios/scripts/mxbikes_run_owned_local.py \
+  --game-zip /path/to/owned/Game.zip \
+  --out /tmp/mxb-real-original-report --static-graphics-only
+```
+
+Or add `--map-graphics-paths` to the real-execution command above to
+produce both authenticated dynamic startup evidence and a separate static
+potential-callgraph comparison. This writes
+`original-graphics-static-paths.json` to the private report directory.
+
 Validate inputs before an expensive guest run:
 
 ```sh
