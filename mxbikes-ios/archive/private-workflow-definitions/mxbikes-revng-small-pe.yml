@@ -1,0 +1,99 @@
+name: MX Bikes - revng small PE lift control
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-revng-small-pe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  small:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify and extract private smaller Windows launcher
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/revng-small" "$RUNNER_TEMP/revng-small-reports"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Steam.zip --dir "$RUNNER_TEMP/revng-small"
+          echo '3bda1f759f65850f2c904d36652149627f297a33161b1bb58af36c14c25d79dd  '"$RUNNER_TEMP/revng-small/Steam.zip" | sha256sum -c -
+          python - <<'PY'
+          import zipfile,pathlib,shutil,os
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"revng-small"
+          with zipfile.ZipFile(root/"Steam.zip") as z:
+              targets=[v for v in z.infolist() if not v.is_dir() and pathlib.PurePosixPath(v.filename.replace("\\","/")).name.lower()=="_launcher.exe"]
+              if len(targets)!=1 or targets[0].file_size>100*1024**2:
+                  raise RuntimeError("Expected one bounded Windows launcher EXE")
+              with z.open(targets[0]) as source, (root/"_LAUNCHER.exe").open("wb") as dest:
+                  shutil.copyfileobj(source,dest)
+          print(f"Original private launcher extracted: {(root/'_LAUNCHER.exe').stat().st_size} bytes")
+          PY
+      - name: Retrieve rev.ng binary distribution
+        id: image
+        continue-on-error: true
+        run: |
+          timeout 480s docker pull revng/revng:latest > "$RUNNER_TEMP/revng-small/pull.log" 2>&1
+      - name: Lift smaller MX Bikes launcher PE to LLVM IR
+        id: lift
+        if: steps.image.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          timeout 240s docker run --rm --network none --memory 6g --cpus 2 \
+            -v "$RUNNER_TEMP/revng-small:/work" -w /work revng/revng:latest \
+            revng quick artifact lift /work/_LAUNCHER.exe -o /work/launcher-lifted.bc \
+            > "$RUNNER_TEMP/revng-small/lift.log" 2>&1
+          test -s "$RUNNER_TEMP/revng-small/launcher-lifted.bc"
+      - name: Emit metadata-only outcome
+        if: always()
+        env:
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
+          LIFT_OUTCOME: ${{ steps.lift.outcome }}
+        run: |
+          python - <<'PY'
+          import pathlib,os,json
+          base=pathlib.Path(os.environ["RUNNER_TEMP"])/"revng-small"
+          artifact=base/"launcher-lifted.bc"
+          report={
+              "source":"official smaller launcher from verified private Steam.zip",
+              "revng_docker_pull":os.environ["IMAGE_OUTCOME"],
+              "llvm_lift_outcome":os.environ["LIFT_OUTCOME"],
+              "llvm_artifact_produced":artifact.is_file() and artifact.stat().st_size>0,
+              "llvm_artifact_size_bytes":artifact.stat().st_size if artifact.is_file() else 0,
+              "interpretation":"Small PE proof only; it cannot establish full MX Bikes engine compatibility",
+          }
+          out=pathlib.Path(os.environ["RUNNER_TEMP"])/"revng-small-reports"
+          (out/"small-pe-result.json").write_text(json.dumps(report,indent=2)+"\n")
+          message="# rev.ng smaller PE control\n\n"
+          for field in ("revng_docker_pull","llvm_lift_outcome","llvm_artifact_produced","llvm_artifact_size_bytes"):
+              message+=f"- {field}: {report[field]}\n"
+          message+="\nNo original PE, source, or LLVM IR published.\n"
+          (out/"small-pe-result.md").write_text(message)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as stream:stream.write(message)
+          print(message)
+          logfile=base/"lift.log"
+          if logfile.exists() and report["llvm_lift_outcome"]!="success":
+              print("Diagnostic log tail from private tool run:")
+              print("\n".join(logfile.read_text(errors="replace").splitlines()[-10:])[:1500])
+          PY
+      - name: Save diagnostic metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revng-small-pe-lift-metadata
+          path: ${{ runner.temp }}/revng-small-reports/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Enforce result
+        if: always()
+        env:
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
+          LIFT_OUTCOME: ${{ steps.lift.outcome }}
+        run: |
+          test "$IMAGE_OUTCOME" = success && test "$LIFT_OUTCOME" = success

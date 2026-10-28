@@ -1,0 +1,113 @@
+name: MX Bikes - revng LLVM lift trial
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-revng-lift.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-revng-lift
+  cancel-in-progress: false
+
+jobs:
+  lift:
+    name: Trial official rev.ng binary-to-LLVM lifting
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Acquire verified private executable
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-lift" "$RUNNER_TEMP/mxbikes-lift-results"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/mxbikes-lift"
+          python - <<'PY'
+          import os,pathlib,zipfile,shutil
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-lift"
+          with zipfile.ZipFile(p/"Game.zip") as z:
+              found=[x for x in z.infolist() if not x.is_dir() and pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(found)!=1 or found[0].file_size>750*1024**2:
+                  raise RuntimeError("Missing or oversized input binary")
+              with z.open(found[0]) as src,(p/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          PY
+          echo '4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6  '"$RUNNER_TEMP/mxbikes-lift/mxbikes.exe" | sha256sum -c -
+
+      - name: Retrieve official rev.ng Linux image
+        id: image
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          timeout 500s docker pull revng/revng:latest > "$RUNNER_TEMP/mxbikes-lift/image-pull.log" 2>&1
+          docker image inspect revng/revng:latest --format '{{.Id}} {{.Size}}' \
+            > "$RUNNER_TEMP/mxbikes-lift-results/image-metadata.txt"
+
+      - name: Lift original PE64 machine code to LLVM IR in isolated container
+        id: llvm
+        if: steps.image.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          timeout 470s docker run --rm --network none --memory 6g --cpus 2 \
+            -v "$RUNNER_TEMP/mxbikes-lift:/work" -w /work \
+            revng/revng:latest \
+            revng quick artifact lift /work/mxbikes.exe -o /work/lifted.bc \
+            > "$RUNNER_TEMP/mxbikes-lift/lift.log" 2>&1
+          test -s "$RUNNER_TEMP/mxbikes-lift/lifted.bc"
+
+      - name: Generate safe outcome metadata
+        if: always()
+        env:
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
+          LIFT_OUTCOME: ${{ steps.llvm.outcome }}
+        run: |
+          python - <<'PY'
+          import json,os,pathlib
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])
+          out=root/"mxbikes-lift-results"
+          lifted=root/"mxbikes-lift"/"lifted.bc"
+          exists=lifted.is_file() and lifted.stat().st_size>0
+          data={
+             "input":"verified MX Bikes Windows x86-64 PE executable",
+             "tool":"rev.ng Docker latest, ephemeral offline container",
+             "image_outcome":os.environ["IMAGE_OUTCOME"],
+             "lift_outcome":os.environ["LIFT_OUTCOME"],
+             "llvm_artifact_created":exists,
+             "llvm_artifact_bytes":lifted.stat().st_size if exists else 0,
+             "interpretation":"LLVM lifting success is not an iOS build and does not execute the game",
+             "redistribution":"no original binaries, LLVM IR, generated source, or artifacts published"
+          }
+          (out/"llvm-lift-feasibility.json").write_text(json.dumps(data,indent=2)+"\n")
+          summary="# MX Bikes rev.ng LLVM lift trial\n\n"
+          summary+=f"- Container installed: {data['image_outcome']}\n"
+          summary+=f"- Lifting step: {data['lift_outcome']}\n"
+          summary+=f"- LLVM artifact produced: {exists}\n"
+          summary+=f"- Artifact size in runner (not uploaded): {data['llvm_artifact_bytes']} bytes\n\n"
+          summary+="No original game contents or LLVM IR are uploaded.\n"
+          (out/"llvm-lift-feasibility.md").write_text(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as s:s.write(summary)
+          print(summary)
+          PY
+
+      - name: Upload metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-revng-llvm-feasibility
+          path: ${{ runner.temp }}/mxbikes-lift-results/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Return truthful test outcome
+        if: always()
+        env:
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
+          LIFT_OUTCOME: ${{ steps.llvm.outcome }}
+        run: |
+          test "$IMAGE_OUTCOME" = success && test "$LIFT_OUTCOME" = success

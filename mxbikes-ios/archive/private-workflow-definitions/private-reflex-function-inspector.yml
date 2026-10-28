@@ -1,0 +1,55 @@
+name: Private Reflex Function Inspector
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "diag/function_targets.txt"
+      - ".github/workflows/private-reflex-function-inspector.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Download private analysis baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="Reflex-Baseline-917d14e7ef7c-g12.1.3-keb32cc42623e-cab297d2991ca-p1.tar.gz"
+          gh release download game-input-v1 --pattern "$asset" --clobber
+          tar -xzf "$asset"
+          test -d analysis/decompiled/MXReflex.exe/functions
+
+      - name: Inspect requested functions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("analysis/decompiled/MXReflex.exe/functions")
+          targets=[
+              line.strip().lower().removeprefix("0x")
+              for line in Path("diag/function_targets.txt").read_text().splitlines()
+              if line.strip() and not line.lstrip().startswith("#")
+          ]
+          for t in targets:
+              print(f"===== FUNCTION {t} =====")
+              a=root/f"{t}.asm"
+              c=root/f"{t}.c"
+              if a.exists():
+                  print("=== ASM ===")
+                  print(a.read_text(errors="replace")[:18000])
+              else:
+                  print("ASM MISSING")
+              if c.exists():
+                  print("=== PSEUDOCODE ===")
+                  print(c.read_text(errors="replace")[:18000])
+              else:
+                  print("PSEUDOCODE MISSING")
+          PY

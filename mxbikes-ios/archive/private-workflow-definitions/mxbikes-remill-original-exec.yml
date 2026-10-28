@@ -1,0 +1,92 @@
+name: MX Bikes - Remill original instruction ARM64 execution
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-remill-original-exec.yml"
+      - "scripts/mxbikes_remill_original_instruction_exec.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mx-original-remill-one-instruction
+  cancel-in-progress: true
+
+jobs:
+  remill-original:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 18
+    env:
+      GH_TOKEN: ${{ github.token }}
+      IMAGE: trailofbits/remill:llvm1100-ubuntu20.04-amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install LLVM 14, original-code decoder, and ARM64 differential emulator
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends llvm-14 clang lld
+          python -m pip install --disable-pip-version-check 'unicorn>=2,<3' 'pyelftools>=0.31,<1' 'capstone>=5,<6'
+          docker pull "$IMAGE"
+          mkdir -p "$RUNNER_TEMP/game" "$RUNNER_TEMP/original-ir" "$RUNNER_TEMP/remill-report"
+          chmod 0777 "$RUNNER_TEMP/original-ir"
+      - name: Fetch verified private game revision and extract exact instruction
+        run: |
+          set -euo pipefail
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" --pattern Game.zip --dir "$RUNNER_TEMP/game"
+          python - <<'PY'
+          import os,pathlib,zipfile,hashlib,shutil
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"game"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              candidates=[x for x in z.infolist() if not x.is_dir() and
+                 pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(candidates)!=1 or candidates[0].file_size>750*1024**2:
+                  raise RuntimeError("Unexpected original executable payload")
+              with z.open(candidates[0]) as src,(root/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Unexpected exact source executable")
+          (root/"Game.zip").unlink()
+          PY
+          python scripts/mxbikes_remill_original_instruction_exec.py extract \
+            "$RUNNER_TEMP/game/mxbikes.exe" "$RUNNER_TEMP/original-ir/actual-instruction.hex"
+      - name: Lift exact original instruction in isolated Remill
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --memory 2g --cpus 1 \
+            --mount type=bind,source="$RUNNER_TEMP/original-ir",target=/mnt/out \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --entrypoint /bin/sh "$IMAGE" -c '
+              set -eu
+              lift="$(find /opt /usr/local -maxdepth 7 -type f -name "remill-lift*" -perm /111 -print -quit 2>/dev/null)"
+              test -n "$lift"
+              "$lift" --arch amd64 --ir_out /mnt/out/original-instruction.ll \
+                --bytes "$(cat /mnt/out/actual-instruction.hex)" > /tmp/lift.stdout 2> /tmp/lift.stderr
+              test -s /mnt/out/original-instruction.ll
+            '
+      - name: Link and execute Remill-generated original code with guest-state helpers on ARM64
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_remill_original_instruction_exec.py execute \
+            "$RUNNER_TEMP/game/mxbikes.exe" \
+            "$RUNNER_TEMP/original-ir/original-instruction.ll" \
+            "$RUNNER_TEMP/remill-report"
+          cat "$RUNNER_TEMP/remill-report/original-remill-instruction-exec.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload no original bytes, IR or compiled objects
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-original-remill-arm64-execution-proof
+          path: ${{ runner.temp }}/remill-report/
+          if-no-files-found: warn
+          retention-days: 7

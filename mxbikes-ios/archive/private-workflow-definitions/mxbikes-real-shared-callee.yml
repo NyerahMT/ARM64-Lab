@@ -1,0 +1,74 @@
+name: MX Bikes - real shared callee ARM64 proof
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-real-shared-callee.yml"
+      - "scripts/mxbikes_real_shared_callee_differential.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-real-shared-callee
+  cancel-in-progress: false
+
+jobs:
+  original-linked:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+
+      - name: Install only required native analysis and execution dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+
+      - name: Extract original exact revision from private release
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/original-input" "$RUNNER_TEMP/original-results"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/original-input"
+          python - <<'PY'
+          import os,pathlib,hashlib,zipfile,shutil
+          base=pathlib.Path(os.environ["RUNNER_TEMP"])/"original-input"
+          with zipfile.ZipFile(base/"Game.zip") as z:
+              matches=[i for i in z.infolist() if not i.is_dir() and
+                  pathlib.PurePosixPath(i.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise ValueError("Missing or too large original exe")
+              with z.open(matches[0]) as src,(base/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          digest=hashlib.sha256((base/"mxbikes.exe").read_bytes()).hexdigest()
+          if digest!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise ValueError("Wrong original executable revision")
+          (base/"Game.zip").unlink()
+          PY
+
+      - name: Verify and execute genuine original two-caller linked chain
+        run: |
+          python scripts/mxbikes_real_shared_callee_differential.py \
+            "$RUNNER_TEMP/original-input/mxbikes.exe" \
+            "$RUNNER_TEMP/original-results"
+          cat "$RUNNER_TEMP/original-results/original-shared-callee-differential.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload sanitized success/failure metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-original-linked-arm64-proof
+          path: ${{ runner.temp }}/original-results/
+          if-no-files-found: warn
+          retention-days: 10

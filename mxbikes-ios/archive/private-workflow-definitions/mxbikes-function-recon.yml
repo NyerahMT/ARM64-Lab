@@ -1,0 +1,117 @@
+name: MX Bikes - discover real x64 functions
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-function-recon.yml"
+      - "scripts/mxbikes_lifter_coverage.py"
+      - "scripts/mxbikes_cfg_candidates.py"
+      - "scripts/mxbikes_cfg_differential.py"
+      - "scripts/mxbikes_original_loop_differential.py"
+      - "scripts/mxbikes_native_call_pairs.py"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private survey script
+        uses: actions/checkout@v4
+      - name: Checkout ARM64-Lab function-analysis tools
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install Capstone disassembler
+        run: python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+      - name: Download original executable in private runner only
+        run: |
+          mkdir -p "$RUNNER_TEMP/mxbikes-input" "$RUNNER_TEMP/mxbikes-results"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Game.zip' --dir "$RUNNER_TEMP/mxbikes-input" --clobber
+          python - <<'PY'
+          import os, pathlib, shutil, zipfile
+          d = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mxbikes-input"
+          with zipfile.ZipFile(d / "Game.zip") as z:
+              items=[i for i in z.infolist() if not i.is_dir() and pathlib.PurePosixPath(i.filename.replace("\\", "/")).name.lower()=="mxbikes.exe"]
+              if len(items)!=1 or items[0].file_size>750*1024**2:
+                  raise RuntimeError("Missing or oversized original executable")
+              with z.open(items[0]) as src, (d/"mxbikes.exe").open("wb") as dest:
+                  shutil.copyfileobj(src,dest)
+          PY
+      - name: Analyze x64 unwind intervals and direct-call references
+        run: |
+          cd arm64-lab
+          python -m tools.x64_functions "$RUNNER_TEMP/mxbikes-input/mxbikes.exe" \
+            --output-dir "$RUNNER_TEMP/mxbikes-results"
+          cat "$RUNNER_TEMP/mxbikes-results/unwind-functions.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect top cross-referenced straight-line candidates privately
+        run: |
+          cd arm64-lab
+          python - <<'PY'
+          import os, pathlib, struct
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from tools.pe_probe import PE
+          exe = pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-input"/"mxbikes.exe"
+          pe = PE(exe)
+          if pe.inventory()["sha256"] != "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Unrecognized MX Bikes revision")
+          pdata, length = pe.directory(3)
+          table = pe.read_rva(pdata, length)
+          intervals = {a:b for a,b,unwind in struct.iter_unpack("<III", table)}
+          md = Cs(CS_ARCH_X86, CS_MODE_64)
+          md.detail = True
+          for start in (0x258bb0, 0x267ae0):
+              end = intervals.get(start)
+              if end is None or end-start > 256:
+                  raise RuntimeError(f"Target interval missing or oversized: {start:x}")
+              print(f"\n=== CALL-REFERENCED CANDIDATE {start:#x} - {end:#x} ===")
+              blob = pe.read_rva(start, end-start)
+              for ins in md.disasm(blob,start):
+                  print(f"{ins.address:#x}: {ins.mnemonic:9} {ins.op_str}")
+          PY
+      - name: Survey complete original unwind ranges against restricted SSE lifter
+        run: |
+          python scripts/mxbikes_lifter_coverage.py \
+            "$RUNNER_TEMP/mxbikes-input/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-results"
+          cat "$RUNNER_TEMP/mxbikes-results/lifter-coverage.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Rank original internal-branch functions for CFG translation
+        run: |
+          python scripts/mxbikes_cfg_candidates.py \
+            "$RUNNER_TEMP/mxbikes-input/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-results"
+          cat "$RUNNER_TEMP/mxbikes-results/cfg-candidates.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differentially execute real original conditional branches on ARM64
+        run: |
+          python scripts/mxbikes_cfg_differential.py \
+            "$RUNNER_TEMP/mxbikes-input/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-results"
+          cat "$RUNNER_TEMP/mxbikes-results/cfg-differential.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differentially execute original indexed backward loop on AArch64
+        run: |
+          python scripts/mxbikes_original_loop_differential.py \
+            "$RUNNER_TEMP/mxbikes-input/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-results"
+          cat "$RUNNER_TEMP/mxbikes-results/original-indexed-loop.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Identify actual bounded original x64 caller-to-callee pairs
+        run: |
+          python scripts/mxbikes_native_call_pairs.py \
+            "$RUNNER_TEMP/mxbikes-input/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-results"
+          cat "$RUNNER_TEMP/mxbikes-results/original-call-pairs.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-unwind-function-recon
+          path: ${{ runner.temp }}/mxbikes-results/
+          if-no-files-found: warn
+          retention-days: 7

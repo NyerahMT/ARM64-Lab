@@ -1,0 +1,78 @@
+name: MX Bikes - startup and graphics compatibility roadmap
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - MX Bikes - Ghidra startup reconnaissance
+    types:
+      - completed
+  push:
+    paths:
+      - ".github/workflows/mxbikes-startup-roadmap.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  roadmap:
+    name: Rank Windows boot dependencies from Ghidra report
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GHIDRA_EVENT_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+    steps:
+      - name: Checkout public metadata analysis and synthetic tests
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+
+      - name: Download latest verified Ghidra startup snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-ghidra" "$RUNNER_TEMP/mxbikes-roadmap"
+          if [ -n "$GHIDRA_EVENT_RUN_ID" ]; then
+            RUN_ID="$GHIDRA_EVENT_RUN_ID"
+          else
+            RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow mxbikes-ghidra-startup.yml --limit 30 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion=="success")][0].databaseId')"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo 'No successful Ghidra run available' >&2
+            exit 1
+          fi
+          echo "Sourcing verified Ghidra metadata from workflow run $RUN_ID"
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name mxbikes-ghidra-startup-metadata \
+            --dir "$RUNNER_TEMP/mxbikes-ghidra"
+          test -s "$RUNNER_TEMP/mxbikes-ghidra/ghidra-startup.json"
+
+      - name: Run synthetic analysis tests
+        run: |
+          cd arm64-lab
+          python -m unittest tests.test_startup_frontier -v
+
+      - name: Build static compatibility roadmap
+        run: |
+          cd arm64-lab
+          python -m tools.startup_frontier \
+            "$RUNNER_TEMP/mxbikes-ghidra/ghidra-startup.json" \
+            --output-dir "$RUNNER_TEMP/mxbikes-roadmap"
+          cat "$RUNNER_TEMP/mxbikes-roadmap/startup-roadmap.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Store metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-startup-compatibility-roadmap
+          path: ${{ runner.temp }}/mxbikes-roadmap/
+          if-no-files-found: warn
+          retention-days: 14

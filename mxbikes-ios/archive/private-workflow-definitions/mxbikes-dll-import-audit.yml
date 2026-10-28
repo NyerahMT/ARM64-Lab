@@ -1,0 +1,87 @@
+name: MX Bikes - DLL import compatibility audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-dll-import-audit.yml"
+      - "scripts/mxbikes_import_audit.py"
+      - "scripts/mxbikes_original_import_calls.py"
+      - "scripts/mxbikes_real_import_call_proof.py"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  dll-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private audit script
+        uses: actions/checkout@v4
+      - name: Checkout public reusable PE/compatibility analysis
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+      - name: Retrieve exact private MX Bikes archives and prior trace
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-audit" "$RUNNER_TEMP/mxbikes-audit-results" "$RUNNER_TEMP/mxbikes-trace"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --pattern Steam.zip \
+            --dir "$RUNNER_TEMP/mxbikes-audit"
+          gh run download 39081324829 --repo "$GITHUB_REPOSITORY" \
+            --name mxbikes-entry-recon \
+            --dir "$RUNNER_TEMP/mxbikes-trace"
+          test -s "$RUNNER_TEMP/mxbikes-trace/crt-frontier.json"
+          python - <<'PY'
+          import os,pathlib,shutil,zipfile
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-audit"
+          with zipfile.ZipFile(p/"Game.zip") as z:
+              matching=[x for x in z.infolist() if not x.is_dir() and pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matching)!=1 or matching[0].file_size>750*1024**2:
+                  raise RuntimeError("Unexpected executable count or bound")
+              with z.open(matching[0]) as src,(p/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          PY
+          echo '4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6  '"$RUNNER_TEMP/mxbikes-audit/mxbikes.exe" | sha256sum -c -
+      - name: Run synthetic classification tests
+        run: |
+          cd arm64-lab
+          python -m unittest tests.test_win64_import_audit -v
+      - name: Analyze exact DLL imports and executed x64 calls
+        run: |
+          python scripts/mxbikes_import_audit.py \
+            --exe "$RUNNER_TEMP/mxbikes-audit/mxbikes.exe" \
+            --trace "$RUNNER_TEMP/mxbikes-trace/crt-frontier.json" \
+            --game-zip "$RUNNER_TEMP/mxbikes-audit/Game.zip" \
+            --steam-zip "$RUNNER_TEMP/mxbikes-audit/Steam.zip" \
+            --output-dir "$RUNNER_TEMP/mxbikes-audit-results"
+          cat "$RUNNER_TEMP/mxbikes-audit-results/dll-import-audit.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Analyze original x64 import callsites without publishing game code
+        run: |
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3'
+          python scripts/mxbikes_original_import_calls.py \
+            "$RUNNER_TEMP/mxbikes-audit/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-audit-results"
+          cat "$RUNNER_TEMP/mxbikes-audit-results/real-import-callsite-scan.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute one authentic original imported CALL on ARM64 runtime
+        run: |
+          python -m pip install --disable-pip-version-check 'pyelftools>=0.31,<1'
+          python scripts/mxbikes_real_import_call_proof.py \
+            "$RUNNER_TEMP/mxbikes-audit/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-audit-results"
+          cat "$RUNNER_TEMP/mxbikes-audit-results/original-import-arm64.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload metadata, not original DLL files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-dll-compatibility-audit
+          path: ${{ runner.temp }}/mxbikes-audit-results/
+          if-no-files-found: warn
+          retention-days: 14

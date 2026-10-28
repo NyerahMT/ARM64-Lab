@@ -1,0 +1,235 @@
+{
+  "schema": 1,
+  "original_executable_sha256": "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6",
+  "meaning": "Exact named import inventory for pinned original static startup graph; NOT a list of installed native Win64 services. A matching code adapter may still require explicit host inputs and more integration tests.",
+  "status_definitions": {
+    "host_dispatch_bounded": "Real portable host-dispatcher exists but requires callbacks/guest state; does NOT mean production game startup wired or actual Windows DLL installed",
+    "test_guest_model": "Bounded test-domain guest implementation, not full Microsoft/Windows ABI/service compatibility",
+    "terminal_boundary_only": "Recognized fatal non-return without implementing host process termination",
+    "missing": "No matching runtime implementation verified; must remain unresolved"
+  },
+  "families": [
+    {
+      "family": "clock_and_timing",
+      "batch_name": "portable_clock_binding",
+      "next_work": "Provide concrete clock/sleep host functions and test guest ABI/memory behavior under real process integration"
+    },
+    {
+      "family": "host_identity",
+      "batch_name": "portable_process_identity",
+      "next_work": "Bind host identity callbacks to modeled Win64 process/thread identity"
+    },
+    {
+      "family": "path_and_directory",
+      "batch_name": "virtual_windows_paths",
+      "next_work": "Join bounded module filename and virtual DOS current-directory guest models; implement real virtual filesystem path resolution, denied and relative-directory handling without host chdir"
+    },
+    {
+      "family": "process_startup",
+      "batch_name": "win64_process_startup",
+      "next_work": "Implement guest STARTUPINFOA memory layout, pointer validation and process state"
+    },
+    {
+      "family": "crt_initializers",
+      "batch_name": "crt_initializer_callbacks",
+      "next_work": "Reuse existing bounded callback table walkers; replace injected dependencies with real compatible services"
+    },
+    {
+      "family": "crt_exit_lifecycle",
+      "batch_name": "crt_exit_and_termination",
+      "next_work": "Model non-return, onexit ordering, normal and immediate CRT process cleanup without inventing success"
+    },
+    {
+      "family": "crt_text",
+      "batch_name": "crt_guest_string_and_locale",
+      "next_work": "Reuse bounded x64/AArch64-verified strcpy and strrchr; implement locale-aware _ismbblead with authenticated original import and code-page reference tests"
+    },
+    {
+      "family": "file_io",
+      "batch_name": "guest_crt_file_io",
+      "next_work": "Add virtual guest FILE and filesystem layer; verify fopen return/failure semantics"
+    }
+  ],
+  "services": [
+    {
+      "dll": "kernel32.dll",
+      "symbol": "GetCurrentProcessId",
+      "family": "host_identity",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_import_registry.c",
+      "scope": "Host-supplied nonzero process ID, not a native iOS Windows process ID",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "GetCurrentThreadId",
+      "family": "host_identity",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_import_registry.c",
+      "scope": "Host-supplied nonzero thread ID, not an emulated Windows thread registry",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "GetModuleFileNameA",
+      "family": "path_and_directory",
+      "status": "test_guest_model",
+      "implementation": "runtime/mx_game_module_filename.h",
+      "scope": "Explicit host-provided virtual ANSI path, null module handle, buffer-bound path only",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "GetStartupInfoA",
+      "family": "process_startup",
+      "status": "missing",
+      "implementation": null,
+      "scope": "Win64 guest STARTUPINFOA layout and safe process setup are not implemented",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "GetSystemTimeAsFileTime",
+      "family": "clock_and_timing",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_guest_imports.c",
+      "scope": "Supplied realtime clock and mapped guest FILETIME output",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "GetTickCount",
+      "family": "clock_and_timing",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_guest_imports.c",
+      "scope": "Supplied monotonic clock; 32-bit wrap semantics",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "QueryPerformanceCounter",
+      "family": "clock_and_timing",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_guest_imports.c",
+      "scope": "Supplied monotonic clock and guest-memory destination",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "SetCurrentDirectoryA",
+      "family": "path_and_directory",
+      "status": "test_guest_model",
+      "implementation": "runtime/mx_game_virtual_current_directory.h",
+      "scope": "Mapped-guest DOS directory string and explicit virtual-policy callback; original PE imported call/continuation statically validated, host and native ARM64 behavior tested; no native host chdir, real filesystem or full Win32 API.",
+      "production_win64_service": false
+    },
+    {
+      "dll": "kernel32.dll",
+      "symbol": "Sleep",
+      "family": "clock_and_timing",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_guest_imports.c",
+      "scope": "Host-supplied sleep callback, no Windows scheduler",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "_amsg_exit",
+      "family": "crt_exit_lifecycle",
+      "status": "terminal_boundary_only",
+      "implementation": "runtime/mx_crt_init_imports.h",
+      "scope": "Recognized nonreturning fatal CRT boundary; actual process-abort lifecycle missing",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "_cexit",
+      "family": "crt_exit_lifecycle",
+      "status": "missing",
+      "implementation": null,
+      "scope": "CRT exit callback invocation and process cleanup not implemented",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "_exit",
+      "family": "crt_exit_lifecycle",
+      "status": "missing",
+      "implementation": null,
+      "scope": "Immediate CRT process termination and caller lifecycle not implemented",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "_initterm",
+      "family": "crt_initializers",
+      "status": "test_guest_model",
+      "implementation": "runtime/mx_crt_initializer_walk.h",
+      "scope": "Bounded actual guest callback pointer traversal with explicit test callbacks; no MSVCR90 DLL",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "_initterm_e",
+      "family": "crt_initializers",
+      "status": "test_guest_model",
+      "implementation": "runtime/mx_crt_initializer_walk.h",
+      "scope": "Checked bounded initializer callback traversal; stops on first nonzero status",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "_ismbblead",
+      "family": "crt_text",
+      "status": "missing",
+      "implementation": null,
+      "scope": "No MSVCR90 locale-aware lead-byte classification",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "exit",
+      "family": "crt_exit_lifecycle",
+      "status": "missing",
+      "implementation": null,
+      "scope": "CRT normal-exit lifecycle and registered callback ordering missing",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "fopen",
+      "family": "file_io",
+      "status": "missing",
+      "implementation": null,
+      "scope": "No guest-owned FILE handle, Windows filesystem or CRT stream implementation",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "strcpy",
+      "family": "crt_text",
+      "status": "test_guest_model",
+      "implementation": "runtime/mx_game_crt_strcpy.h",
+      "scope": "Bounded nonoverlapping mapped guest-string copy; limited original callsite contract",
+      "production_win64_service": false
+    },
+    {
+      "dll": "msvcr90.dll",
+      "symbol": "strrchr",
+      "family": "crt_text",
+      "status": "test_guest_model",
+      "implementation": "runtime/mx_game_crt_strrchr.h",
+      "scope": "Bounded mapped guest ANSI-byte last-occurrence search and original-game Win64 CALL/IAT thunk/RET differential. Actual MSVCR90 library is not executed.",
+      "production_win64_service": false
+    },
+    {
+      "dll": "winmm.dll",
+      "symbol": "timeGetTime",
+      "family": "clock_and_timing",
+      "status": "host_dispatch_bounded",
+      "implementation": "runtime/mx_guest_imports.c",
+      "scope": "Host-supplied monotonic clock returning wrapped millisecond tick",
+      "production_win64_service": false
+    }
+  ]
+}

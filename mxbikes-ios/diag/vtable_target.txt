@@ -1,0 +1,3 @@
+# Hex guest virtual address of the current vtable frontier.
+# XMLBuilder vftable recovered from FUN_00874300.
+00976edc

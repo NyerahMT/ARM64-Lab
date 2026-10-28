@@ -1,0 +1,4 @@
+# Private analysis targets, one guest function VA per line.
+00823f70
+0082aba0
+00874300

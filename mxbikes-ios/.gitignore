@@ -1,0 +1,21 @@
+# Do not commit original commercial game files or credentials
+/game/
+/original/
+/assets/
+/owned-game/
+*.exe
+*.dll
+*.pdb
+*.pak
+*.pkz
+*.zip
+*.7z
+*.rar
+*.ipa
+*.p12
+*.mobileprovision
+.env
+.env.*
+*.pem
+*.key
+*.cer

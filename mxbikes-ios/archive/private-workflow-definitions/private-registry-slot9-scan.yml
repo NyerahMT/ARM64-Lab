@@ -1,0 +1,71 @@
+name: Private Registry Slot9 Scan
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/private-registry-slot9-scan.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Download private analysis baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="Reflex-Baseline-917d14e7ef7c-g12.1.3-keb32cc42623e-cab297d2991ca-p1.tar.gz"
+          gh release download game-input-v1 --pattern "$asset" --clobber
+          tar -xzf "$asset"
+
+      - name: Find candidate Registry virtual slot 9 callers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root=Path("analysis/decompiled/MXReflex.exe/functions")
+          slot=re.compile(r"\[[A-Z]{2,3}\s*\+\s*0x24\]", re.I)
+          call=re.compile(r"\bCALL\b", re.I)
+          push_zero=re.compile(r"\bPUSH\s+0x0\b", re.I)
+
+          hits=[]
+          push=re.compile(r"\\bPUSH\\b", re.I)
+          for path in sorted(root.glob("*.asm")):
+              lines=path.read_text(errors="replace").splitlines()
+              for i,line in enumerate(lines):
+                  if not slot.search(line):
+                      continue
+                  call_i=None
+                  for j in range(i+1,min(len(lines),i+8)):
+                      if call.search(lines[j]):
+                          call_i=j
+                          break
+                  if call_i is None:
+                      continue
+                  between=lines[i+1:call_i]
+                  pushes=[x for x in between if push.search(x)]
+                  if len(pushes) != 1:
+                      continue
+                  lo=max(0,i-8); hi=min(len(lines),call_i+9)
+                  window=lines[lo:hi]
+                  hits.append((path, i, window, any(push_zero.search(x) for x in between)))
+
+          print(f"candidate_count={len(hits)}")
+          hits.sort(key=lambda x:(not x[3], x[0].stem, x[1]))
+          for path,i,window,zero in hits[:160]:
+              print(f"=== {path.stem} line={i} push_zero_nearby={int(zero)} ===")
+              print("\n".join(window))
+              cp=root/f"{path.stem}.c"
+              if cp.exists():
+                  text=cp.read_text(errors="replace")
+                  print(text[:7000])
+          PY

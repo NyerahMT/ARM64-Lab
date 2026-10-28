@@ -1,0 +1,140 @@
+name: Private Reflex Vtable Scanner
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "diag/vtable_target.txt"
+      - ".github/workflows/private-reflex-vtable-scanner.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Download private baseline and game core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="Reflex-Baseline-917d14e7ef7c-g12.1.3-keb32cc42623e-cab297d2991ca-p1.tar.gz"
+          gh release download game-input-v1 --pattern "$baseline" --clobber
+          tar -xzf "$baseline"
+          gh release download game-input-v1 --pattern "Game-Core.zip" --clobber
+          unzip -q Game-Core.zip -d game-core
+          test -d analysis/decompiled/MXReflex.exe/functions
+          find game-core -type f -iname MXReflex.exe -print -quit | grep -q .
+
+      - name: Inspect target vtable privately
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, struct, sys
+
+          raw = [
+              line.strip() for line in Path("diag/vtable_target.txt").read_text().splitlines()
+              if line.strip() and not line.lstrip().startswith("#")
+          ]
+          if not raw:
+              raise SystemExit("no vtable target")
+          vt = int(raw[-1].lower().removeprefix("0x"), 16)
+          print(f"target_vtable=0x{vt:08x}")
+          if vt == 0:
+              print("placeholder target; update diag/vtable_target.txt with a live address")
+              raise SystemExit(0)
+
+          root = Path("analysis/decompiled/MXReflex.exe/functions")
+          needles = {f"{vt:08x}", f"0x{vt:x}"}
+
+          print("=== STATIC REFERENCES TO VTABLE ADDRESS ===")
+          count = 0
+          for path in sorted(root.glob("*.asm")):
+              lines = path.read_text(errors="replace").splitlines()
+              for i,line in enumerate(lines):
+                  if any(needle in line.lower() for needle in needles):
+                      print(f"--- {path.stem} ---")
+                      print("\n".join(lines[max(0,i-14):i+15]))
+                      cp = root / f"{path.stem}.c"
+                      if cp.exists():
+                          print(cp.read_text(errors="replace")[:9000])
+                      count += 1
+                      if count >= 30:
+                          break
+              if count >= 30:
+                  break
+          print(f"reference_count_sampled={count}")
+
+          exe = next(Path("game-core").rglob("MXReflex.exe"))
+          data = exe.read_bytes()
+          if data[:2] != b"MZ":
+              raise SystemExit("not a PE")
+          pe = struct.unpack_from("<I", data, 0x3c)[0]
+          if data[pe:pe+4] != b"PE\0\0":
+              raise SystemExit("bad PE signature")
+          coff = pe + 4
+          nsec = struct.unpack_from("<H", data, coff + 2)[0]
+          optsz = struct.unpack_from("<H", data, coff + 16)[0]
+          opt = coff + 20
+          image_base = struct.unpack_from("<I", data, opt + 28)[0]
+          sec = opt + optsz
+
+          def va_to_off(va):
+              rva = va - image_base
+              for i in range(nsec):
+                  off = sec + i*40
+                  vsize, vaddr, rawsize, rawptr = struct.unpack_from("<IIII", data, off+8)
+                  span = max(vsize, rawsize)
+                  if vaddr <= rva < vaddr + span:
+                      return rawptr + (rva - vaddr)
+              return None
+
+          foff = va_to_off(vt)
+          print(f"image_base=0x{image_base:08x} file_offset={foff}")
+          if foff is None:
+              raise SystemExit(0)
+
+          print("=== MSVC RTTI ===")
+          if foff >= 4:
+              col_va = struct.unpack_from("<I", data, foff - 4)[0]
+              print(f"complete_object_locator=0x{col_va:08x}")
+              col_off = va_to_off(col_va)
+              if col_off is not None and col_off + 20 <= len(data):
+                  sig, obj_off, cd_off, type_va, hier_va = struct.unpack_from("<IIIII", data, col_off)
+                  print(f"col.signature={sig} col.offset=0x{obj_off:x} col.cdOffset=0x{cd_off:x}")
+                  print(f"type_descriptor=0x{type_va:08x} class_hierarchy=0x{hier_va:08x}")
+                  type_off = va_to_off(type_va)
+                  if type_off is not None and type_off + 8 < len(data):
+                      end = data.find(b"\x00", type_off + 8, min(len(data), type_off + 512))
+                      if end < 0:
+                          end = min(len(data), type_off + 512)
+                      name = data[type_off + 8:end].decode("ascii", errors="replace")
+                      print(f"type_name={name}")
+
+          print("=== VTABLE DWORDS ===")
+          for i in range(0, 80):
+              pos = foff + i*4
+              if pos + 4 > len(data):
+                  break
+              val = struct.unpack_from("<I", data, pos)[0]
+              mark = " <== +0xe4" if i == 57 else ""
+              print(f"[{i:02d}] +0x{i*4:03x} = 0x{val:08x}{mark}")
+
+          slot = struct.unpack_from("<I", data, foff + 0xe4)[0] if foff + 0xe8 <= len(data) else 0
+          print(f"slot_e4=0x{slot:08x}")
+          if slot:
+              sneedle = f"{slot:08x}"
+              print("=== SLOT FUNCTION CONTEXT ===")
+              af = root / f"{sneedle}.asm"
+              cf = root / f"{sneedle}.c"
+              if af.exists():
+                  print(af.read_text(errors="replace")[:12000])
+              if cf.exists():
+                  print(cf.read_text(errors="replace")[:12000])
+          PY

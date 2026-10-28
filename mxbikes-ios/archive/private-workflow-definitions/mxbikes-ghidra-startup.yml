@@ -1,0 +1,121 @@
+name: MX Bikes - Ghidra startup reconnaissance
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-ghidra-startup.yml"
+      - "scripts/ghidra/MxStartupRecon.java"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-ghidra-startup
+  cancel-in-progress: false
+
+jobs:
+  startup:
+    name: Ghidra headless startup map
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GHIDRA_HEADLESS_MAXMEM: 3G
+    steps:
+      - name: Checkout private scripts
+        uses: actions/checkout@v4
+      - name: Install JDK 21 required by pinned Ghidra release
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Restore cached Ghidra toolchain
+        uses: actions/cache@v4
+        id: ghidra-cache
+        with:
+          path: ${{ runner.tool_cache }}/ghidra_12.1.4_PUBLIC
+          key: ghidra-12.1.4-public-linux-fixed-sha256-v1
+
+      - name: Install verified Ghidra 12.1.4 release
+        if: steps.ghidra-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-tools" "$RUNNER_TOOL_CACHE"
+          gh release download Ghidra_12.1.4_build \
+            --repo NationalSecurityAgency/ghidra \
+            --pattern 'ghidra_12.1.4_PUBLIC_20260921.zip' \
+            --dir "$RUNNER_TEMP/mxbikes-tools"
+          echo 'ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db  '"$RUNNER_TEMP/mxbikes-tools/ghidra_12.1.4_PUBLIC_20260921.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/mxbikes-tools/ghidra_12.1.4_PUBLIC_20260921.zip" -d "$RUNNER_TOOL_CACHE"
+          test -x "$RUNNER_TOOL_CACHE/ghidra_12.1.4_PUBLIC/support/analyzeHeadless"
+
+      - name: Fetch private game executable only
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-original" "$RUNNER_TEMP/mxbikes-report" "$RUNNER_TEMP/mxbikes-projects"
+          gh release download Mxbikes1 \
+            --repo "$GITHUB_REPOSITORY" --pattern 'Game.zip' \
+            --dir "$RUNNER_TEMP/mxbikes-original"
+          python - <<'PY'
+          import os, pathlib, shutil, zipfile
+          base = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mxbikes-original"
+          with zipfile.ZipFile(base / "Game.zip") as z:
+              matches = [i for i in z.infolist() if not i.is_dir()
+                         and pathlib.PurePosixPath(i.filename.replace("\\", "/")).name.lower() == "mxbikes.exe"]
+              if len(matches) != 1 or matches[0].file_size > 750*1024**2:
+                  raise ValueError("Expected exactly one bounded MX Bikes executable")
+              with z.open(matches[0]) as src, (base / "mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src, dst)
+          PY
+          echo '4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6  '"$RUNNER_TEMP/mxbikes-original/mxbikes.exe" | sha256sum -c -
+
+      - name: Ghidra bounded headless analysis and startup call graph
+        run: |
+          set -euo pipefail
+          "$RUNNER_TOOL_CACHE/ghidra_12.1.4_PUBLIC/support/analyzeHeadless" \
+            "$RUNNER_TEMP/mxbikes-projects" MxBikesStartup \
+            -import "$RUNNER_TEMP/mxbikes-original/mxbikes.exe" \
+            -analysisTimeoutPerFile 360 -max-cpu 2 \
+            -scriptPath "$GITHUB_WORKSPACE/scripts/ghidra" \
+            -postScript MxStartupRecon.java "$RUNNER_TEMP/mxbikes-report/ghidra-startup.json" \
+            -deleteProject \
+            2>&1 | tee "$RUNNER_TEMP/mxbikes-ghidra.log"
+          test -s "$RUNNER_TEMP/mxbikes-report/ghidra-startup.json"
+
+      - name: Summarize safe metadata
+        if: success()
+        run: |
+          python - <<'PY'
+          import json,os,pathlib
+          base = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mxbikes-report'
+          data = json.loads((base/'ghidra-startup.json').read_text())
+          lines = [
+              '# MX Bikes Ghidra headless startup reconnaissance', '',
+              '- Target: exact SHA-256 verified original private executable',
+              '- Ghidra release: 12.1.4',
+              '- Entry RVA: '+str(data['entry_rva']),
+              '- Entry-containing function recovered: '+str(data['entry_function_found']),
+              '- Discovered functions: '+str(data['discovered_functions']),
+              '- Thunk functions: '+str(data['thunk_functions']),
+              '- Direct entry callees: '+str(data['direct_entry_callee_count']),
+              '- Startup graph nodes: '+str(data['graph_node_count']),
+              '- Startup graph edges: '+str(data['graph_edge_count']),
+              '',
+              'This is static metadata only. It does not prove original game startup can run on ARM64.',
+          ]
+          summary='\n'.join(lines)+'\n'
+          (base/'ghidra-startup.md').write_text(summary)
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).open('a').write(summary)
+          print(summary)
+          PY
+
+      - name: Upload reports without game data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-ghidra-startup-metadata
+          path: ${{ runner.temp }}/mxbikes-report/
+          if-no-files-found: warn
+          retention-days: 7

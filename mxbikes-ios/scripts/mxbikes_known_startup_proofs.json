@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "pinned_original_sha256": "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6",
+  "purpose": "Existing passing bounded native startup proofs. NOT general full-function verification.",
+  "entries": [
+    {
+      "original_rva": "0x136120",
+      "proof_kind": "bounded_native_branch",
+      "scope": "original main first callee empty command-line return only",
+      "evidence_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39741529235"
+    },
+    {
+      "original_rva": "0x15b790",
+      "proof_kind": "bounded_native_prefix",
+      "scope": "original filename helper four instructions through 0x15b7a5 followed by separately modeled strcpy",
+      "evidence_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39743244674"
+    },
+    {
+      "original_rva": "0x2ab954",
+      "proof_kind": "bounded_original_initializer",
+      "scope": "original 39-instruction first CRT initializer under controlled imports",
+      "evidence_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39743244674"
+    },
+    {
+      "original_rva": "0x2ab41a",
+      "proof_kind": "modeled_external_import",
+      "scope": "original MSVCR90 strcpy IAT jump identity validated; Windows DLL itself not executed",
+      "evidence_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39743244674"
+    },
+    {
+      "original_rva": "0x2ab72c",
+      "proof_kind": "nonreturning_import_boundary",
+      "scope": "original MSVCR90 _amsg_exit terminal handoff; actual Windows process exit not implemented",
+      "evidence_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/39733192817"
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+name: MX Bikes - bounded angr CRT path pilot
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-angr-crt-pilot.yml"
+      - "scripts/mxbikes_angr_crt_paths.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-angr-crt-pilot
+  cancel-in-progress: false
+
+jobs:
+  symbolic-crt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private analysis code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned public read-only PE parser
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: 7a15cba8c0bdadfe3333dcb76889269a85354b22
+          path: arm64-lab
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned angr symbolic-analysis dependencies
+        run: |
+          python -m pip install --disable-pip-version-check 'angr==9.3.4' 'bitstring==4.3.1'
+          python -c 'import angr, bitstring; assert hasattr(bitstring,"ConstBitStream"); print("angr import and pin OK")'
+      - name: Recover original game executable into ephemeral private runner
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-angr" "$RUNNER_TEMP/angr-metadata"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/mxbikes-angr"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-angr"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              matches=[x for x in z.infolist() if not x.is_dir() and
+                       pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024*1024:
+                  raise RuntimeError("Expected one safely bounded original game EXE")
+              with z.open(matches[0]) as src,(root/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!=\
+             "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Private original MX Bikes revision does not match")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Generate bounded original-code symbolic path candidates
+        run: |
+          set -euo pipefail
+          timeout -s TERM 180s python scripts/mxbikes_angr_crt_paths.py \
+            "$RUNNER_TEMP/mxbikes-angr/mxbikes.exe" \
+            "$RUNNER_TEMP/angr-metadata"
+          cat "$RUNNER_TEMP/angr-metadata/crt-angr-path-pilot.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload metadata only, never executable or recovered code
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-angr-crt-metadata
+          path: |
+            ${{ runner.temp }}/angr-metadata/crt-angr-path-pilot.json
+            ${{ runner.temp }}/angr-metadata/crt-angr-path-pilot.md
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,82 @@
+name: Private Reflex Vtable Diagnose
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/private-reflex-vtable-diagnose.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Download private analysis baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="Reflex-Baseline-917d14e7ef7c-g12.1.3-keb32cc42623e-cab297d2991ca-p1.tar.gz"
+          gh release download game-input-v1 --pattern "$asset" --clobber
+          tar -xzf "$asset"
+          test -d analysis/decompiled/MXReflex.exe/functions
+
+      - name: Trace FUN_008244c0 and callers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("analysis/decompiled/MXReflex.exe/functions")
+          target = "008244c0"
+          asm = root / f"{target}.asm"
+          cfile = root / f"{target}.c"
+
+          print("=== TARGET ASM ===")
+          print(asm.read_text(errors="replace"))
+
+          print("=== TARGET PSEUDOCODE ===")
+          text = cfile.read_text(errors="replace")
+          print(text[:12000])
+
+          print("=== CALLERS ===")
+          call_re = re.compile(r"CALL\s+(?:0x)?008244c0\b", re.I)
+          for path in sorted(root.glob("*.asm")):
+              lines = path.read_text(errors="replace").splitlines()
+              for i, line in enumerate(lines):
+                  if call_re.search(line):
+                      print(f"--- caller {path.stem} ---")
+                      print("\n".join(lines[max(0,i-20):i+20]))
+                      cp = root / f"{path.stem}.c"
+                      if cp.exists():
+                          print(cp.read_text(errors="replace")[:10000])
+
+          print("=== DIRECT TARGET REFERENCES ===")
+          for path in sorted(root.glob("*.asm")):
+              t = path.read_text(errors="replace")
+              if "008244c0" in t.lower() and path.stem.lower() != target:
+                  print(path.stem)
+
+          print("=== IAT NEIGHBORHOOD REFERENCES ===")
+          for addr in ("0091600c", "009160f8"):
+              print(f"-- {addr} --")
+              count = 0
+              for path in sorted(root.glob("*.asm")):
+                  lines = path.read_text(errors="replace").splitlines()
+                  for i,line in enumerate(lines):
+                      if addr in line.lower():
+                          print(f"{path.stem}:")
+                          print("\n".join(lines[max(0,i-8):i+9]))
+                          count += 1
+                          if count >= 12:
+                              break
+                  if count >= 12:
+                      break
+          PY

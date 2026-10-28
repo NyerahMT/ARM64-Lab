@@ -1,0 +1,78 @@
+name: MX Bikes - fast original parser map
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-parser-map-fast.yml"
+      - "scripts/mxbikes_main_callee_branch_pair_map.py"
+      - "tests/test_mxbikes_main_callee_branch_pair_map.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxb-original-parser-map-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parser-map:
+    name: Map original parser frontiers without rebuilding AArch64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c429049c3f01305a9e6fc7ec810c1b44204f679f
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install original PE disassembler and Unicorn, no ARM64 linker
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+      - name: Verify mapping synthetic regression cases
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_branch_pair_map.py -v
+          python -m py_compile scripts/mxbikes_main_callee_branch_pair_map.py
+      - name: Retrieve privately owned original and verify SHA before running
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mx-map" "$RUNNER_TEMP/mx-map-report"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" --pattern Game.zip --dir "$RUNNER_TEMP/mx-map"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"mx-map"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              found=[x for x in z.infolist() if not x.is_dir()
+                     and pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(found)!=1 or found[0].file_size>750*1024**2:
+                  raise RuntimeError("Missing or oversized original executable")
+              with z.open(found[0]) as src,(root/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          expected="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!=expected:
+              raise RuntimeError("Original executable changed")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Execute original x64 CALL path and group all next control blocks
+        run: |
+          set -euo pipefail
+          timeout 120s python scripts/mxbikes_main_callee_branch_pair_map.py \
+            "$RUNNER_TEMP/mx-map/mxbikes.exe" "$RUNNER_TEMP/mx-map-report"
+          test -s "$RUNNER_TEMP/mx-map-report/main-callee-both-successors.json"
+          cat "$RUNNER_TEMP/mx-map-report/main-callee-both-successors.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive bounded branch metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxb-original-parser-branch-metadata
+          path: ${{ runner.temp }}/mx-map-report/
+          retention-days: 14
+          if-no-files-found: warn

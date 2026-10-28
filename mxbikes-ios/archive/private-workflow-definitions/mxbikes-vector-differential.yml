@@ -1,0 +1,72 @@
+name: MX Bikes - native vector math differential
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-vector-differential.yml"
+      - "scripts/vec_cross_differential.py"
+      - "scripts/mxbikes_batch_sse_differential.py"
+      - "scripts/mxbikes_record_differential.py"
+
+permissions:
+  contents: read
+
+jobs:
+  crosscheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private test script
+        uses: actions/checkout@v4
+      - name: Checkout public ARM64-Lab tools
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install x64 disassembler and isolated emulator
+        run: python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+      - name: Download original executable to ephemeral runner storage
+        run: |
+          mkdir -p "$RUNNER_TEMP/mxbikes-original" "$RUNNER_TEMP/mxbikes-report"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/mxbikes-original" --clobber
+          python - <<'PY'
+          import os, pathlib, shutil, zipfile
+          d = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mxbikes-original"
+          with zipfile.ZipFile(d / "Game.zip") as z:
+              files = [i for i in z.infolist() if not i.is_dir() and pathlib.PurePosixPath(i.filename.replace("\\", "/")).name.lower()=="mxbikes.exe"]
+              if len(files)!=1 or files[0].file_size > 750*1024**2:
+                  raise RuntimeError("Missing or oversized original executable")
+              with z.open(files[0]) as src, (d / "mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          PY
+      - name: Compare original x64 execution with portable C and cross-compile to ARM64
+        run: |
+          python scripts/vec_cross_differential.py \
+            "$RUNNER_TEMP/mxbikes-original/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-report"
+          cat "$RUNNER_TEMP/mxbikes-report/vector-cross-check.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differentially validate three additional complete x64 SSE functions
+        run: |
+          python scripts/mxbikes_batch_sse_differential.py \
+            "$RUNNER_TEMP/mxbikes-original/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-report"
+          cat "$RUNNER_TEMP/mxbikes-report/batch-sse-differential.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify original Win64 integer indexed-memory record writer on ARM64
+        run: |
+          python scripts/mxbikes_record_differential.py \
+            "$RUNNER_TEMP/mxbikes-original/mxbikes.exe" \
+            "$RUNNER_TEMP/mxbikes-report"
+          cat "$RUNNER_TEMP/mxbikes-report/indexed-record-differential.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish differential metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-cross-product-differential
+          path: ${{ runner.temp }}/mxbikes-report/
+          retention-days: 7
+          if-no-files-found: warn

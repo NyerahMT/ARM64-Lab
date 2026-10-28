@@ -1,0 +1,66 @@
+name: MX Bikes - inspect private release
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_tracks:
+        description: "Also download and index the 1.75 GB tracks.pkz asset (slower)"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - ".github/workflows/mxbikes-inventory.yml"
+      - "scripts/mxbikes_inventory.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-release-inventory
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: Inventory MX Bikes input
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INCLUDE_TRACKS: ${{ inputs.include_tracks || 'false' }}
+    steps:
+      - name: Checkout private input repository
+        uses: actions/checkout@v4
+
+      - name: Prepare temporary download and report directories
+        run: |
+          mkdir -p "$RUNNER_TEMP/mxbikes-download" "$RUNNER_TEMP/mxbikes-reports"
+
+      - name: Download release metadata and executable archives
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/Mxbikes1" > "$RUNNER_TEMP/mxbikes-download/release.json"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Game.zip' --pattern 'Steam.zip' \
+            --dir "$RUNNER_TEMP/mxbikes-download" --clobber
+          if [ "$INCLUDE_TRACKS" = "true" ]; then
+            gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+              --pattern 'tracks.pkz' \
+              --dir "$RUNNER_TEMP/mxbikes-download" --clobber
+          fi
+
+      - name: Install PE inspection dependency
+        run: python -m pip install --disable-pip-version-check pefile==2024.8.26
+
+      - name: Inventory ZIP entries and analyze Windows binaries
+        run: |
+          python scripts/mxbikes_inventory.py \
+            "$RUNNER_TEMP/mxbikes-download" "$RUNNER_TEMP/mxbikes-reports"
+          cat "$RUNNER_TEMP/mxbikes-reports/inventory.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload metadata reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-pe-inventory
+          path: ${{ runner.temp }}/mxbikes-reports/
+          if-no-files-found: warn
+          retention-days: 7

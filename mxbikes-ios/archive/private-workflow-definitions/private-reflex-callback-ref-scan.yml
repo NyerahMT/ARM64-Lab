@@ -1,0 +1,98 @@
+name: Private Reflex Callback Reference Scan
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/private-reflex-callback-ref-scan.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Download private baseline and core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="Reflex-Baseline-917d14e7ef7c-g12.1.3-keb32cc42623e-cab297d2991ca-p1.tar.gz"
+          gh release download game-input-v1 --pattern "$baseline" --clobber
+          tar -xzf "$baseline"
+          gh release download game-input-v1 --pattern "Game-Core.zip" --clobber
+          unzip -q Game-Core.zip -d game-core
+
+      - name: Find raw references to callback function
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct, re
+
+          target = 0x008244c0
+          exe = next(Path("game-core").rglob("MXReflex.exe"))
+          data = exe.read_bytes()
+          pe = struct.unpack_from("<I", data, 0x3c)[0]
+          coff = pe + 4
+          nsec = struct.unpack_from("<H", data, coff + 2)[0]
+          optsz = struct.unpack_from("<H", data, coff + 16)[0]
+          opt = coff + 20
+          image_base = struct.unpack_from("<I", data, opt + 28)[0]
+          sec = opt + optsz
+          sections=[]
+          for i in range(nsec):
+              off=sec+i*40
+              name=data[off:off+8].split(b"\0",1)[0].decode(errors="replace")
+              vsize,vaddr,rawsize,rawptr=struct.unpack_from("<IIII",data,off+8)
+              sections.append((name,vaddr,vsize,rawptr,rawsize))
+
+          def off_to_va(pos):
+              for name,vaddr,vsize,rawptr,rawsize in sections:
+                  if rawptr <= pos < rawptr+rawsize:
+                      return image_base+vaddr+(pos-rawptr),name
+              return None,None
+
+          needle=struct.pack("<I",target)
+          hits=[]
+          start=0
+          while True:
+              i=data.find(needle,start)
+              if i<0: break
+              va,name=off_to_va(i)
+              if va is not None:
+                  hits.append((i,va,name))
+              start=i+1
+
+          print(f"target=0x{target:08x} raw_hits={len(hits)}")
+          root=Path("analysis/decompiled/MXReflex.exe/functions")
+          for pos,va,name in hits[:64]:
+              print(f"=== hit file=0x{pos:x} va=0x{va:08x} section={name} ===")
+              base=max(0,pos-40); end=min(len(data),pos+44)
+              for p in range(base - (base%4), end, 4):
+                  if p+4<=len(data):
+                      val=struct.unpack_from("<I",data,p)[0]
+                      pva,_=off_to_va(p)
+                      mark=" <TARGET>" if p==pos else ""
+                      print(f"0x{(pva or 0):08x}: 0x{val:08x}{mark}")
+
+              needle_txt=f"{va:08x}"
+              refs=0
+              for ap in sorted(root.glob("*.asm")):
+                  lines=ap.read_text(errors="replace").splitlines()
+                  for j,line in enumerate(lines):
+                      if needle_txt in line.lower():
+                          print(f"--- asm reference {ap.stem} ---")
+                          print("\n".join(lines[max(0,j-15):j+16]))
+                          cp=root/f"{ap.stem}.c"
+                          if cp.exists():
+                              print(cp.read_text(errors="replace")[:7000])
+                          refs+=1
+                          if refs>=20: break
+                  if refs>=20: break
+              print(f"asm_refs_sampled={refs}")
+          PY

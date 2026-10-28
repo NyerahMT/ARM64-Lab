@@ -1,0 +1,178 @@
+name: MX Bikes - real startup translation gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-native-startup-gate.yml"
+      - "scripts/mxbikes_crt_cfg_differential.py"
+      - "scripts/mxbikes_next_crt_inventory.py"
+      - "scripts/mxbikes_next_crt_instruction_forms.py"
+      - "scripts/mxbikes_next_crt_prefix_differential.py"
+      - "scripts/mxbikes_next_crt_gs_lock_differential.py"
+      - "scripts/mxbikes_next_crt_joined_differential.py"
+      - "scripts/mxbikes_crt_retry_differential.py"
+      - "scripts/mxbikes_crt_joined_retry_differential.py"
+      - "scripts/mxbikes_ci_batch.py"
+      - "scripts/mxbikes_crt_cluster_inventory.py"
+      - "scripts/mxbikes_crt_init_state_differential.py"
+      - "scripts/mxbikes_crt_joined_state_differential.py"
+      - "scripts/mxbikes_crt_common_release_differential.py"
+      - "scripts/mxbikes_crt_joined_release_differential.py"
+      - "scripts/mxbikes_crt_direct_callees_survey.py"
+      - "scripts/mxbikes_crt_import_thunk_differential.py"
+      - "scripts/mxbikes_crt_post_import_differential.py"
+      - "scripts/mxbikes_crt_joined_msvcr90_differential.py"
+      - "scripts/mxbikes_main_after_filename_map.py"
+      - "scripts/mxbikes_after_strcpy_branch_native.py"
+      - "scripts/mxbikes_crt_strrchr_differential.py"
+      - "scripts/mxbikes_crt_initializer_inventory.py"
+      - "scripts/mxbikes_crt_exception_callback_differential.py"
+      - "scripts/mxbikes_crt_shared_helper_differential.py"
+      - "scripts/mxbikes_crt_cluster_inventory.py"
+      - "scripts/mxbikes_crt_child_aot_differential.py"
+      - "scripts/mxbikes_crt_joined_wrapper_child_aot.py"
+      - "scripts/mxbikes_crt_tail_callback_joined_aot.py"
+      - "scripts/mxbikes_crt_initializer_table_walk.py"
+      - "scripts/mxbikes_crt_argsetup_body_differential.py"
+      - "scripts/mxbikes_crt_amsg_exit_boundary.py"
+      - "scripts/mxbikes_crt_appsetup_body_differential.py"
+      - "scripts/mxbikes_crt_second_tail_body_differential.py"
+      - "scripts/mxbikes_crt_joined_e_initializer.py"
+      - "scripts/mxbikes_crt_joined_init_table.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-native-startup-gate
+  cancel-in-progress: false
+
+jobs:
+  startup-profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private test harness
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout public translator tooling
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c429049c3f01305a9e6fc7ec810c1b44204f679f
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install bounded decoder
+        run: |
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends clang lld
+      - name: Verify startup inspector against synthetic fixture
+        run: PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python -m unittest discover -s arm64-lab/tests -p test_startup_gate.py -v
+      - name: Verify six CRT service adapters under native and executed AArch64
+        run: PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python -m unittest discover -s arm64-lab/tests -p test_crt_services.py -v
+      - name: Fetch and hash-verify owned original executable privately
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-game" "$RUNNER_TEMP/startup-gate-report"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" --pattern Game.zip --dir "$RUNNER_TEMP/mxbikes-game"
+          python - <<'PY'
+          import hashlib, os, pathlib, shutil, zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-game"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              matches=[m for m in z.infolist() if not m.is_dir()
+                       and pathlib.PurePosixPath(m.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Expected one bounded original executable")
+              with z.open(matches[0]) as inp,(root/"mxbikes.exe").open("wb") as out:
+                  shutil.copyfileobj(inp,out)
+          expected="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!=expected:
+              raise RuntimeError("Unexpected game executable revision")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Measure original startup callee instruction coverage
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python -m tools.startup_gate \
+            "$RUNNER_TEMP/mxbikes-game/mxbikes.exe" \
+            > "$RUNNER_TEMP/startup-gate-report/startup-gate.json"
+          python - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"startup-gate-report"
+          report=json.loads((p/"startup-gate.json").read_text())
+          profile=report["first_callee_instruction_profile"]
+          if (report["entry_rva"],report["first_call_rva"],report["tail_jump_rva"])!=("0x2ab31c","0x2ab954","0x2ab02c"):
+              raise RuntimeError("Entry targets do not match verified executable")
+          if profile["unwind_interval_size"]!=179 or profile["decoded_instruction_count"]!=39:
+              raise RuntimeError("Unexpected first-callee decoding coverage")
+          if not profile["fully_decoded"] or profile["native_arm64_executed"]:
+              raise RuntimeError("Invalid startup diagnostic claim")
+          cfg=profile["static_control_flow"]
+          if cfg["block_count"]!=9 or cfg["direct_edges"]!=9:
+              raise RuntimeError("Unexpected static startup branch/control edges")
+          lines=["# MX Bikes original startup ARM64 translation gate","",
+                 "- Entry RVA: "+report["entry_rva"],
+                 "- First callee RVA: "+report["first_call_rva"],
+                 "- Tail routine RVA: "+report["tail_jump_rva"],
+                 "- First callee static unwind interval: "+str(profile["unwind_interval_size"])+" bytes",
+                 "- First callee static decoded instructions: "+str(profile["decoded_instruction_count"]),
+                 "- Conditional branches: "+str(profile["conditional_branch_count"]),
+                 "- Indirect calls: "+str(profile["indirect_call_count"]),
+                 "- RIP-relative memory instructions: "+str(profile["rip_relative_memory_instruction_count"]),
+                 "- Lock-prefixed instructions: "+str(profile["lock_prefixed_instruction_count"]),
+                 "- Static CFG basic blocks: "+str(cfg["block_count"]),
+                 "- Static CFG direct/control continuation edges: "+str(cfg["direct_edges"]),
+                 "- Mnemonics: "+", ".join(f"{k}={v}" for k,v in profile["mnemonic_counts"].items()),
+                 "",
+                 "**This section is static metadata only; the separate differential step below validates the translated initializer on ARM64.**",""]
+          summary="\n".join(lines)
+          (p/"startup-gate.md").write_text(summary)
+          pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a").write(summary)
+          print(summary)
+          PY
+      - name: Inspect first CRT instruction forms in private runner log
+        run: |
+          python scripts/mxbikes_crt_instruction_inventory.py "$RUNNER_TEMP/mxbikes-game/mxbikes.exe"
+      - name: Inventory next original 126-instruction CRT startup target
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_next_crt_inventory.py \
+            "$RUNNER_TEMP/mxbikes-game/mxbikes.exe" \
+            "$RUNNER_TEMP/startup-gate-report"
+          cat "$RUNNER_TEMP/startup-gate-report/next-crt-inventory.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Print private original second-CRT instruction and CFG forms
+        run: |
+          python scripts/mxbikes_next_crt_instruction_forms.py "$RUNNER_TEMP/mxbikes-game/mxbikes.exe"
+      - name: Survey grouped original CRT direct-call dependency cluster (metadata only)
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_crt_direct_callees_survey.py \
+            "$RUNNER_TEMP/mxbikes-game/mxbikes.exe" \
+            "$RUNNER_TEMP/startup-gate-report"
+          cat "$RUNNER_TEMP/startup-gate-report/crt-direct-callee-survey.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect both original CRT initializer callback tables as one dependency cluster
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_crt_initializer_inventory.py \
+            "$RUNNER_TEMP/mxbikes-game/mxbikes.exe" \
+            "$RUNNER_TEMP/startup-gate-report"
+          cat "$RUNNER_TEMP/startup-gate-report/crt-initializer-tables.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Batch every original CRT x64/ARM64 differential and collect all failures
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_ci_batch.py \
+            "$RUNNER_TEMP/mxbikes-game/mxbikes.exe" \
+            "$RUNNER_TEMP/startup-gate-report"
+      - name: Upload metadata only (no PE bytes)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-native-startup-gate
+          path: ${{ runner.temp }}/startup-gate-report/
+          if-no-files-found: warn
+          retention-days: 7

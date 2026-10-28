@@ -1,0 +1,63 @@
+name: MX Bikes iOS — public source-only checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [public/mxbikes-ios-source]
+    paths:
+      - "mxbikes-ios/**"
+      - ".github/workflows/mxbikes-ios-public-checks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-graphics-and-win64-abi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mxbikes-ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run native host GL and guest-ABI smoke tests
+        run: |
+          set -euo pipefail
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_surface.c tests/mxb_gl_surface_smoke.c \
+            -lm -o /tmp/mxb-gl-surface
+          /tmp/mxb-gl-surface
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_surface.c runtime/mxb_gl_win64_abi.c \
+            tests/mxb_gl_win64_abi_smoke.c \
+            -lm -o /tmp/mxb-gl-abi
+          /tmp/mxb-gl-abi
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_surface.c runtime/mxb_gl_win64_abi.c \
+            runtime/mxb_gl_indexed_probe.c tests/mxb_gl_indexed_fixture_smoke.c \
+            -lm -o /tmp/mxb-gl-indexed
+          /tmp/mxb-gl-indexed
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_texture.c runtime/mxb_gl_texture_probe.c \
+            tests/mxb_gl_texture_batch_smoke.c \
+            -o /tmp/mxb-gl-texture
+          /tmp/mxb-gl-texture
+      - name: Execute synthetic x64-to-native OpenGL import tests
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'unicorn>=2,<3'
+          python tests/mxb_gl_win64_unicorn_import_test.py
+          python tests/mxb_gl_win64_indexed_guest_test.py
+      - name: Cross-compile native renderer and guest adapter for ARM64
+        run: |
+          set -euo pipefail
+          for name in mxb_gl_surface mxb_gl_win64_abi mxb_gl_texture \
+                      mxb_gl_indexed_probe mxb_gl_texture_probe; do
+            clang --target=aarch64-none-elf -std=c11 -O2 -ffreestanding \
+              -fno-builtin -Wall -Wextra -Werror -Iruntime \
+              -c "runtime/${name}.c" -o "/tmp/${name}-aarch64.o"
+            readelf -h "/tmp/${name}-aarch64.o" | grep -q AArch64
+          done
+          echo "Source-only ARM64/Win64 graphics tests passed. No original game code or assets were used." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,394 @@
+name: MX Bikes - whole executable translation map
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-whole-game-map.yml"
+      - "scripts/mxbikes_whole_game_map.py"
+      - "scripts/mxbikes_native_link_plan.py"
+      - "scripts/mxbikes_startup_chain_coverage.py"
+      - "scripts/mxbikes_dependency_wave_planner.py"
+      - "tests/test_mxbikes_dependency_wave_planner.py"
+      - "scripts/mxbikes_startup_thunk_edges.py"
+      - "scripts/mxbikes_runtime_service_catalog.json"
+      - "scripts/mxbikes_runtime_service_matrix.py"
+      - "tests/test_mxbikes_runtime_service_matrix.py"
+      - "tests/test_mxbikes_startup_thunk_edges.py"
+      - "scripts/mxbikes_known_startup_proofs.json"
+      - "scripts/mxbikes_verified_leaf_autolink.py"
+      - "scripts/mxbikes_wave_native_selection.py"
+      - "scripts/mxbikes_acyclic_leaf_cfg.py"
+      - "scripts/mxbikes_native_family_inventory.py"
+      - "scripts/mxbikes_joined_direct_batch.py"
+      - "scripts/mxbikes_native_callsite_batch.py"
+      - "scripts/mxbikes_win64_unwind_frame.py"
+      - "tests/test_mxbikes_win64_unwind_frame.py"
+      - "scripts/mxbikes_parent_call_frontier.py"
+      - "tests/test_mxbikes_parent_call_frontier.py"
+      - "scripts/mxbikes_parent_batch_frontier.py"
+      - "tests/test_mxbikes_parent_batch_frontier.py"
+      - "scripts/mxbikes_bulk_firstcall_triage.py"
+      - "tests/test_mxbikes_bulk_firstcall_triage.py"
+      - "scripts/mxbikes_native_prefix_wave.py"
+      - "tests/test_mxbikes_native_prefix_wave.py"
+      - "scripts/mxbikes_whole_function_factory.py"
+      - "tests/test_mxbikes_whole_function_factory.py"
+      - "scripts/mxbikes_nested_native_wave.py"
+      - "scripts/mxbikes_native_scalar_ops.py"
+      - "tests/test_mxbikes_nested_native_wave.py"
+      - "scripts/mxbikes_cfg_flag_ops.py"
+      - "scripts/mxbikes_cfg_extended_regs.py"
+      - "scripts/mxbikes_cfg_guest_heap.py"
+      - "scripts/mxbikes_cfg_guest_stack.py"
+      - "scripts/mxbikes_cfg_lea_address.py"
+      - "scripts/mxbikes_cfg_conditional_moves.py"
+      - "scripts/mxbikes_cfg_imul_ops.py"
+      - "scripts/mxbikes_cfg_static_image.py"
+      - "scripts/mxbikes_cfg_full_native_wave.py"
+      - "scripts/mxbikes_unwindless_native_wave.py"
+      - "tests/test_mxbikes_unwindless_native_wave.py"
+      - "tests/test_mxbikes_cfg_full_native_wave.py"
+      - "scripts/mxbikes_callsite_prefix.py"
+      - "tests/test_mxbikes_callsite_register_prefix.py"
+      - "tests/test_mxbikes_callsite_setup_families_v2.py"
+      - "tests/test_mxbikes_callsite_multi_setup.py"
+      - "tests/test_mxbikes_callsite_shadow_stack_args.py"
+      - "tests/test_mxbikes_callsite_guest_heap_loads.py"
+      - "tests/test_mxbikes_callsite_indexed_loads.py"
+      - "tests/test_mxbikes_callsite_guest_stores.py"
+      - "tests/test_mxbikes_callsite_frame_loads.py"
+      - "tests/test_mxbikes_native_callsite_batch.py"
+      - "tests/test_mxbikes_joined_direct_batch.py"
+      - "tests/test_mxbikes_native_family_inventory.py"
+      - "tests/test_mxbikes_acyclic_leaf_cfg.py"
+      - "tests/test_mxbikes_wave_cfg_differential.py"
+      - "tests/test_mxbikes_leaf_fast_forms.py"
+      - "tests/test_mxbikes_wave_native_selection.py"
+      - "tests/test_mxbikes_wave_leaf_integration.py"
+      - "tests/test_mxbikes_startup_chain_coverage.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  map:
+    name: Scan entire executable and build candidate call graph
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private mapping harness
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout existing verified PE inspection tools
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c429049c3f01305a9e6fc7ec810c1b44204f679f
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install decoder, original reference emulator and AArch64 toolchain
+        run: |
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends clang lld
+      - name: Validate graph analysis with synthetic fixtures
+        # Fail closed before accessing the owned original executable.
+        run: |
+          python -m unittest discover -s tests -p test_mxbikes_startup_chain_coverage.py -v
+          python -m unittest discover -s tests -p test_mxbikes_first_launch_probe.py -v
+          python -m unittest discover -s tests -p test_mxbikes_startup_thunk_edges.py -v
+          python -m unittest discover -s tests -p test_mxbikes_runtime_service_matrix.py -v
+          python -m unittest discover -s tests -p test_mxbikes_dependency_wave_planner.py -v
+          python -m unittest discover -s tests -p test_mxbikes_launch_frontier.py -v
+          python -m unittest discover -s tests -p test_mxbikes_wave_native_selection.py -v
+          python -m unittest discover -s tests -p test_mxbikes_wave_leaf_integration.py -v
+          python -m unittest discover -s tests -p test_mxbikes_acyclic_leaf_cfg.py -v
+          python -m unittest discover -s tests -p test_mxbikes_wave_cfg_differential.py -v
+          python -m unittest discover -s tests -p test_mxbikes_leaf_fast_forms.py -v
+          python -m unittest discover -s tests -p test_mxbikes_native_family_inventory.py -v
+          python -m unittest discover -s tests -p test_mxbikes_joined_direct_batch.py -v
+          python -m unittest discover -s tests -p test_mxbikes_native_callsite_batch.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_register_prefix.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_setup_families_v2.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_multi_setup.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_shadow_stack_args.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_guest_heap_loads.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_indexed_loads.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_guest_stores.py -v
+          python -m unittest discover -s tests -p test_mxbikes_callsite_frame_loads.py -v
+          python -m unittest discover -s tests -p test_mxbikes_win64_unwind_frame.py -v
+          python -m unittest discover -s tests -p test_mxbikes_parent_call_frontier.py -v
+          python -m unittest discover -s tests -p test_mxbikes_parent_batch_frontier.py -v
+          python -m unittest discover -s tests -p test_mxbikes_bulk_firstcall_triage.py -v
+          python -m unittest discover -s tests -p test_mxbikes_native_prefix_wave.py -v
+          python -m unittest discover -s tests -p test_mxbikes_whole_function_factory.py -v
+          python -m unittest discover -s tests -p test_mxbikes_nested_native_wave.py -v
+          python -m unittest discover -s tests -p test_mxbikes_cfg_full_native_wave.py -v
+          python -m unittest discover -s tests -p test_mxbikes_unwindless_native_wave.py -v
+      - name: Extract owned original game executable privately
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/whole-map-input" "$RUNNER_TEMP/whole-map-output"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/whole-map-input"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"whole-map-input"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              matches=[x for x in z.infolist() if not x.is_dir() and
+                       pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Owned original EXE missing or outside size limit")
+              with z.open(matches[0]) as src,(root/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          digest=hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()
+          if digest!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Unrecognized original executable revision")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Full executable unwind-and-call-graph map
+        run: |
+          set -euo pipefail
+          timeout 800s python scripts/mxbikes_whole_game_map.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/whole-game-map.json"
+          test -s "$RUNNER_TEMP/whole-map-output/lift-candidates.json"
+          cat "$RUNNER_TEMP/whole-map-output/whole-game-map.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Classify original-game native translation blockers by shared instruction families
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_native_family_inventory.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/native-family-inventory.json"
+          cat "$RUNNER_TEMP/whole-map-output/native-family-inventory.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Recover imported service thunks from original x64 startup candidates
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_startup_thunk_edges.py "$RUNNER_TEMP/whole-map-input/mxbikes.exe" "$RUNNER_TEMP/whole-map-output/whole-game-map.json" "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.json"
+          cat "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Group original startup imports by validated runtime adapter family
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_runtime_service_matrix.py "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.json" scripts/mxbikes_runtime_service_catalog.json "$RUNNER_TEMP/whole-map-output" --runtime-root "$GITHUB_WORKSPACE/arm64-lab"
+          test -s "$RUNNER_TEMP/whole-map-output/startup-runtime-service-matrix.json"
+          cat "$RUNNER_TEMP/whole-map-output/startup-runtime-service-matrix.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build baseline native linker dependency plan before validation
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_native_link_plan.py \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/initial-wave-plan"
+      - name: Plan grouped original game-main CRT and imported-service waves
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_dependency_wave_planner.py \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-runtime-service-matrix.json" \
+            "$RUNNER_TEMP/initial-wave-plan/original-va-native-link-plan.json" \
+            "$RUNNER_TEMP/initial-wave-plan"
+          test -s "$RUNNER_TEMP/initial-wave-plan/startup-dependency-batches.json"
+          cat "$RUNNER_TEMP/initial-wave-plan/startup-dependency-batches.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original closed leafs in scheduled waves against x64 host and ARM64
+        run: |
+          set -euo pipefail
+          timeout 900s python scripts/mxbikes_verified_leaf_autolink.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output" \
+            --whole-game-map "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            --wave-batches "$RUNNER_TEMP/initial-wave-plan/startup-dependency-batches.json"
+          test -s "$RUNNER_TEMP/whole-map-output/verified-leaf-registrations.json"
+          test -s "$RUNNER_TEMP/whole-map-output/wave-native-execution.json"
+          cat "$RUNNER_TEMP/whole-map-output/verified-leaf-auto-link.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/whole-map-output/wave-native-execution.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: First startup execution attempt - original x64 and native ARM64 hard launch gate
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_first_launch_probe.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-leaf-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/first-launch-startup-probe.json"
+          cat "$RUNNER_TEMP/whole-map-output/first-launch-startup-probe.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differential-verify complete original native caller-to-callee clusters
+        run: |
+          set -euo pipefail
+          timeout 700s python scripts/mxbikes_joined_direct_batch.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-leaf-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output" \
+            --waves "$RUNNER_TEMP/initial-wave-plan/startup-dependency-batches.json"
+          test -s "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json"
+          cat "$RUNNER_TEMP/whole-map-output/joined-call-batch.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Translate and execute complete original nested Win64 caller to callee to RET families
+        run: |
+          set -euo pipefail
+          timeout 560s python scripts/mxbikes_nested_native_wave.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/nested-native-full-call-wave.json"
+          test -s "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json"
+          cat "$RUNNER_TEMP/whole-map-output/nested-native-full-call-wave.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Recover original multi-basic-block CFGs and verify complete native ARM64 return paths
+        run: |
+          set -euo pipefail
+          timeout 650s python scripts/mxbikes_cfg_full_native_wave.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/full-native-cfg-wave.json"
+          test -s "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json"
+          cat "$RUNNER_TEMP/whole-map-output/full-native-cfg-wave.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Complete original unwindless direct-CALL targets with native ARM64 differential
+        run: |
+          set -euo pipefail
+          timeout 750s python scripts/mxbikes_unwindless_native_wave.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/unwindless-original-native-wave.json"
+          cat "$RUNNER_TEMP/whole-map-output/unwindless-original-native-wave.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Re-link authentic native caller chains using newly verified unwindless leaves
+        run: |
+          set -euo pipefail
+          timeout 560s python scripts/mxbikes_nested_native_wave.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output" --reuse-unwindless
+          test -s "$RUNNER_TEMP/whole-map-output/nested-native-full-call-wave-second.json"
+          cat "$RUNNER_TEMP/whole-map-output/nested-native-full-call-wave-second.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate bounded authentic original CALL edges against native ARM64 leaves
+        run: |
+          set -euo pipefail
+          timeout 700s python scripts/mxbikes_native_callsite_batch.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-leaf-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output" \
+            --waves "$RUNNER_TEMP/initial-wave-plan/startup-dependency-batches.json"
+          test -s "$RUNNER_TEMP/whole-map-output/verified-original-callsite-edges.json"
+          cat "$RUNNER_TEMP/whole-map-output/verified-original-callsite-edges.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Audit original Win64 PE unwind frames against executed x64 caller prologues
+        run: |
+          set -euo pipefail
+          timeout 300s python scripts/mxbikes_win64_unwind_frame.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/original-win64-prologue-audit.json"
+          cat "$RUNNER_TEMP/whole-map-output/original-win64-prologue-audit.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trace actual Win64 entry prologues to first native-verified CALL sites
+        run: |
+          set -euo pipefail
+          timeout 300s python scripts/mxbikes_parent_call_frontier.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/original-entry-to-call-audit.json"
+          cat "$RUNNER_TEMP/whole-map-output/original-entry-to-call-audit.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute every verified-leaf parent under batched original x64 branch fixtures
+        run: |
+          set -euo pipefail
+          timeout 360s python scripts/mxbikes_parent_batch_frontier.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/original-parent-firstcall-batch.json"
+          cat "$RUNNER_TEMP/whole-map-output/original-parent-firstcall-batch.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Run prioritized bulk original x64 first-CALL reconnaissance for up to 384 parents
+        run: |
+          set -euo pipefail
+          timeout 420s python scripts/mxbikes_bulk_firstcall_triage.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/bulk-original-firstcall-triage.json"
+          cat "$RUNNER_TEMP/whole-map-output/bulk-original-firstcall-triage.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Compile original caller prefix waves and differential-test x64 host versus native ARM64
+        run: |
+          set -euo pipefail
+          timeout 420s python scripts/mxbikes_native_prefix_wave.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/native-parent-prefix-wave.json"
+          cat "$RUNNER_TEMP/whole-map-output/native-parent-prefix-wave.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Sweep every original function and compile complete supported Win64 bodies to ARM64
+        run: |
+          set -euo pipefail
+          timeout 560s python scripts/mxbikes_whole_function_factory.py \
+            "$RUNNER_TEMP/whole-map-input/mxbikes.exe" \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/verified-leaf-registrations.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/whole-function-native-factory.json"
+          cat "$RUNNER_TEMP/whole-map-output/whole-function-native-factory.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Rebuild verified native linker plan from actual ARM64 differential evidence
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_native_link_plan.py \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output" \
+            --verified-symbols "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json"
+          cat "$RUNNER_TEMP/whole-map-output/original-va-native-link-plan.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Replan remaining dependency waves excluding the now-verified native leafs
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_dependency_wave_planner.py \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-runtime-service-matrix.json" \
+            "$RUNNER_TEMP/whole-map-output/original-va-native-link-plan.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/startup-dependency-batches.json"
+          cat "$RUNNER_TEMP/whole-map-output/startup-dependency-batches.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Measure real startup-chain reachability and unresolved dependencies
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_startup_chain_coverage.py "$RUNNER_TEMP/whole-map-output/whole-game-map.json" "$RUNNER_TEMP/whole-map-output/verified-batch-registrations.json" "$RUNNER_TEMP/whole-map-output" --known-proofs scripts/mxbikes_known_startup_proofs.json --import-graph "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.json"
+          test -s "$RUNNER_TEMP/whole-map-output/startup-chain-coverage.json"
+          cat "$RUNNER_TEMP/whole-map-output/startup-chain-coverage.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Produce authoritative launch-first blocker ledger from same-run evidence
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_launch_frontier.py \
+            "$RUNNER_TEMP/whole-map-output/whole-game-map.json" \
+            "$RUNNER_TEMP/whole-map-output/original-va-native-link-plan.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-import-thunk-edges.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-runtime-service-matrix.json" \
+            "$RUNNER_TEMP/whole-map-output/first-launch-startup-probe.json" \
+            "$RUNNER_TEMP/whole-map-output/startup-chain-coverage.json" \
+            "$RUNNER_TEMP/whole-map-output"
+          test -s "$RUNNER_TEMP/whole-map-output/launch-first-blocker-ledger.json"
+          cat "$RUNNER_TEMP/whole-map-output/launch-first-blocker-ledger.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive analysis metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-whole-game-translation-map
+          path: ${{ runner.temp }}/whole-map-output/
+          retention-days: 14
+          if-no-files-found: warn

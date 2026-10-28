@@ -1,0 +1,395 @@
+name: MX Bikes - current native startup frontier
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-startup-native-fast.yml"
+      - "scripts/mxbikes_main_callee_*.py"
+      - "scripts/mxbikes_main_postreturn_filename_native.py"
+      - "scripts/mxbikes_main_boot_helper_native.py"
+      - "scripts/mxbikes_main_boot_strcpy_native.py"
+      - "scripts/mxbikes_main_boot_first_jcc_native.py"
+      - "scripts/mxbikes_main_boot_filename_loop_native.py"
+      - "scripts/mxbikes_main_boot_cwd_native.py"
+      - "scripts/mxbikes_main_boot_next_call_native.py"
+      - "scripts/mxbikes_main_boot_init_callee_native.py"
+      - "scripts/mxbikes_init_nested_wave.py"
+      - "scripts/mxbikes_init_nested_jle_native.py"
+      - "scripts/mxbikes_init_child_successor_wave.py"
+      - "scripts/mxbikes_init_child_successors_native.py"
+      - "scripts/mxbikes_init_child_return_probe.py"
+      - "scripts/mxbikes_init_child_return_native.py"
+      - "scripts/mxbikes_next_outer_init_wave.py"
+      - "scripts/mxbikes_next_outer_init_native.py"
+      - "scripts/mxbikes_next_nested_dependency_wave.py"
+      - "scripts/mxbikes_steam_fopen_result_probe.py"
+      - "scripts/mxbikes_steam_fopen_status_native.py"
+      - "scripts/mxbikes_owned_file_crt.py"
+      - "scripts/mxbikes_startup_batch_runner.py"
+      - "scripts/mxbikes_startup_fast_blocks.py"
+      - "scripts/mxbikes_crc_loop_probe.py"
+      - "scripts/mxbikes_crc_native.py"
+      - "scripts/mxbikes_crc_cluster_native.py"
+      - "scripts/mxbikes_original_crc_guest.h"
+      - "scripts/mxbikes_crc_cluster_bridge.h"
+      - "scripts/mxbikes_native_file_crc_chain.h"
+      - "scripts/mxbikes_native_file_crc_chain.py"
+      - "scripts/mxbikes_native_file_crc_single.py"
+      - "scripts/mxbikes_postseek_original_cfg.py"
+      - "scripts/mxbikes_original_postseek_native.py"
+      - "scripts/mxbikes_original_postseek_native.h"
+      - "scripts/mxbikes_original_postseek_full_native.py"
+      - "scripts/mxbikes_postclose_steam_boundary.py"
+      - "scripts/mxbikes_post_steam_static_successors.py"
+      - "scripts/mxbikes_post_steam_indirect_provenance.py"
+      - "scripts/mxbikes_main_postinit_dependency_wave.py"
+      - "scripts/mxbikes_game_nested_return_batch.py"
+      - "scripts/mxbikes_original_game_graphics_handoff.py"
+      - "tests/test_mxbikes_original_game_graphics_handoff.py"
+      - "scripts/mxbikes_startup_fast_blocks.py"
+      - "scripts/mxbikes_startup_batch_runner.py"
+      - "tests/test_mxbikes_game_nested_return_batch.py"
+      - "tests/test_mxbikes_main_postinit_dependency_wave.py"
+      - "tests/test_mxbikes_post_steam_indirect_provenance.py"
+      - "tests/test_mxbikes_post_steam_static_successors.py"
+      - "scripts/mxbikes_original_steam_frontier_native.py"
+      - "scripts/mxbikes_fused_startup_native.py"
+      - "scripts/mxbikes_steam_platform_boundary.h"
+      - "tests/test_mxbikes_steam_call_contract.py"
+      - "scripts/mxbikes_platform_import_audit.py"
+      - "tests/test_mxbikes_main_boot_next_call_native.py"
+      - "tests/test_mxbikes_main_boot_init_callee_native.py"
+      - "tests/test_mxbikes_init_nested_wave.py"
+      - "tests/test_mxbikes_init_nested_jle_native.py"
+      - "tests/test_mxbikes_init_child_successors_native.py"
+      - "tests/test_mxbikes_next_outer_init_native.py"
+      - "tests/test_mxbikes_owned_file_crt.py"
+      - "tests/test_mxbikes_main_boot_cwd_native.py"
+      - "tests/test_mxbikes_main_boot_filename_loop_native.py"
+      - "tests/test_mxbikes_main_boot_strcpy_native.py"
+      - "tests/test_mxbikes_main_boot_helper_native.py"
+      - "tests/test_mxbikes_main_postreturn_filename_native.py"
+      - "scripts/mxbikes_native_multifrontier.h"
+      - "tests/test_mxbikes_main_callee_*.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mx-native-current-frontier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  latest-native-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c429049c3f01305a9e6fc7ec810c1b44204f679f
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install original x64 emulator and AArch64 native toolchain
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+          if command -v clang >/dev/null 2>&1 && command -v ld.lld >/dev/null 2>&1; then
+            echo "Using installed Clang/LLD instead of updating apt metadata."
+            clang --version | head -n 1
+            ld.lld --version
+          else
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends clang lld
+          fi
+      - name: Fail-closed synthetic identity and linker regressions
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_mxbikes_steam_call_contract.py -v
+          python -m unittest discover -s tests -p test_mxbikes_post_steam_static_successors.py -v
+          python -m unittest discover -s tests -p test_mxbikes_post_steam_indirect_provenance.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_postinit_dependency_wave.py -v
+          python -m unittest discover -s tests -p test_mxbikes_game_nested_return_batch.py -v
+          python -m unittest discover -s tests -p test_mxbikes_original_game_graphics_handoff.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_second_jge_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_third_jle_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_branch_pair_map.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_branch_pair_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_followup_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_quote_jne_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_arg_group_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_next_pair_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_three_branches_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_parser_loop_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_tail_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_postreturn_filename_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_boot_helper_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_boot_strcpy_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_boot_filename_loop_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_boot_cwd_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_boot_next_call_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_boot_init_callee_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_init_nested_wave.py -v
+          python -m unittest discover -s tests -p test_mxbikes_init_nested_jle_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_init_child_successors_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_next_outer_init_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_owned_file_crt.py -v
+      - name: Retrieve original owned executable privately and enforce SHA
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxb-second" "$RUNNER_TEMP/mxb-second-report"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" --pattern Game.zip --dir "$RUNNER_TEMP/mxb-second"
+          python - <<'PY'
+          import hashlib,json,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxb-second"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              matches=[x for x in z.infolist()
+                       if not x.is_dir() and
+                       pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Missing or oversized original owned game executable")
+              with z.open(matches[0]) as inp,(root/"mxbikes.exe").open("wb") as out:
+                  shutil.copyfileobj(inp,out)
+              dlls=[i for i in z.infolist() if not i.is_dir() and
+                    pathlib.PurePosixPath(i.filename.replace("\\","/")).name.lower()=="steam_api64.dll"]
+              manifest={
+                  "steam_api64_dll_present":len(dlls)==1,
+                  "matching_owned_dll_count":len(dlls),
+                  "owned_dll_size_bytes":dlls[0].file_size if len(dlls)==1 else None,
+                  "source":"SHA-verified private owned Game.zip manifest; no original bytes exported"
+              }
+              report=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxb-second-report"
+              (report/"owned-steam-file-manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
+              print("Owned steam_api64.dll entry present:",manifest["steam_api64_dll_present"])
+              if len(dlls)!=1 or not 0<dlls[0].file_size<=64*1024**2:
+                  raise RuntimeError("Need exactly one bounded original Steam DLL for safe read-only service")
+              with z.open(dlls[0]) as inp,(root/"steam_api64.dll").open("wb") as out:
+                  shutil.copyfileobj(inp,out)
+          expected="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!=expected:
+              raise RuntimeError("Original SHA mismatch")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Execute original game-main post-CALL WinAPI boundary on native ARM64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_steam_fopen_status_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-native-steam-fopen-status.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-native-steam-fopen-status.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Batch-run real original x64 code through owned read-only CRT services
+        run: |
+          set -euo pipefail
+          timeout 120s python scripts/mxbikes_startup_batch_runner.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/startup-batch-runtime.json"
+          cat "$RUNNER_TEMP/mxb-second-report/startup-batch-runtime.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Accelerated original game block execution until unsupported service or bounded stop
+        run: |
+          set -euo pipefail
+          timeout 120s python scripts/mxbikes_startup_fast_blocks.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/startup-fast-blocks.json"
+          cat "$RUNNER_TEMP/mxb-second-report/startup-fast-blocks.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Map real original repeated byte checksum and gather x64 differential reference
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_crc_loop_probe.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-hot-loop-verified.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-hot-loop-verified.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Compare full SHA-verified original CRC processing under x64 host and executed AArch64
+        run: |
+          set -euo pipefail
+          timeout 180s python scripts/mxbikes_crc_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-crc-native-arm64.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-crc-native-arm64.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute same CRC via native Win64 guest-state and memory bridge against original x64
+        run: |
+          set -euo pipefail
+          timeout 180s python scripts/mxbikes_crc_cluster_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-crc-guest-bridge.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-crc-guest-bridge.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate native read-only file stream and checksum
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_native_file_crc_chain.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/native-file-crc-chain.json"
+          cat "$RUNNER_TEMP/mxb-second-report/native-file-crc-chain.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify one uninterrupted native file service and original checksum run
+        run: |
+          set -euo pipefail
+          timeout 150s python scripts/mxbikes_native_file_crc_single.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/native-file-crc-single-run.json"
+          cat "$RUNNER_TEMP/mxb-second-report/native-file-crc-single-run.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify true original post-fseek Win64 CFG to first CRC checkpoint
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_postseek_original_cfg.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-file-postseek-cfg.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-file-postseek-cfg.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differential-test actual original postseek CALL and branch CFG on AArch64
+        run: |
+          set -euo pipefail
+          timeout 160s python scripts/mxbikes_original_postseek_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-postseek-native-cfg.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-postseek-native-cfg.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute all original fread CRC branch backedges through fclose on native ARM64
+        run: |
+          set -euo pipefail
+          timeout 180s python scripts/mxbikes_original_postseek_full_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-postseek-complete-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-postseek-complete-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Map exact original guest control flow after fclose to Steam boundary
+        run: |
+          set -euo pipefail
+          timeout 120s python scripts/mxbikes_postclose_steam_boundary.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-postclose-steam-boundary.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-postclose-steam-boundary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original postclose CRC gate up to unsupported Steam CALL on AArch64
+        run: |
+          set -euo pipefail
+          timeout 180s python scripts/mxbikes_original_steam_frontier_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/native-original-steam-call-frontier.json"
+          cat "$RUNNER_TEMP/mxb-second-report/native-original-steam-call-frontier.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute fused original game startup through entire native CRC to Steam boundary
+        run: |
+          set -euo pipefail
+          timeout 210s python scripts/mxbikes_fused_startup_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/fused-native-entry-to-steam.json"
+          cat "$RUNNER_TEMP/mxb-second-report/fused-native-entry-to-steam.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Batch-decode possible original control flow after Steam returns (NO Steam execution)
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_post_steam_static_successors.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-post-steam-static-successors.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-post-steam-static-successors.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trace original post-Steam indirect CALL provenance (static, no Steam dispatch)
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_post_steam_indirect_provenance.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/post-steam-indirect-provenance.json"
+          cat "$RUNNER_TEMP/mxb-second-report/post-steam-indirect-provenance.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inventory real Steam Windows graphics and input dependencies
+        run: |
+          set -euo pipefail
+          timeout 60s python scripts/mxbikes_platform_import_audit.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-platform-imports.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-platform-imports.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Map actual nested initializer dependency wave and x64 first-control execution
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_init_nested_wave.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/initializer-nested-wave.json"
+          cat "$RUNNER_TEMP/mxb-second-report/initializer-nested-wave.md" >> "$GITHUB_STEP_SUMMARY"
+          timeout 90s python scripts/mxbikes_init_child_successor_wave.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/native-child-successor-wave.json"
+          cat "$RUNNER_TEMP/mxb-second-report/native-child-successor-wave.md" >> "$GITHUB_STEP_SUMMARY"
+          timeout 90s python scripts/mxbikes_init_child_return_probe.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/nested-child-return-original-x64.json"
+          cat "$RUNNER_TEMP/mxb-second-report/nested-child-return-original-x64.md" >> "$GITHUB_STEP_SUMMARY"
+          timeout 90s python scripts/mxbikes_next_outer_init_wave.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/next-outer-init-callee-wave.json"
+          cat "$RUNNER_TEMP/mxb-second-report/next-outer-init-callee-wave.md" >> "$GITHUB_STEP_SUMMARY"
+          timeout 90s python scripts/mxbikes_next_nested_dependency_wave.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/next-nested-dependency-wave.json"
+          cat "$RUNNER_TEMP/mxb-second-report/next-nested-dependency-wave.md" >> "$GITHUB_STEP_SUMMARY"
+          timeout 90s python scripts/mxbikes_steam_fopen_result_probe.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/steam-fopen-result-branches.json"
+          cat "$RUNNER_TEMP/mxb-second-report/steam-fopen-result-branches.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Batch-map post-import main startup and next helper dependencies
+        run: |
+          set -euo pipefail
+          timeout 90s python scripts/mxbikes_post_filename_probe.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          timeout 90s python scripts/mxbikes_main_after_filename_map.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/post-filename-control.json"
+          test -s "$RUNNER_TEMP/mxb-second-report/post-filename-main-map.json"
+          cat "$RUNNER_TEMP/mxb-second-report/post-filename-control.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/mxb-second-report/post-filename-main-map.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Rank genuine game-main internal callees after hypothetical initializer return
+        run: |
+          set -euo pipefail
+          timeout 100s python scripts/mxbikes_main_postinit_dependency_wave.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/game-main-postinit-dependency-wave.json"
+          cat "$RUNNER_TEMP/mxb-second-report/game-main-postinit-dependency-wave.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Batch trace original nested game-initializer parent and main return dependencies
+        run: |
+          set -euo pipefail
+          timeout 100s python scripts/mxbikes_game_nested_return_batch.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/game-nested-return-batch.json"
+          cat "$RUNNER_TEMP/mxb-second-report/game-nested-return-batch.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute SHA-authenticated ORIGINAL guest graphics handoff (no synthetic geometry)
+        run: |
+          set -euo pipefail
+          timeout 100s python scripts/mxbikes_original_game_graphics_handoff.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" \
+            "$RUNNER_TEMP/mxb-second/steam_api64.dll" \
+            "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/original-game-to-metal-provenance.json"
+          cat "$RUNNER_TEMP/mxb-second-report/original-game-to-metal-provenance.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive metadata only without original or translated bytes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxb-native-current-frontier-metadata
+          path: ${{ runner.temp }}/mxb-second-report/
+          retention-days: 14
+          if-no-files-found: warn

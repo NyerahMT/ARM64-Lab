@@ -1,0 +1,123 @@
+name: MX Bikes - revng PE lifting feasibility
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-revng-feasibility.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-revng-feasibility
+  cancel-in-progress: false
+
+jobs:
+  revng:
+    name: Check mature PE/COFF lifting backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Set up temporary private input and metadata output
+        run: |
+          mkdir -p "$RUNNER_TEMP/mxbikes-revng" "$RUNNER_TEMP/mxbikes-revng-results"
+          df -h / | tee "$RUNNER_TEMP/mxbikes-revng-results/storage-before.txt"
+
+      - name: Download exact owned Windows PE64 executable
+        run: |
+          set -euo pipefail
+          gh release download Mxbikes1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip \
+            --dir "$RUNNER_TEMP/mxbikes-revng"
+          python - <<'PY'
+          import os,pathlib,zipfile,shutil
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-revng"
+          with zipfile.ZipFile(p/"Game.zip") as archive:
+              matches=[m for m in archive.infolist() if not m.is_dir() and pathlib.PurePosixPath(m.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Unexpected executable count or size")
+              with archive.open(matches[0]) as src,(p/"mxbikes.exe").open("wb") as dest:
+                  shutil.copyfileobj(src,dest)
+          PY
+          echo '4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6  '"$RUNNER_TEMP/mxbikes-revng/mxbikes.exe" | sha256sum -c -
+
+      - name: Pull official rev.ng Linux x86-64 distribution
+        id: image
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 480s docker pull revng/revng:latest > "$RUNNER_TEMP/mxbikes-revng/pull.log" 2>&1
+          tail -n 8 "$RUNNER_TEMP/mxbikes-revng/pull.log"
+          docker image inspect revng/revng:latest --format '{{.Id}} {{.Size}}' \
+            > "$RUNNER_TEMP/mxbikes-revng-results/revng-image.txt"
+
+      - name: Probe PE/COFF analysis on the real input (no output sharing)
+        id: probe
+        if: steps.image.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          timeout 420s docker run --rm --network none --memory 6g --cpus 2 \
+            -v "$RUNNER_TEMP/mxbikes-revng:/work" -w /work \
+            revng/revng:latest \
+            revng quick analyze /work/mxbikes.exe \
+              --analyses parse-binary -o /work/revng-model.yml \
+            > "$RUNNER_TEMP/mxbikes-revng/revng-output.log" 2>&1
+          test -s "$RUNNER_TEMP/mxbikes-revng/revng-model.yml"
+
+      - name: Generate bounded diagnostic summary only
+        if: always()
+        env:
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+        run: |
+          python - <<'PY'
+          import os,pathlib,json
+          base=pathlib.Path(os.environ["RUNNER_TEMP"])
+          results=base/"mxbikes-revng-results"
+          model=base/"mxbikes-revng"/"revng-model.yml"
+          status={
+              "tool":"rev.ng Docker latest (version/digest not yet frozen)",
+              "image_pull_outcome":os.environ["IMAGE_OUTCOME"],
+              "pe_parse_outcome":os.environ["PROBE_OUTCOME"],
+              "model_produced":model.is_file() and model.stat().st_size>0,
+              "model_bytes":model.stat().st_size if model.exists() else 0,
+              "input":"verified user-supplied x86-64 Windows PE",
+              "no_original_data_published":True,
+              "warnings":[
+                  "Parse-binary only tests basic recognition and does not prove LLVM translation.",
+                  "Even LLVM lifting cannot automatically make Windows services or graphics work on iOS.",
+                  "This feasibility result is not evidence of a bootable or playable game."
+              ]
+          }
+          (results/"revng-feasibility.json").write_text(json.dumps(status,indent=2)+"\n")
+          summary="# MX Bikes rev.ng PE feasibility\n\n"
+          summary+=f"- Docker pull: {status['image_pull_outcome']}\n"
+          summary+=f"- PE/COFF parse stage: {status['pe_parse_outcome']}\n"
+          summary+=f"- Model generated: {status['model_produced']}\n"
+          summary+="\nNo original binary, lifted LLVM IR, or decompiled source is published.\n"
+          (results/"revng-feasibility.md").write_text(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as stream:stream.write(summary)
+          print(summary)
+          PY
+
+      - name: Upload metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-revng-feasibility
+          path: ${{ runner.temp }}/mxbikes-revng-results/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Enforce truthful feasibility status
+        if: always()
+        env:
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+        run: |
+          test "$IMAGE_OUTCOME" = success && test "$PROBE_OUTCOME" = success

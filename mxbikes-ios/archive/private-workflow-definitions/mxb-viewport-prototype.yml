@@ -1,0 +1,158 @@
+name: MX Bikes - native iOS Metal viewport prototype
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxb-viewport-prototype.yml"
+      - "runtime/mxb_gl_surface.*"
+      - "runtime/mxb_gl_win64_abi.*"
+      - "runtime/mxb_gl_indexed_probe.*"
+      - "runtime/mxb_gl_texture.*"
+      - "runtime/mxb_gl_texture_probe.*"
+      - "tests/mxb_gl_texture_batch_smoke.c"
+      - "tests/mxb_gl_indexed_fixture_smoke.c"
+      - "tests/mxb_gl_win64_indexed_guest_test.py"
+      - "tests/mxb_gl_win64_abi_smoke.c"
+      - "tests/mxb_gl_win64_unicorn_import_test.py"
+      - "tests/mxb_gl_surface_smoke.c"
+      - "ios/MXBViewportPrototype/**"
+      - "project.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native-cpu-render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run actual host C geometry and transform smoke test
+        run: |
+          set -euo pipefail
+          cc -O2 -std=c11 -Wall -Wextra -Werror \
+            -Iruntime runtime/mxb_gl_surface.c tests/mxb_gl_surface_smoke.c \
+            -lm -o /tmp/mxb-render-smoke
+          /tmp/mxb-render-smoke
+          cc -O2 -std=c11 -Wall -Wextra -Werror \
+            -Iruntime runtime/mxb_gl_surface.c runtime/mxb_gl_win64_abi.c \
+            tests/mxb_gl_win64_abi_smoke.c -lm -o /tmp/mxb-gl-win64-smoke
+          /tmp/mxb-gl-win64-smoke
+          cc -O2 -std=c11 -Wall -Wextra -Werror \
+            -Iruntime runtime/mxb_gl_surface.c runtime/mxb_gl_win64_abi.c \
+            runtime/mxb_gl_indexed_probe.c tests/mxb_gl_indexed_fixture_smoke.c \
+            -lm -o /tmp/mxb-gl-indexed-smoke
+          /tmp/mxb-gl-indexed-smoke
+          cc -O2 -std=c11 -Wall -Wextra -Werror \
+            -Iruntime runtime/mxb_gl_texture.c runtime/mxb_gl_texture_probe.c \
+            tests/mxb_gl_texture_batch_smoke.c -o /tmp/mxb-gl-texture-smoke
+          /tmp/mxb-gl-texture-smoke
+      - name: Execute real synthetic x64 CALL/RET to native Win64 GL importer
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'unicorn>=2,<3'
+          python tests/mxb_gl_win64_unicorn_import_test.py
+          python tests/mxb_gl_win64_indexed_guest_test.py
+          echo 'Actual synthetic Win64 x64 instructions verified through native guest ABI importer (not original MX Bikes)' >> "$GITHUB_STEP_SUMMARY"
+      - name: Compile native AArch64 OpenGL command bridge
+        run: |
+          set -euo pipefail
+          clang --target=aarch64-none-elf -std=c11 -O2 \
+            -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -Iruntime -c runtime/mxb_gl_surface.c \
+            -o /tmp/mxb-gl-surface-aarch64.o
+          readelf -h /tmp/mxb-gl-surface-aarch64.o | grep AArch64
+          clang --target=aarch64-none-elf -std=c11 -O2 \
+            -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -Iruntime -c runtime/mxb_gl_win64_abi.c \
+            -o /tmp/mxb-gl-win64-aarch64.o
+          readelf -h /tmp/mxb-gl-win64-aarch64.o | grep AArch64
+          clang --target=aarch64-none-elf -std=c11 -O2 \
+            -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -Iruntime -c runtime/mxb_gl_indexed_probe.c \
+            -o /tmp/mxb-gl-indexed-probe-aarch64.o
+          readelf -h /tmp/mxb-gl-indexed-probe-aarch64.o | grep AArch64
+          clang --target=aarch64-none-elf -std=c11 -O2 \
+            -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -Iruntime -c runtime/mxb_gl_texture.c \
+            -o /tmp/mxb-gl-texture-aarch64.o
+          clang --target=aarch64-none-elf -std=c11 -O2 \
+            -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+            -Iruntime -c runtime/mxb_gl_texture_probe.c \
+            -o /tmp/mxb-gl-texture-probe-aarch64.o
+          readelf -h /tmp/mxb-gl-texture-aarch64.o | grep AArch64
+          readelf -h /tmp/mxb-gl-texture-probe-aarch64.o | grep AArch64
+          echo 'Native C graphics, Win64 pointer+indexed draws tested on host and compiled AArch64; no original game graphics invoked' >> "$GITHUB_STEP_SUMMARY"
+
+  ios-viewport-build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate actual iOS application project
+        run: |
+          set -euo pipefail
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate --spec project.yml
+      - name: Compile iPhone Simulator Metal app unsigned
+        run: |
+          set -euo pipefail
+          xcodebuild -project MXBViewportPrototype.xcodeproj \
+            -scheme MXBViewportPrototype -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/mxb-view-derivation" \
+            CODE_SIGNING_ALLOWED=NO build
+          test -d "$RUNNER_TEMP/mxb-view-derivation/Build/Products/Debug-iphonesimulator/MXBViewportPrototype.app"
+          echo 'iOS Metal renderer prototype built; MX Bikes game engine is NOT launched' >> "$GITHUB_STEP_SUMMARY"
+      - name: Launch native Metal app in an iPhone Simulator
+        run: |
+          set -euo pipefail
+          SIM_ID="$(xcrun simctl list devices available --json | python3 -c \
+            'import json,sys; j=json.load(sys.stdin); print(next((d["udid"] for group in j["devices"].values() for d in group if "iPhone" in d["name"] and d["state"] in ("Shutdown","Booted")), ""))')"
+          test -n "$SIM_ID"
+          xcrun simctl boot "$SIM_ID" || true
+          xcrun simctl bootstatus "$SIM_ID" -b
+          APP="$RUNNER_TEMP/mxb-view-derivation/Build/Products/Debug-iphonesimulator/MXBViewportPrototype.app"
+          xcrun simctl install "$SIM_ID" "$APP"
+          xcrun simctl launch "$SIM_ID" com.nyerahworks.mxbviewportprototype --renderer-probe-only
+          sleep 3
+          xcrun simctl io "$SIM_ID" screenshot "$RUNNER_TEMP/mxb-native-metal-prototype.png"
+          test -s "$RUNNER_TEMP/mxb-native-metal-prototype.png"
+          python3 -m venv "$RUNNER_TEMP/mxb-pixel-python"
+          "$RUNNER_TEMP/mxb-pixel-python/bin/pip" install --disable-pip-version-check --quiet pillow
+          "$RUNNER_TEMP/mxb-pixel-python/bin/python" - "$RUNNER_TEMP/mxb-native-metal-prototype.png" <<'PY'
+          from PIL import Image
+          import sys
+          im=Image.open(sys.argv[1]).convert("RGB")
+          w,h=im.size
+          # Prove synthetic CPU vertices reached Metal fragment output.
+          warm=0
+          for y in range(h//5,4*h//5,max(1,h//80)):
+              for x in range(w//5,4*w//5,max(1,w//80)):
+                  r,g,b=im.getpixel((x,y))
+                  if r>=145 and r>=g*2 and g>b*1.3:
+                      warm+=1
+          green=0
+          for y in range(h//5,4*h//5,max(1,h//80)):
+              for x in range(w//5,4*w//5,max(1,w//80)):
+                  r,g,b=im.getpixel((x,y))
+                  if g>35 and g>r*1.5 and g>b*1.5:
+                      green+=1
+          print("GPU texture sample pixels: orange",warm,"green",green)
+          if warm<20 or green<20:
+              raise SystemExit("No independently verified dual-color textured triangle pixels")
+          PY
+          echo 'Metal app launched, simulator screenshot captured; original game engine is not connected' >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive simulator proof image (prototype only)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mxb-native-renderer-prototype-simulator
+          path: ${{ runner.temp }}/mxb-native-metal-prototype.png
+          if-no-files-found: warn
+          retention-days: 7

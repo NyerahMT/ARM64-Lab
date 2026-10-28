@@ -1,0 +1,108 @@
+name: MX Bikes - independent Ghidra linked-call validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-ghidra-linked-verify.yml"
+      - "scripts/ghidra/MxLinkedBodiesVerify.java"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-ghidra-linked-verify
+  cancel-in-progress: false
+
+jobs:
+  linked-bodies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GHIDRA_HEADLESS_MAXMEM: 3G
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/cache@v4
+        id: ghidra-cache
+        with:
+          path: ${{ runner.tool_cache }}/ghidra_12.1.4_PUBLIC
+          key: ghidra-12.1.4-public-linux-fixed-sha256-v1
+      - name: Fetch SHA-verified Ghidra release on cache miss
+        if: steps.ghidra-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ghidra-archive" "$RUNNER_TOOL_CACHE"
+          gh release download Ghidra_12.1.4_build \
+            --repo NationalSecurityAgency/ghidra \
+            --pattern 'ghidra_12.1.4_PUBLIC_20260921.zip' \
+            --dir "$RUNNER_TEMP/ghidra-archive"
+          echo "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db  $RUNNER_TEMP/ghidra-archive/ghidra_12.1.4_PUBLIC_20260921.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/ghidra-archive/ghidra_12.1.4_PUBLIC_20260921.zip" -d "$RUNNER_TOOL_CACHE"
+      - name: Extract exact original executable in private runner
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/linked-original" "$RUNNER_TEMP/linked-output" "$RUNNER_TEMP/linked-ghidra"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/linked-original"
+          python - <<'PY'
+          import os,pathlib,zipfile,shutil,hashlib
+          folder=pathlib.Path(os.environ["RUNNER_TEMP"])/"linked-original"
+          with zipfile.ZipFile(folder/"Game.zip") as archive:
+              matches=[i for i in archive.infolist() if not i.is_dir()
+                and pathlib.PurePosixPath(i.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Original executable missing or out of bounds")
+              with archive.open(matches[0]) as src,(folder/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          digest=hashlib.sha256((folder/"mxbikes.exe").read_bytes()).hexdigest()
+          if digest!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Original EXE digest mismatch")
+          (folder/"Game.zip").unlink()
+          PY
+      - name: Independent Ghidra FunctionManager examination
+        run: |
+          set -euo pipefail
+          "$RUNNER_TOOL_CACHE/ghidra_12.1.4_PUBLIC/support/analyzeHeadless" \
+            "$RUNNER_TEMP/linked-ghidra" MXBikesLinkedVerify \
+            -import "$RUNNER_TEMP/linked-original/mxbikes.exe" \
+            -analysisTimeoutPerFile 360 -max-cpu 2 \
+            -scriptPath "$GITHUB_WORKSPACE/scripts/ghidra" \
+            -postScript MxLinkedBodiesVerify.java "$RUNNER_TEMP/linked-output/linked-function-boundaries.json" \
+            -deleteProject \
+            2>&1 | tail -n 80
+          test -s "$RUNNER_TEMP/linked-output/linked-function-boundaries.json"
+      - name: Report independently recovered function metadata
+        run: |
+          python - <<'PY'
+          import os,pathlib,json
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"linked-output"
+          result=json.loads((root/"linked-function-boundaries.json").read_text())
+          lines=["# Independent original MX Bikes linked-function Ghidra verification","",
+                 "- Original PE revision SHA verified",
+                 "- Ghidra function entrypoints at all three RVAs: "+str(result["all_three_exact_function_entries"]),
+                 "- Original 6+6+12 instructions and unwind spans: "+str(result["all_three_instruction_ranges_match_pdata"]),
+                 "- Original two call edges to one shared callee: "+str(result["two_original_callers_directly_call_shared_callee"]),
+                 ""]
+          for body in result["code_bodies"]:
+              lines.append(f"- {body['requested_rva']}: exact entry={body['ghidra_exact_function_entry']}, instructions={body['ghidra_instruction_count']}, recovered end={body['recovered_exclusive_end']}, direct calls to shared callee={body['direct_calls_to_shared_callee']}")
+          lines+=["","This confirms or qualifies *static* boundary recovery, not iOS startup or native game engine execution.",""]
+          report="\n".join(lines)
+          (root/"linked-function-boundaries.md").write_text(report)
+          print(report)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as f:f.write(report)
+          PY
+      - name: Upload metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-ghidra-linked-boundaries
+          path: ${{ runner.temp }}/linked-output/
+          retention-days: 10
+          if-no-files-found: warn

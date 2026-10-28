@@ -1,0 +1,154 @@
+name: MX Bikes - actual native main second JGE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mx-main-second-jge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  second-jge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c429049c3f01305a9e6fc7ec810c1b44204f679f
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install original x64 emulator and AArch64 native toolchain
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends clang lld
+      - name: Fail-closed synthetic identity and linker regressions
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_second_jge_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_third_jle_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_branch_pair_map.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_branch_pair_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_followup_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_quote_jne_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_arg_group_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_next_pair_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_three_branches_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_parser_loop_native.py -v
+          python -m unittest discover -s tests -p test_mxbikes_main_callee_tail_native.py -v
+      - name: Retrieve original owned executable privately and enforce SHA
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxb-second" "$RUNNER_TEMP/mxb-second-report"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" --pattern Game.zip --dir "$RUNNER_TEMP/mxb-second"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxb-second"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              matches=[x for x in z.infolist()
+                       if not x.is_dir() and
+                       pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Missing or oversized original owned game executable")
+              with z.open(matches[0]) as inp,(root/"mxbikes.exe").open("wb") as out:
+                  shutil.copyfileobj(inp,out)
+          expected="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!=expected:
+              raise RuntimeError("Original SHA mismatch")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Execute original joined Win64 main second JGE on real AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_second_jge_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-main-second-jge-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-main-second-jge-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute both signed-byte original JLE successors on actual AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_third_jle_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-main-third-jle-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-main-third-jle-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trace BOTH third-JLE successor blocks from real original game main
+        run: |
+          set -euo pipefail
+          timeout 180s python scripts/mxbikes_main_callee_branch_pair_map.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/main-callee-both-successors.json"
+          cat "$RUNNER_TEMP/mxb-second-report/main-callee-both-successors.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differential-execute BOTH authenticated original callee successors on AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_branch_pair_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/main-callee-both-successors-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/main-callee-both-successors-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differential-execute original joined parser backedge and shared branch on AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_followup_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-callee-followup-aarch64.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-callee-followup-aarch64.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original joined x64 quote-JNE branches natively on ARM64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_quote_jne_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-quote-jne-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-quote-jne-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original callee quote and argv table stores natively on ARM64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_arg_group_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-argument-write-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-argument-write-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute both original argv parser JL and JE branches on native AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_next_pair_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-argv-next-branches-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-argv-next-branches-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute three grouped authentic x64 parser branches on native ARM64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_three_branches_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-parser-three-branches-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-parser-three-branches-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify original parser quote and unquoted scanner loops as joined AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_parser_loop_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-parser-loop-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-parser-loop-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute authenticated parser terminator JNE and original CALL RET on AArch64
+        run: |
+          set -euo pipefail
+          timeout 240s python scripts/mxbikes_main_callee_tail_native.py \
+            "$RUNNER_TEMP/mxb-second/mxbikes.exe" "$RUNNER_TEMP/mxb-second-report"
+          test -s "$RUNNER_TEMP/mxb-second-report/joined-parser-tail-native.json"
+          cat "$RUNNER_TEMP/mxb-second-report/joined-parser-tail-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive metadata only without original or translated bytes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mx-main-second-jge-native-metadata
+          path: ${{ runner.temp }}/mxb-second-report/
+          retention-days: 14
+          if-no-files-found: warn

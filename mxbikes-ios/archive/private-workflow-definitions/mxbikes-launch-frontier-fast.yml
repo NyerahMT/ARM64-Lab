@@ -1,0 +1,27 @@
+name: MX Bikes - launch metadata fast gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-launch-frontier-fast.yml"
+      - "scripts/mxbikes_launch_frontier.py"
+      - "tests/test_mxbikes_launch_frontier.py"
+
+permissions:
+  contents: read
+
+jobs:
+  launch-metadata:
+    name: Validate startup blockers without the original executable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pure-Python launch metadata and safety regression gate
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_mxbikes_launch_frontier.py -v
+          python -m py_compile scripts/mxbikes_launch_frontier.py

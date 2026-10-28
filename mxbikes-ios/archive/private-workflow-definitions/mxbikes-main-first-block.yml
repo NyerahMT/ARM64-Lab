@@ -1,0 +1,236 @@
+name: MX Bikes - original main first-block gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-main-first-block.yml"
+      - "scripts/mxbikes_main_first_block.py"
+      - "scripts/mxbikes_main_native_compare.py"
+      - "scripts/mxbikes_main_callee_branch_probe.py"
+      - "scripts/mxbikes_main_callee_native_branch.py"
+      - "scripts/mxbikes_main_joined_callee_native.py"
+      - "scripts/mxbikes_main_successor_probe.py"
+      - "scripts/mxbikes_main_filename_native.py"
+      - "scripts/mxbikes_post_filename_probe.py"
+      - "scripts/mxbikes_next_internal_helper_probe.py"
+      - "scripts/mxbikes_filename_helper_native.py"
+      - "scripts/mxbikes_nested_callee_probe.py"
+      - "scripts/mxbikes_msvcr90_strcpy_native.py"
+      - "scripts/mxbikes_joined_strcpy_native.py"
+      - "scripts/mxbikes_post_strcpy_probe.py"
+      - "scripts/mxbikes_post_strcpy_native.py"
+      - "scripts/mxbikes_after_strcpy_jump_probe.py"
+      - "scripts/mxbikes_after_strcpy_branch_native.py"
+      - "scripts/mxbikes_strcpy_branch_successors.py"
+      - "scripts/mxbikes_filename_separator_native.py"
+      - "scripts/mxbikes_filename_deep_map.py"
+      - "scripts/mxbikes_main_after_filename_map.py"
+      - "scripts/mxbikes_filename_normal_loop_native.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-main-first-block
+  cancel-in-progress: true
+
+jobs:
+  main-first-block:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout private original-game harness
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout bounded PE decoder
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: b3c98a4ca869e93110e3b5a810f3db6de77f3755
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install original x64 decoder and emulator
+        run: python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+      - name: Install native AArch64 C toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends clang lld
+      - name: Retrieve and verify privately owned executable
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-main" "$RUNNER_TEMP/main-first-block-report"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/mxbikes-main"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-main"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              names=[x for x in z.infolist() if not x.is_dir()
+                     and pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(names)!=1 or names[0].file_size>750*1024**2:
+                  raise RuntimeError("Missing or oversized original executable")
+              with z.open(names[0]) as inp,(root/"mxbikes.exe").open("wb") as out:
+                  shutil.copyfileobj(inp,out)
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Unrecognized original game file")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Discover original game-main grouped successors after filename helper returns
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_main_after_filename_map.py "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/post-filename-main-map.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Syntax-check the original startup and native differential harnesses
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/mxbikes_post_strcpy_probe.py scripts/mxbikes_post_strcpy_native.py
+      - name: Run original main entry until first control transfer
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_first_block.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/main-first-block.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original game-main block as native AArch64 and compare with x64
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_native_compare.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/main-first-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Probe original 0x136120 conditional first branch
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_callee_branch_probe.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/main-callee-first-branch.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differential test first original game-callee JE on host and native ARM64
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_callee_native_branch.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/game-callee-native-jcc.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Join original main CALL and native callee branch via original-VA linker
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_joined_callee_native.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/joined-main-callee-frontier.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original JE successor prefixes to next control transfer
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_successor_probe.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/game-callee-successors.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Translate original post-callee instructions and modeled GetModuleFileNameA on ARM64
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_main_filename_native.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/game-main-getmodulefilename-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute original main after GetModuleFileNameA until next transfer
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python scripts/mxbikes_post_filename_probe.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/post-filename-control.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Probe original helper after filename
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_next_internal_helper_probe.py "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/after-filename-helper-first-frontier.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify joined original filename helper nonleaf prologue on ARM64
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_filename_helper_native.py "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/postfilename-helper-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect next original nested game startup function
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_nested_callee_probe.py "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/nested-game-callee-probe.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Test original CRT strcpy thunk through native ARM64
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_msvcr90_strcpy_native.py "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/msvcr90-strcpy-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify connected native main through strcpy CRT import
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_joined_strcpy_native.py "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/joined-msvcr90-strcpy-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect original x64 startup after joined strcpy return
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_post_strcpy_probe.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/post-strcpy-frontier.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute native main through original post-strcpy MOV LEA and JMP
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_post_strcpy_native.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/joined-post-strcpy-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Survey native reached filename helper JMP successor
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_after_strcpy_jump_probe.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/post-strcpy-jump-successor.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Differential-test original signed byte MOVSX TEST JE after linked strcpy
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_after_strcpy_branch_native.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/joined-after-strcpy-branch.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Map both authentic original filename branch successors
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_strcpy_branch_successors.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/strcpy-jcc-successors.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Join original normal filename and zero byte separator branches natively
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_filename_separator_native.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/joined-filename-separator-jcc.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Discover next three original filename helper continuations
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_filename_deep_map.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/filename-separator-deep-map.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute authentic x64 native filename slash JNE and loop-back JMP
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/mxbikes_filename_normal_loop_native.py
+          python scripts/mxbikes_filename_normal_loop_native.py \
+            "$RUNNER_TEMP/mxbikes-main/mxbikes.exe" \
+            "$RUNNER_TEMP/main-first-block-report"
+          cat "$RUNNER_TEMP/main-first-block-report/normal-filename-loop-native.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload only bounded metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-main-first-block-metadata
+          path: ${{ runner.temp }}/main-first-block-report/
+          retention-days: 7
+          if-no-files-found: warn

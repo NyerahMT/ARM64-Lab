@@ -1,0 +1,213 @@
+name: MX Bikes - fast original startup smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-startup-smoke.yml"
+      - "scripts/mxbikes_first_launch_probe.py"
+      - "scripts/mxbikes_dynamic_startup_wave.py"
+      - "scripts/mxbikes_startup_native_family_audit.py"
+      - "scripts/mxbikes_startup_native_call_edges.py"
+      - "scripts/mxbikes_native_boot_closure.py"
+      - "tests/test_mxbikes_native_boot_closure.py"
+      - "tests/test_mxbikes_startup_native_call_edges.py"
+      - "tests/test_mxbikes_startup_native_family_audit.py"
+      - "tests/test_mxbikes_dynamic_startup_wave.py"
+      - "scripts/mxbikes_win64_thread_env.py"
+      - "scripts/mxbikes_win64_crt_dispatch.py"
+      - "scripts/mxbikes_win64_crt_data.py"
+      - "scripts/mxbikes_win64_module_api.py"
+      - "scripts/mxbikes_win64_string_api.py"
+      - "scripts/mxbikes_win64_file_api.py"
+      - "tests/test_mxbikes_first_launch_probe.py"
+      - "scripts/mxbikes_boot_leaf_native_wave.py"
+      - "tests/test_mxbikes_boot_leaf_native_wave.py"
+      - "scripts/mxbikes_cfg_full_native_wave.py"
+      - "scripts/mxbikes_cfg_guest_heap.py"
+      - "scripts/mxbikes_cfg_guest_stack.py"
+      - "scripts/mxbikes_cfg_lea_address.py"
+      - "scripts/mxbikes_cfg_conditional_moves.py"
+      - "scripts/mxbikes_cfg_extended_regs.py"
+      - "scripts/mxbikes_cfg_static_image.py"
+      - "scripts/mxbikes_cfg_flag_ops.py"
+
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  original-startup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c429049c3f01305a9e6fc7ec810c1b44204f679f
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install only quick startup dependencies
+        run: python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+      - name: Install native AArch64 verifier toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends clang lld
+      - name: Run safe startup tests
+        run: |
+          python -m unittest discover -s tests -p test_mxbikes_first_launch_probe.py -v
+          python -m unittest discover -s tests -p test_mxbikes_dynamic_startup_wave.py -v
+          python -m unittest discover -s tests -p test_mxbikes_startup_native_family_audit.py -v
+          python -m unittest discover -s tests -p test_mxbikes_startup_native_call_edges.py -v
+          python -m unittest discover -s tests -p test_mxbikes_native_boot_closure.py -v
+          python -m unittest discover -s tests -p test_mxbikes_boot_leaf_native_wave.py -v
+      - name: Extract SHA-pinned original executable privately
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/startup-private" "$RUNNER_TEMP/startup-metadata"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/startup-private"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"startup-private"
+          with zipfile.ZipFile(root/"Game.zip") as z:
+              items=[m for m in z.infolist() if not m.is_dir() and pathlib.PurePosixPath(m.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(items)!=1 or items[0].file_size>750*1024**2:raise RuntimeError("Original game EXE missing or unbounded")
+              with z.open(items[0]) as src,(root/"mxbikes.exe").open("wb") as dst:shutil.copyfileobj(src,dst)
+              steam=[m for m in z.infolist() if not m.is_dir() and pathlib.PurePosixPath(m.filename.replace("\\","/")).name.lower()=="steam_api64.dll"]
+              if len(steam)>1:raise RuntimeError("Ambiguous original Steam API file names")
+              if steam:
+                  if steam[0].file_size>64*1024*1024:raise RuntimeError("Unbounded supplied Steam API DLL")
+                  with z.open(steam[0]) as src,(root/"steam_api64.dll").open("wb") as dst:shutil.copyfileobj(src,dst)
+          metadata={"steam_api64_dll_in_original_archive":bool(steam),
+                    "steam_api64_dll_bytes":steam[0].file_size if steam else 0,
+                    "steam_api64_dll_sha256":hashlib.sha256((root/"steam_api64.dll").read_bytes()).hexdigest() if steam else None,
+                    "original_binary_content_exported":False}
+          import json
+          (pathlib.Path(os.environ["RUNNER_TEMP"])/"startup-metadata"/"original-steam-file-presence.json").write_text(json.dumps(metadata,indent=2)+"\n")
+          if hashlib.sha256((root/"mxbikes.exe").read_bytes()).hexdigest()!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Original game not SHA pinned")
+          (root/"Game.zip").unlink()
+          PY
+      - name: Execute real x64 Windows startup to first unresolved dependency
+        run: |
+          python - <<'PY'
+          import json,os,pathlib,sys
+          root=pathlib.Path.cwd()
+          sys.path.insert(0,str(root/"scripts"))
+          sys.path.insert(0,str(root/"arm64-lab"))
+          from tools.pe_probe import PE
+          from mxbikes_first_launch_probe import probe_original
+          from mxbikes_first_callee_emu import import_slots, IMAGE_BASE
+          from mxbikes_startup_native_call_edges import classify_original_startup_calls
+          from mxbikes_native_boot_closure import analyze_native_boot_closure
+          from mxbikes_whole_game_map import walk_unwind
+          target=pathlib.Path(os.environ["RUNNER_TEMP"])
+          data=probe_original(PE(target/"startup-private"/"mxbikes.exe"),
+              private_game_dir=target/"startup-private")
+          steam_info=json.loads((target/"startup-metadata"/"original-steam-file-presence.json").read_text())
+          profile=data["dynamic_original_x64_function_priority"]
+          audit=data["dynamic_original_x64_function_family_audit"]
+          call_edges=classify_original_startup_calls(
+              PE(target/"startup-private"/"mxbikes.exe"),profile,
+              import_slots(PE(target/"startup-private"/"mxbikes.exe")),
+              base=IMAGE_BASE)
+          (target/"startup-metadata"/"original-startup-native-call-edges.json").write_text(json.dumps(call_edges,indent=2)+"\n")
+          closure=analyze_native_boot_closure(
+              PE(target/"startup-private"/"mxbikes.exe"),
+              walk_unwind(PE(target/"startup-private"/"mxbikes.exe"))[0],
+              profile,import_slots(PE(target/"startup-private"/"mxbikes.exe")),
+              base=IMAGE_BASE)
+          (target/"startup-metadata"/"original-startup-native-closure.json").write_text(json.dumps(closure,indent=2)+"\n")
+          (target/"startup-metadata"/"dynamic-startup-native-gates.json").write_text(json.dumps(audit,indent=2)+"\n")
+          (target/"startup-metadata"/"dynamic-startup-translation-queue.json").write_text(json.dumps(profile,indent=2)+"\n")
+          stop=data["first_stopping_boundary"]
+          mark=data["original_process_milestones_reached"]
+          out=target/"startup-metadata"
+          (out/"original-x64-startup-smoke.json").write_text(json.dumps(data,indent=2)+"\n")
+          lines=["# Original Windows x64 startup probe (not ARM64 game boot)","",
+              "- Original instructions executed: **"+str(data["original_instructions_reached"])+"**",
+              "- Original CRT tail reached: **"+str(mark["crt_tail"])+"**",
+              "- Original game main reached: **"+str(mark["game_main"])+"**",
+              "- Original unwind functions actually executed: **"+str(profile["distinct_observed_pdata_function_intervals"])+"**",
+              "- Original unwind functions observed after game main: **"+str(profile["distinct_observed_after_main_pdata_intervals"])+"**",
+              "- Priority queue emitted: **"+str(profile["queue_entries_emitted"])+"** original x64 candidates (NOT ARM64 translated)",
+              "- Executed original function instruction-family audits: **"+str(audit["function_families_audited"])+"**",
+              "- Original game CALL edge classes: **"+str(call_edges["full_callsite_edge_classes"])+"**",
+              "- Real original CALL transitive closure inspected: **"+str(closure["reachable_original_functions_inspected"])+"**",
+              "- Direct CALL dependencies across closure: **"+str(closure["direct_original_CALL_edges"])+"**",
+              "- Leaf-first original translation groups (NOT native): **"+str(len(closure["topological_native_translation_batches"]))+"**",
+              "- Original dependency-free foundational translation batches: **"+str(closure["foundational_translation_batch_count"])+"**",
+              "- Original direct CALLs fully resolved to unwind entries: **"+str(closure["all_original_direct_calls_closed_to_known_unwind_entries"])+"**",
+              "- Steam/Windows runtime and native boot closure satisfied: **"+str(closure["complete_boot_runtime_or_auth_closure"])+"**",
+              "- External Steamworks imports in dependency closure: **"+str(closure["steamworks_external_dependencies"])+"**",
+              "- Original CALL closure traversal truncated: **"+str(closure["closure_truncated"])+"**",
+              "- First blocker: **"+str(stop["type"])+"**",
+              "- Original PC RVA at blocker: **"+str(stop.get("fault_pc_rva"))+"**",
+              "- Missing guest address: **"+str(stop.get("unmapped_guest_address"))+"**",
+              "- Region: **"+str(stop.get("detail"))+"**",
+              "- Unmodeled API: **"+str(stop.get("import"))+"**",
+              "- Original steam_api64.dll present in supplied game ZIP: **"+str(steam_info["steam_api64_dll_in_original_archive"])+"**",
+              "- Original owned DLL file-backed guest read counts: **"+str(data.get("original_private_file_io"))+"**",
+              "- ARM64 game engine/menu/iPhone executable launched: **NO**","",
+              "Unicorn x64 with synthetic Win32 services is NOT native ARM64 startup.",""]
+          lines.extend(["", "## Startup original CALL closure, leaf-first dependency batches",
+              "| Batch | Original functions | Original cycle | Unresolved external dependencies |",
+              "| ---: | --- | --- | ---: |"])
+          for i,b in enumerate(closure["topological_native_translation_batches"][:12]):
+              ext=b["blockers"]["Steamworks_external"]+b["blockers"]["Windows_CRT_external"]+b["blockers"]["unknown_indirect_CALL"]
+              lines.append("| "+str(i)+" | "+", ".join(b["original_function_entry_rvas"][:4])+
+                  (" ..." if len(b["original_function_entry_rvas"])>4 else "")+
+                  " | "+str(b["original_call_cycle"])+" | "+str(ext)+" |")
+          lines.extend(["", "## Actual executed post-main x64 function translation priorities",
+                        "| Original function RVA | Original instruction hits | Distinct PCs |",
+                        "| --- | ---: | ---: |"])
+          for item in profile["prioritized_original_functions"][:12]:
+              lines.append("| "+item["original_function_entry_rva"]+" | "+
+                str(item["post_main_instruction_hits"])+" | "+
+                str(item["unique_post_main_pc_rvas"])+" |")
+          lines.extend(["","## First native translation dependency families",
+                        "| Required x64-to-ARM64 work family | Original functions |",
+                        "| --- | ---: |"])
+          for label,amount in sorted(audit["first_translation_blocker_family_counts"].items(),
+                                     key=lambda x:-x[1]):
+              lines.append("| "+label+" | "+str(amount)+" |")
+          lines.extend(["", "## Actual x64 CALL dependency map (not translated)",
+              "| Original entry RVA | Direct original calls | Named import calls | Unresolved indirect |",
+              "| --- | ---: | ---: | ---: |"])
+          for item in call_edges["startup_original_function_dependencies"][:10]:
+              v=item.get("call_edge_classes",{})
+              lines.append("| "+item["original_function_entry_rva"]+" | "+
+                  str(v.get("original_direct_CALL",0))+" | "+
+                  str(v.get("Windows_or_CRT_import",0)+v.get("Steamworks_authorization_external",0))+" | "+
+                  str(v.get("unresolved_indirect_CALL",0))+" |")
+          lines.extend(["", "Dynamic priorities are observed x64 code, not verified ARM64 functions.", ""])
+          print("\n".join(lines))
+          (out/"original-x64-startup-smoke.md").write_text("\n".join(lines))
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as fp:fp.write("\n".join(lines))
+          PY
+      - name: Differential-execute no-CALL original startup leaves on native ARM64
+        run: |
+          set -euo pipefail
+          timeout 180s python scripts/mxbikes_boot_leaf_native_wave.py \
+            "$RUNNER_TEMP/startup-private/mxbikes.exe" \
+            "$RUNNER_TEMP/startup-metadata/original-startup-native-closure.json" \
+            "$RUNNER_TEMP/startup-metadata"
+          test -s "$RUNNER_TEMP/startup-metadata/startup-real-native-leaf-wave.json"
+          test -s "$RUNNER_TEMP/startup-metadata/startup-real-native-leaf-wave.md"
+          cat "$RUNNER_TEMP/startup-metadata/startup-real-native-leaf-wave.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload metadata only
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-original-x64-startup-smoke
+          path: ${{ runner.temp }}/startup-metadata/
+          if-no-files-found: error
+          retention-days: 7

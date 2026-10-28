@@ -1,0 +1,133 @@
+name: MX Bikes - whole map Remill 48-function pilot
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-bulk-lift-pilot.yml"
+      - "scripts/mxbikes_bulk_lift_candidates.py"
+      - "scripts/mxbikes_bulk_lift_report.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-bulk-lift-pilot
+  cancel-in-progress: true
+
+jobs:
+  bulk-lift:
+    name: Original functions to Remill LLVM to ARM64 object pilot
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      IMAGE: trailofbits/remill:llvm1100-ubuntu20.04-amd64
+    steps:
+      - name: Checkout private translation tools
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout verified PE parser
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: 7842dbd17c707e306be0a7e5e13ea5dfd0038b72
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install LLVM and binary decoder
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends llvm-14 clang lld
+          python -m pip install --disable-pip-version-check 'capstone>=5,<6'
+          docker pull "$IMAGE"
+      - name: Retrieve original game and select 48 varied function bodies
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bulk-original" "$RUNNER_TEMP/bulk-input" "$RUNNER_TEMP/bulk-report"
+          chmod 0777 "$RUNNER_TEMP/bulk-input"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/bulk-original"
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil,zipfile
+          folder=pathlib.Path(os.environ["RUNNER_TEMP"])/"bulk-original"
+          with zipfile.ZipFile(folder/"Game.zip") as src:
+              hits=[x for x in src.infolist() if not x.is_dir() and
+                    pathlib.PurePosixPath(x.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(hits)!=1 or hits[0].file_size>750*1024**2:
+                  raise RuntimeError("Owned input missing or size exceeds bound")
+              with src.open(hits[0]) as item,(folder/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(item,dst)
+          if hashlib.sha256((folder/"mxbikes.exe").read_bytes()).hexdigest()!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Original game SHA does not match")
+          (folder/"Game.zip").unlink()
+          PY
+          python scripts/mxbikes_bulk_lift_candidates.py \
+            "$RUNNER_TEMP/bulk-original/mxbikes.exe" "$RUNNER_TEMP/bulk-input"
+      - name: Bulk lift original function bytes to private LLVM modules
+        run: |
+          set -euo pipefail
+          timeout 540s docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --memory 4g --cpus 2 \
+            -v "$RUNNER_TEMP/bulk-input:/mnt/work" -w /mnt/work \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m \
+            --entrypoint /bin/sh "$IMAGE" -c '
+              set -eu
+              lift="$(find /opt /usr/local -maxdepth 7 -type f -name "remill-lift*" -perm /111 -print -quit 2>/dev/null)"
+              test -n "$lift"
+              for source in /mnt/work/*.hex; do
+                stem="$(basename "$source" .hex)"
+                if timeout 25s "$lift" --arch amd64 \
+                  --ir_out "/mnt/work/$stem.ll" --bytes "$(cat "$source")" \
+                  > "/mnt/work/$stem.stdout-private" 2> "/mnt/work/$stem.stderr-private"; then
+                  echo ok > "/mnt/work/$stem.lift-status"
+                else
+                  echo failed > "/mnt/work/$stem.lift-status"
+                fi
+                if test -s "/mnt/work/$stem.ll" &&
+                   test -s "/mnt/work/$stem.basic"; then
+                  timeout 15s "$lift" --arch amd64 \
+                    --ir_out "/mnt/work/$stem.basic.ll" \
+                    --bytes "$(cat "/mnt/work/$stem.basic")" \
+                    > /dev/null 2> /dev/null || true
+                fi
+              done
+            '
+      - name: Verify intermediate LLVM and compile ARM64 machine objects
+        run: |
+          set -euo pipefail
+          for source in "$RUNNER_TEMP/bulk-input/"*.hex; do
+            stem="$RUNNER_TEMP/bulk-input/$(basename "$source" .hex)"
+            if [ "$(cat "$stem.lift-status")" != ok ] || [ ! -s "$stem.ll" ]; then
+              echo no_ir > "$stem.compile-status"; continue
+            fi
+            if ! llvm-as-14 "$stem.ll" -o "$stem.bc" > "$stem.verify-private" 2>&1; then
+              echo bad_llvm > "$stem.compile-status"; continue
+            fi
+            if ! opt-14 -verify -disable-output "$stem.bc" >> "$stem.verify-private" 2>&1; then
+              echo llvm_invalid > "$stem.compile-status"; continue
+            fi
+            if ! llc-14 -mtriple=aarch64-unknown-linux-gnu -filetype=obj \
+                 "$stem.bc" -o "$stem.arm64.o" >> "$stem.verify-private" 2>&1; then
+              echo no_arm64 > "$stem.compile-status"; continue
+            fi
+            if ! readelf -h "$stem.arm64.o" | grep -q 'Machine:.*AArch64'; then
+              echo wrong_arch > "$stem.compile-status"; continue
+            fi
+            echo pass > "$stem.compile-status"
+          done
+      - name: Report observed bulk-lift outcomes, not assumed conversion
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_bulk_lift_report.py \
+            "$RUNNER_TEMP/bulk-input" "$RUNNER_TEMP/bulk-report"
+          cat "$RUNNER_TEMP/bulk-report/bulk-lift-pilot.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload statistics only, never game or LLVM artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-48-function-bulk-lift-report
+          path: ${{ runner.temp }}/bulk-report/
+          retention-days: 14
+          if-no-files-found: warn

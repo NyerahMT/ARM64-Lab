@@ -1,0 +1,46 @@
+name: MX Bikes - fast cached function triage
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-call-pair-triage.yml"
+      - "scripts/mxbikes_call_pair_triage.py"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rank:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download immutable metadata from original PE scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mx-old-metadata" "$RUNNER_TEMP/mx-priorities"
+          gh run download 39101884840 --repo "$GITHUB_REPOSITORY" \
+            --name mxbikes-unwind-function-recon \
+            --dir "$RUNNER_TEMP/mx-old-metadata"
+          test -s "$RUNNER_TEMP/mx-old-metadata/original-call-pairs.json"
+
+      - name: Rank original linked-call work without loading game or Ghidra
+        run: |
+          python scripts/mxbikes_call_pair_triage.py \
+            "$RUNNER_TEMP/mx-old-metadata/original-call-pairs.json" \
+            "$RUNNER_TEMP/mx-priorities"
+          cat "$RUNNER_TEMP/mx-priorities/call-pair-priorities.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain only new prioritization metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-call-pair-priorities
+          path: ${{ runner.temp }}/mx-priorities/
+          retention-days: 14
+          if-no-files-found: error

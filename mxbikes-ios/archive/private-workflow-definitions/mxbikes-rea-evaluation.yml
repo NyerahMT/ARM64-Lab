@@ -1,0 +1,155 @@
+name: MX Bikes - REA private evaluation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-rea-evaluation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  rea-evaluation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GHIDRA_HEADLESS_MAXMEM: 3G
+      REA_GHIDRA_STARTUP_TIMEOUT_MS: 600000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Restore existing SHA-verified Ghidra toolchain
+        uses: actions/cache@v4
+        id: ghidra-cache
+        with:
+          path: ${{ runner.tool_cache }}/ghidra_12.1.4_PUBLIC
+          key: ghidra-12.1.4-public-linux-fixed-sha256-v1
+
+      - name: Install Ghidra if missing (pinned SHA)
+        if: steps.ghidra-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ghidra-download" "$RUNNER_TOOL_CACHE"
+          gh release download Ghidra_12.1.4_build \
+            --repo NationalSecurityAgency/ghidra \
+            --pattern ghidra_12.1.4_PUBLIC_20260921.zip \
+            --dir "$RUNNER_TEMP/ghidra-download"
+          echo "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db  $RUNNER_TEMP/ghidra-download/ghidra_12.1.4_PUBLIC_20260921.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/ghidra-download/ghidra_12.1.4_PUBLIC_20260921.zip" -d "$RUNNER_TOOL_CACHE"
+
+      - name: Install official REA 6.5.0 into isolated temp directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rea-eval" "$RUNNER_TEMP/rea-reports"
+          npm install --prefix "$RUNNER_TEMP/rea-eval" --no-audit --no-fund \
+            --ignore-scripts --save-exact rea-agents@6.5.0
+          node "$RUNNER_TEMP/rea-eval/node_modules/rea-agents/scripts/rea.mjs" --help \
+            > "$RUNNER_TEMP/rea-reports/help-internal.txt"
+
+      - name: Retrieve original EXE without preserving ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rea-input"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern Game.zip --dir "$RUNNER_TEMP/rea-input"
+          python - <<'PY'
+          import os,pathlib,zipfile,shutil,hashlib
+          base=pathlib.Path(os.environ["RUNNER_TEMP"])/"rea-input"
+          with zipfile.ZipFile(base/"Game.zip") as z:
+              matching=[i for i in z.infolist() if not i.is_dir() and pathlib.PurePosixPath(i.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matching)!=1 or matching[0].file_size>750*1024**2:
+                  raise RuntimeError("Original executable missing/oversized")
+              with z.open(matching[0]) as src,(base/"mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src,dst)
+          if hashlib.sha256((base/"mxbikes.exe").read_bytes()).hexdigest()!="4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6":
+              raise RuntimeError("Unexpected executable SHA-256")
+          (base/"Game.zip").unlink()
+          PY
+
+      - name: Run bounded REA doctor and real PE analysis
+        env:
+          GHIDRA_INSTALL_DIR: ${{ runner.tool_cache }}/ghidra_12.1.4_PUBLIC
+        run: |
+          # Doctor may report missing optional agent registration in ephemeral CI.
+          # Record its nonzero status and continue to the explicit Ghidra test.
+          set +e
+          set -uo pipefail
+          REA="$RUNNER_TEMP/rea-eval/node_modules/rea-agents/scripts/rea.mjs"
+          out="$RUNNER_TEMP/rea-reports"
+          start=$(date +%s)
+          timeout -s TERM 120 node "$REA" doctor --json > "$out/doctor-internal.json" 2> "$out/doctor-stderr.txt"
+          doctor=$?
+          after=$(date +%s)
+          timeout -s TERM 720 node "$REA" analyze "$RUNNER_TEMP/rea-input/mxbikes.exe" \
+            --provider ghidra --json \
+            --snapshot "$RUNNER_TEMP/rea-input/analysis-snapshot.json" \
+            > "$out/analysis-internal.json" 2> "$out/analysis-stderr.txt"
+          analysis=$?
+          end=$(date +%s)
+          export DOCTOR_EXIT="$doctor" ANALYSIS_EXIT="$analysis"
+          export DOCTOR_SECONDS="$((after-start))" ANALYSIS_SECONDS="$((end-after))"
+          python - <<'PY'
+          import os,json,pathlib
+          base=pathlib.Path(os.environ["RUNNER_TEMP"])/"rea-reports"
+          report={
+            "tool":"Official morluto/rea npm rea-agents@6.5.0",
+            "provider":"Ghidra 12.1.4 on Linux, Java 21",
+            "target":"SHA-256 verified original MX Bikes PE (private CI only)",
+            "doctor_exit_code":int(os.environ["DOCTOR_EXIT"]),
+            "doctor_seconds":int(os.environ["DOCTOR_SECONDS"]),
+            "analysis_exit_code":int(os.environ["ANALYSIS_EXIT"]),
+            "analysis_seconds":int(os.environ["ANALYSIS_SECONDS"]),
+            "analysis_json_parsed":False,
+            "analysis_returned_error":None,
+            "conclusion":"Probe only; compare analysis time and evidence quality with existing direct Ghidra; not a recompiler."
+          }
+          try:
+              obj=json.loads((base/"analysis-internal.json").read_text())
+              report["analysis_json_parsed"]=True
+              if isinstance(obj,dict):
+                  report["analysis_returned_error"]=bool(obj.get("error"))
+          except Exception:
+              pass
+          (base/"rea-evaluation.json").write_text(json.dumps(report,indent=2)+"\n")
+          md="\n".join([
+            "# REA evaluation: original MX Bikes PE, private sandbox",
+            "",
+            "- Official npm package: rea-agents 6.5.0, isolated install without agent configuration",
+            "- Existing Ghidra 12.1.4 reused",
+            "- Doctor: exit "+str(report["doctor_exit_code"])+" after "+str(report["doctor_seconds"])+" seconds",
+            "- Analysis: exit "+str(report["analysis_exit_code"])+" after "+str(report["analysis_seconds"])+" seconds",
+            "- Returned parseable JSON: "+str(report["analysis_json_parsed"]),
+            "- No derived pseudocode, game binaries or proprietary strings exported",
+            "",
+            "Measured assessment only, not translation or boot.",
+            ""
+          ])
+          (base/"rea-evaluation.md").write_text(md)
+          print(md)
+          PY
+          cat "$out/rea-evaluation.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload sanitized metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-rea-evaluation-metadata
+          path: |
+            ${{ runner.temp }}/rea-reports/rea-evaluation.json
+            ${{ runner.temp }}/rea-reports/rea-evaluation.md
+          if-no-files-found: warn
+          retention-days: 7

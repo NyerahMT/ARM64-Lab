@@ -1,0 +1,117 @@
+name: MX Bikes - entry wrapper reconnaissance
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-entry-recon.yml"
+      - "scripts/mxbikes_entry_recon.py"
+      - "scripts/mxbikes_entry_arm64_check.py"
+      - "scripts/mxbikes_first_callee_recon.py"
+      - "scripts/mxbikes_first_callee_emu.py"
+      - "scripts/mxbikes_crt_frontier.py"
+      - "scripts/mxbikes_asset_probe.py"
+      - "scripts/mxbikes_engine_import_handoff.py"
+      - "scripts/mxbikes_private_asset.py"
+
+permissions:
+  contents: read
+
+jobs:
+  entry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          ref: c6c567c7a626898dd7cdeaf8de0b3d9511b1823b
+          path: arm64-lab
+          persist-credentials: false
+      - name: Install trusted bounded disassembler
+        run: python -m pip install --disable-pip-version-check 'capstone>=5,<6' 'unicorn>=2,<3' 'pyelftools>=0.31,<1'
+      - name: Download and verify original private executable
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxbikes-entry" "$RUNNER_TEMP/entry-report"
+          gh release download Mxbikes1 \
+            --repo "$GITHUB_REPOSITORY" --pattern Game.zip \
+            --dir "$RUNNER_TEMP/mxbikes-entry"
+          python - <<'PY'
+          import os,pathlib,zipfile,shutil
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"mxbikes-entry"
+          with zipfile.ZipFile(p/"Game.zip") as z:
+              matches=[m for m in z.infolist() if not m.is_dir() and pathlib.PurePosixPath(m.filename.replace("\\","/")).name.lower()=="mxbikes.exe"]
+              if len(matches)!=1 or matches[0].file_size>750*1024**2:
+                  raise RuntimeError("Expected exactly one bounded original MX Bikes executable")
+              with z.open(matches[0]) as src,(p/"mxbikes.exe").open("wb") as dest:
+                  shutil.copyfileobj(src,dest)
+          PY
+          echo '4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6  '"$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" | sha256sum -c -
+      - name: Inspect verified original entry instructions
+        run: |
+          python scripts/mxbikes_entry_recon.py \
+            "$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" \
+            "$RUNNER_TEMP/entry-report"
+          cat "$RUNNER_TEMP/entry-report/entry-recon.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Cross-compile original entry control-effects to AArch64 and execute
+        run: |
+          python scripts/mxbikes_entry_arm64_check.py \
+            "$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" \
+            "$RUNNER_TEMP/entry-report"
+          cat "$RUNNER_TEMP/entry-report/entry-arm64-check.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect genuine startup callee prefixes and unwind metadata
+        run: |
+          python scripts/mxbikes_first_callee_recon.py \
+            "$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" \
+            "$RUNNER_TEMP/entry-report"
+          cat "$RUNNER_TEMP/entry-report/first-callees.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Execute real first CRT initializer with synthetic Windows API returns
+        run: |
+          python scripts/mxbikes_first_callee_emu.py \
+            "$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" \
+            "$RUNNER_TEMP/entry-report"
+          cat "$RUNNER_TEMP/entry-report/original-crt-emulation.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trace first unsupported Windows dependency in real CRT startup
+        run: |
+          python scripts/mxbikes_crt_frontier.py \
+            "$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" \
+            "$RUNNER_TEMP/entry-report" \
+            "$RUNNER_TEMP/mxbikes-entry/Game.zip"
+          cat "$RUNNER_TEMP/entry-report/crt-frontier.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Rank the observed engine/CRT boot frontier from actual x64 calls
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/arm64-lab" python -m tools.boot_frontier \
+            "$RUNNER_TEMP/entry-report/crt-frontier.json" \
+            --output-dir "$RUNNER_TEMP/entry-report"
+          cat "$RUNNER_TEMP/entry-report/boot-frontier.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect SteamAPI_Init x64 imported-CALL return handoff (static only)
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_engine_import_handoff.py \
+            "$RUNNER_TEMP/mxbikes-entry/mxbikes.exe" \
+            "$RUNNER_TEMP/entry-report/crt-frontier.json" \
+            "$RUNNER_TEMP/entry-report"
+          cat "$RUNNER_TEMP/entry-report/engine-steam-callsite.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check first requested Steam DLL in original private ZIPs
+        run: |
+          gh release download Mxbikes1 \
+            --repo "$GITHUB_REPOSITORY" --pattern Steam.zip \
+            --dir "$RUNNER_TEMP/mxbikes-entry" --clobber
+          python scripts/mxbikes_asset_probe.py \
+            "$RUNNER_TEMP/entry-report" \
+            "$RUNNER_TEMP/mxbikes-entry/Game.zip" \
+            "$RUNNER_TEMP/mxbikes-entry/Steam.zip"
+          cat "$RUNNER_TEMP/entry-report/startup-file-availability.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload only analysis metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-entry-recon
+          path: ${{ runner.temp }}/entry-report/
+          retention-days: 7
+          if-no-files-found: warn

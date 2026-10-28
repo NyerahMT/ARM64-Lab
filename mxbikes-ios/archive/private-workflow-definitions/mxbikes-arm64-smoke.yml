@@ -1,0 +1,137 @@
+name: MX Bikes - ARM64 leaf-lift proof
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mxbikes-arm64-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxbikes-arm64-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout our public ARM64-Lab tools
+        uses: actions/checkout@v4
+        with:
+          repository: NyerahMT/ARM64-Lab
+          path: arm64-lab
+          persist-credentials: false
+
+      - name: Download MX Bikes archive from private release
+        run: |
+          mkdir -p "$RUNNER_TEMP/mxbikes"
+          gh release download Mxbikes1 --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Game.zip' --dir "$RUNNER_TEMP/mxbikes" --clobber
+
+      - name: Extract the executable into temporary storage
+        run: |
+          python - <<'PY'
+          import os, pathlib, shutil, zipfile
+          dest = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mxbikes"
+          with zipfile.ZipFile(dest / "Game.zip") as archive:
+              matching = [item for item in archive.infolist()
+                          if not item.is_dir() and pathlib.PurePosixPath(item.filename.replace("\\", "/")).name.lower() == "mxbikes.exe"]
+              if len(matching) != 1:
+                  raise RuntimeError(f"Expected one mxbikes.exe, found {len(matching)}")
+              if matching[0].file_size > 750 * 1024**2:
+                  raise RuntimeError("Executable exceeded input size guard")
+              with archive.open(matching[0]) as src, (dest / "mxbikes.exe").open("wb") as dst:
+                  shutil.copyfileobj(src, dst)
+          print("MX Bikes binary available for private CI analysis")
+          PY
+
+      - name: Inspect executable and compile one limited x64 return sequence to ARM64
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, struct, subprocess, sys
+          root = pathlib.Path("arm64-lab").resolve()
+          sys.path.insert(0, str(root))
+          from tools.pe_probe import PE
+          from tools.leaf_lift import candidate_patterns, lift_to_c
+          work = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mxbikes"
+          exe = work / "mxbikes.exe"
+          pe = PE(exe)
+          inv = pe.inventory()
+          section, base = pe.text_section()
+          candidates = [(base + offset, seq, value) for offset, seq, value in candidate_patterns(section)]
+          pdata, pdata_len = pe.directory(3)
+          pdata_starts = set()
+          if pdata and pdata_len:
+              records = pe.read_rva(pdata, pdata_len)
+              for i in range(0, len(records) - 11, 12):
+                  begin, end, _ = struct.unpack_from("<III", records, i)
+                  if begin and end > begin:
+                      pdata_starts.add(begin)
+          matching = [rva for rva, _code, _value in candidates if rva in pdata_starts]
+          compiled = False
+          sample_rva = None
+          if candidates:
+              sample_rva, code, value = candidates[0]
+              generated = work / "isolated_return.c"
+              generated.write_text(lift_to_c(code))
+              obj = work / "isolated_return.o"
+              subprocess.run(["clang", "--target=aarch64-unknown-linux-gnu", "-ffreestanding", "-c", str(generated), "-o", str(obj)], check=True)
+              header = subprocess.check_output(["readelf", "-h", str(obj)], text=True)
+              if "Machine:" not in header or "AArch64" not in header:
+                  raise RuntimeError("Compiler did not output AArch64 object")
+              compiled = True
+          outcome = {
+              "exe_sha256": inv["sha256"],
+              "image_base": inv["image_base"],
+              "entry_rva": inv["entry_rva"],
+              "exception_records": inv["exception_record_count"],
+              "import_libraries": inv["import_library_count"],
+              "import_functions": inv["import_function_count"],
+              "candidate_return_sequences": len(candidates),
+              "candidate_matches_at_exception_record_starts": len(matching),
+              "sample_candidate_rva": hex(sample_rva) if sample_rva is not None else None,
+              "aarch64_elf_object_compiled": compiled,
+              "limitations": [
+                  "Byte patterns are not necessarily true callable function boundaries.",
+                  "Compilation of a tiny return sequence does not mean the game is running.",
+                  "No original game bytes, executable, generated C, or object files are uploaded.",
+                  "The result is an ARM64 Linux object, not an iOS binary.",
+              ],
+          }
+          reports = work / "reports"
+          reports.mkdir(exist_ok=True)
+          (reports / "arm64-smoke.json").write_text(json.dumps(outcome, indent=2))
+          lines = [
+              "# MX Bikes ARM64 leaf-lift smoke test",
+              "",
+              f"- Original executable SHA-256: {outcome['exe_sha256']}",
+              f"- Windows x86-64 entry RVA: {outcome['entry_rva']}",
+              f"- Exception/unwind records: {outcome['exception_records']}",
+              f"- Imported functions: {outcome['import_functions']}",
+              f"- Raw short return-sequence candidates: {len(candidates)}",
+              f"- Candidate starts coincident with exception records: {len(matching)}",
+              f"- Isolated sequence compiled to AArch64 ELF: {compiled}",
+              f"- Tested candidate RVA: {outcome['sample_candidate_rva']}",
+              "",
+              "**Scope:** Translation smoke test only. It does not prove an original function boundary, complete x64 ABI handling, execution of original game code, iOS compatibility, or gameplay.",
+          ]
+          summary = "\n".join(lines) + "\n"
+          (reports / "arm64-smoke.md").write_text(summary)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as f:
+              f.write(summary)
+          print(summary)
+          PY
+
+      - name: Preserve metadata reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxbikes-arm64-smoke
+          path: ${{ runner.temp }}/mxbikes/reports/
+          retention-days: 7
+          if-no-files-found: warn
