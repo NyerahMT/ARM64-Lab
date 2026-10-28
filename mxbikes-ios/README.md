@@ -34,7 +34,8 @@ Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering pr
 
 ## Run the actual original game code locally
 
-See [the private-input local runner](docs/run-original-locally.md). It executes the SHA-verified original x64 startup from an owned ZIP or installed files, produces metadata-only evidence, and stops fail-closed at unsupported Steamworks. **Never upload the game archive to this public repository.**
+See [the private-input local runner](docs/run-original-locally.md).
+For a publisher-licensed standalone candidate, run the [non-executing standalone import audit](docs/standalone-audit.md) to determine whether that executable imports Steamworks and what graphics/Windows APIs it requires. It executes the SHA-verified original x64 startup from an owned ZIP or installed files, produces metadata-only evidence, and stops fail-closed at unsupported Steamworks. **Never upload the game archive to this public repository.**
 
 ## Run source-only tests
 

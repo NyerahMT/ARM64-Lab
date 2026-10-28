@@ -48,6 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m unittest discover -s tests -p test_mxbikes_run_owned_local.py -v
+          python -m unittest discover -s tests -p test_mxbikes_standalone_import_audit.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
