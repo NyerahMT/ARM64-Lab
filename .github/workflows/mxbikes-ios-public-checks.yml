@@ -44,18 +44,20 @@ jobs:
             tests/mxb_gl_texture_batch_smoke.c \
             -o /tmp/mxb-gl-texture
           /tmp/mxb-gl-texture
+      - name: Install authentic guest-runtime Python dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'unicorn>=2,<3' 'capstone>=5,<6' 'pyelftools>=0.31,<1'
       - name: Validate local owned-game runner without commercial files
         run: |
           set -euo pipefail
           python -m unittest discover -s tests -p test_mxbikes_run_owned_local.py -v
           python -m unittest discover -s tests -p test_mxbikes_standalone_import_audit.py -v
-          python -m pip install --disable-pip-version-check 'capstone>=5,<6'
           python -m unittest discover -s tests -p test_mxbikes_real_frame_frontier.py -v
           python -m unittest discover -s tests -p test_mxbikes_real_runtime_imports.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check 'unicorn>=2,<3'
           python tests/mxb_gl_win64_unicorn_import_test.py
           python tests/mxb_gl_win64_indexed_guest_test.py
       - name: Cross-compile native renderer and guest adapter for ARM64
