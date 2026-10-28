@@ -27,6 +27,8 @@ class RuntimeImportTests(unittest.TestCase):
         self.assertTrue(callable(fopen.original_case))
         self.assertTrue(callable(frontier.static_index))
         self.assertTrue(callable(PE))
+        self.assertTrue((SCRIPTS.parent / "arm64-lab" / "tools" / "pe_probe.py").is_file())
+        self.assertTrue((SCRIPTS.parent / "arm64-lab" / "runtime" / "mx_guest_imports.c").is_file())
         self.assertIn("graphics_handler",inspect.signature(blocks.execute).parameters)
 
 if __name__=="__main__":

@@ -32,6 +32,11 @@ Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering pr
   definitions, **not active GitHub Actions**. They refer to a separate
   private source repository and require user-owned original game data.
 
+The `arm64-lab` symlink inside this directory points back to the
+public repository root for older translated-code tool paths on Linux and WSL2.
+Native Windows Git checkouts may require symlink support; WSL2 is the
+supported local execution environment.
+
 ## Run the actual original game code locally
 
 See [the private-input local runner](docs/run-original-locally.md). The same runner also supports `--static-graphics-only` and `--map-graphics-paths` for original-PE direct-call/IAT mapping (explicitly **not** executed engine graphics).
