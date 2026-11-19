@@ -175,6 +175,76 @@ int main(void){
  mxb_gl_clear_frame(s);
  regs.rdx=65535;regs.r8=3;
  if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_RENDER_REJECTED)return 47;
+ /* Win64 x64 float arguments must come from XMM lanes, never RCX/RDX. */
+ mxb_gl_reset(s);
+ regs.rcx=0;regs.rdx=0;regs.r8=0;regs.r9=0;
+ regs.xmm_low64[0]=bits_f(2.0f);
+ regs.xmm_low64[1]=bits_f(0.0f);
+ regs.xmm_low64[2]=bits_f(0.0f);
+ if(invoke(s,&mem,&regs,"glTranslatef")!=MXB_GL_GUEST_OK)return 48;
+ regs.xmm_low64[0]=bits_f(2.0f);
+ regs.xmm_low64[1]=bits_f(1.0f);
+ regs.xmm_low64[2]=bits_f(1.0f);
+ if(invoke(s,&mem,&regs,"glScalef")!=MXB_GL_GUEST_OK)return 49;
+ regs.rcx=MXB_GL_TRIANGLES;
+ if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 50;
+ regs.xmm_low64[0]=bits_f(0.25f);
+ regs.xmm_low64[1]=bits_f(0.75f);
+ if(invoke(s,&mem,&regs,"glTexCoord2f")!=MXB_GL_GUEST_OK)return 51;
+ const float moved[3][3]={{1,0,0},{-1,0,0},{0,1,0}};
+ for(int i=0;i<3;i++){
+  for(int j=0;j<3;j++)regs.xmm_low64[j]=bits_f(moved[i][j]);
+  if(invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK)return 52;
+ }
+ if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK||
+    mxb_gl_vertex_count(s)!=3u)return 53;
+ vertices=mxb_gl_vertices(s);
+ if(!nearly(vertices[0].position[0],4.0f)||
+    !nearly(vertices[1].position[0],0.0f)||
+    !nearly(vertices[2].position[0],2.0f)||
+    !nearly(vertices[0].uv[0],0.25f)||
+    !nearly(vertices[2].uv[1],0.75f))return 54;
+ /* Stack/axis-angle imports must retain exactly Win64 XMM float semantics. */
+ mxb_gl_reset(s);
+ regs.rcx=0;regs.rdx=0;regs.r8=0;regs.r9=0;
+ regs.xmm_low64[0]=bits_f(2.0f);
+ regs.xmm_low64[1]=bits_f(0.0f);
+ regs.xmm_low64[2]=bits_f(0.0f);
+ if(invoke(s,&mem,&regs,"glTranslatef")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 55;
+ regs.xmm_low64[0]=bits_f(90.0f);
+ regs.xmm_low64[1]=bits_f(0.0f);
+ regs.xmm_low64[2]=bits_f(0.0f);
+ regs.xmm_low64[3]=bits_f(2.0f);
+ if(invoke(s,&mem,&regs,"glRotatef")!=MXB_GL_GUEST_OK)return 56;
+ regs.xmm_low64[0]=bits_f(2.0f);
+ regs.xmm_low64[1]=bits_f(1.0f);
+ regs.xmm_low64[2]=bits_f(1.0f);
+ if(invoke(s,&mem,&regs,"glScalef")!=MXB_GL_GUEST_OK)return 57;
+ regs.rcx=MXB_GL_TRIANGLES;
+ if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 58;
+ for(int i=0;i<3;i++){
+  for(int j=0;j<3;j++)regs.xmm_low64[j]=bits_f(moved[i][j]);
+  if(invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK)return 59;
+ }
+ if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_OK)return 60;
+ regs.rcx=MXB_GL_TRIANGLES;
+ if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 61;
+ for(int i=0;i<3;i++){
+  for(int j=0;j<3;j++)regs.xmm_low64[j]=bits_f(moved[i][j]);
+  if(invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK)return 62;
+ }
+ if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK||
+    mxb_gl_vertex_count(s)!=6u)return 63;
+ vertices=mxb_gl_vertices(s);
+ if(!nearly(vertices[0].position[0],2.0f)||
+    !nearly(vertices[0].position[1],2.0f)||
+    !nearly(vertices[1].position[0],2.0f)||
+    !nearly(vertices[1].position[1],-2.0f)||
+    !nearly(vertices[3].position[0],3.0f)||
+    !nearly(vertices[4].position[0],1.0f))return 64;
+ if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 65;
  mxb_gl_destroy(s);
  return 0;
 }

@@ -8,6 +8,10 @@ struct MXBGLSurface {
  MXBGLVertex frame[MXB_GL_MAX_OUTPUT],working[MXB_GL_MAX_INPUT];
  size_t frame_len,working_len;
  float modelview[16],projection[16],current_color[4],current_uv[2];
+ /* Each matrix stack includes its current level plus up to 31 saves. */
+ float modelview_stack[MXB_GL_MATRIX_STACK_DEPTH-1u][16];
+ float projection_stack[MXB_GL_MATRIX_STACK_DEPTH-1u][16];
+ unsigned modelview_depth,projection_depth;
  unsigned current_matrix,begin_mode,faults;
  MXBGLClientArray vertex_array,color_array,texcoord_array;
  int building;
@@ -47,6 +51,46 @@ int mxb_gl_load_identity(MXBGLSurface*s){
  if(!s)return 0;
  if(s->building)return fail(s);
  identity(selected(s));return 1;
+}
+int mxb_gl_push_matrix(MXBGLSurface*s){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ unsigned*depth=s->current_matrix==MXB_GL_PROJECTION?
+  &s->projection_depth:&s->modelview_depth;
+ float (*stack)[16]=s->current_matrix==MXB_GL_PROJECTION?
+  s->projection_stack:s->modelview_stack;
+ if(*depth>=MXB_GL_MATRIX_STACK_DEPTH-1u)return fail(s);
+ __builtin_memcpy(stack[*depth],selected(s),16u*sizeof(float));
+ ++(*depth);return 1;
+}
+int mxb_gl_pop_matrix(MXBGLSurface*s){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ unsigned*depth=s->current_matrix==MXB_GL_PROJECTION?
+  &s->projection_depth:&s->modelview_depth;
+ float (*stack)[16]=s->current_matrix==MXB_GL_PROJECTION?
+  s->projection_stack:s->modelview_stack;
+ if(*depth==0u)return fail(s);
+ --(*depth);
+ __builtin_memcpy(selected(s),stack[*depth],16u*sizeof(float));
+ return 1;
+}
+int mxb_gl_rotatef(MXBGLSurface*s,float degrees,float x,float y,float z){
+ if(!s)return 0;
+ if(s->building||!valid(degrees)||!valid(x)||!valid(y)||!valid(z))return fail(s);
+ double mag=__builtin_sqrt((double)x*x+(double)y*y+(double)z*z);
+ if(mag==0.0)return fail(s);
+ double nx=x/mag,ny=y/mag,nz=z/mag;
+ const double radians=(double)degrees*0.017453292519943295769;
+ double c=__builtin_cos(radians),sn=__builtin_sin(radians),t=1.0-c;
+ float r[16];identity(r);
+ /* OpenGL column-major rotation, postmultiplied to the active matrix. */
+ r[0]=(float)(t*nx*nx+c);     r[1]=(float)(t*nx*ny+sn*nz);
+ r[2]=(float)(t*nx*nz-sn*ny); r[4]=(float)(t*nx*ny-sn*nz);
+ r[5]=(float)(t*ny*ny+c);     r[6]=(float)(t*ny*nz+sn*nx);
+ r[8]=(float)(t*nx*nz+sn*ny); r[9]=(float)(t*ny*nz-sn*nx);
+ r[10]=(float)(t*nz*nz+c);
+ multiply(selected(s),r);return 1;
 }
 int mxb_gl_translatef(MXBGLSurface*s,float x,float y,float z){
  if(!s)return 0;
@@ -187,12 +231,22 @@ int mxb_gl_dispatch_import(MXBGLSurface*s,const char*lib,const char*name,
  if(sym_eq(name,"glEnd"))return mxb_gl_end(s);
  if(sym_eq(name,"glMatrixMode"))return mxb_gl_matrix_mode(s,word);
  if(sym_eq(name,"glLoadIdentity"))return mxb_gl_load_identity(s);
+ if(sym_eq(name,"glPushMatrix"))return mxb_gl_push_matrix(s);
+ if(sym_eq(name,"glPopMatrix"))return mxb_gl_pop_matrix(s);
  if(sym_eq(name,"glVertex3f")||sym_eq(name,"glVertex3fv"))
   return (n==3u&&a)?mxb_gl_vertex3fv(s,a):fail(s);
  if(sym_eq(name,"glColor3f")||sym_eq(name,"glColor3fv"))
   return (n==3u&&a)?mxb_gl_color3fv(s,a):fail(s);
  if(sym_eq(name,"glColor4f"))
   return (n==4u&&a)?mxb_gl_color4f(s,a[0],a[1],a[2],a[3]):fail(s);
+ if(sym_eq(name,"glRotatef"))
+  return (n==4u&&a)?mxb_gl_rotatef(s,a[0],a[1],a[2],a[3]):fail(s);
+ if(sym_eq(name,"glTranslatef"))
+  return (n==3u&&a)?mxb_gl_translatef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glScalef"))
+  return (n==3u&&a)?mxb_gl_scalef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glTexCoord2f"))
+  return (n==2u&&a)?mxb_gl_tex_coord2f(s,a[0],a[1]):fail(s);
  if(sym_eq(name,"glOrtho"))
   return (n==6u&&a)?mxb_gl_ortho(s,a[0],a[1],a[2],a[3],a[4],a[5]):fail(s);
  if(sym_eq(name,"glFrustum"))
