@@ -10,6 +10,8 @@ extern "C" {
  * Steamworks authentication and any game engine are outside this adapter. */
 #define MXB_GL_MAX_INPUT 2048u
 #define MXB_GL_MAX_OUTPUT 6144u
+/* Minimum modelview depth in fixed-function OpenGL: 32 levels total. */
+#define MXB_GL_MATRIX_STACK_DEPTH 32u
 #define MXB_GL_TRIANGLES 0x0004u
 #define MXB_GL_TRIANGLE_STRIP 0x0005u
 #define MXB_GL_TRIANGLE_FAN 0x0006u
@@ -32,6 +34,9 @@ void mxb_gl_reset(MXBGLSurface *s);
 void mxb_gl_clear_frame(MXBGLSurface *s);
 int mxb_gl_matrix_mode(MXBGLSurface *s,unsigned mode);
 int mxb_gl_load_identity(MXBGLSurface *s);
+int mxb_gl_push_matrix(MXBGLSurface *s);
+int mxb_gl_pop_matrix(MXBGLSurface *s);
+int mxb_gl_rotatef(MXBGLSurface *s,float degrees,float axis_x,float axis_y,float axis_z);
 int mxb_gl_translatef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_scalef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_ortho(MXBGLSurface *s,float l,float r,float b,float t,float n,float f);
