@@ -193,6 +193,12 @@ int mxb_gl_dispatch_import(MXBGLSurface*s,const char*lib,const char*name,
   return (n==3u&&a)?mxb_gl_color3fv(s,a):fail(s);
  if(sym_eq(name,"glColor4f"))
   return (n==4u&&a)?mxb_gl_color4f(s,a[0],a[1],a[2],a[3]):fail(s);
+ if(sym_eq(name,"glTranslatef"))
+  return (n==3u&&a)?mxb_gl_translatef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glScalef"))
+  return (n==3u&&a)?mxb_gl_scalef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glTexCoord2f"))
+  return (n==2u&&a)?mxb_gl_tex_coord2f(s,a[0],a[1]):fail(s);
  if(sym_eq(name,"glOrtho"))
   return (n==6u&&a)?mxb_gl_ortho(s,a[0],a[1],a[2],a[3],a[4],a[5]):fail(s);
  if(sym_eq(name,"glFrustum"))
