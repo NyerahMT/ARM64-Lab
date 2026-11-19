@@ -240,7 +240,8 @@ int main(void){
  vertices=mxb_gl_vertices(s);
  if(!nearly(vertices[0].position[0],2.0f)||
     !nearly(vertices[0].position[1],2.0f)||
-    !nearly(vertices[1].position[0],1.0f)||
+    !nearly(vertices[1].position[0],2.0f)||
+    !nearly(vertices[1].position[1],-2.0f)||
     !nearly(vertices[3].position[0],3.0f)||
     !nearly(vertices[4].position[0],1.0f))return 64;
  if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 65;
