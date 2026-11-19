@@ -165,9 +165,12 @@ enum MXBGLGuestStatus mxb_gl_dispatch_win64(
  if(same(name,"glEnd")||same(name,"glLoadIdentity"))
   return rendered(mxb_gl_dispatch_import(s,library,name,0,0,0));
 
- if(same(name,"glVertex3f")||same(name,"glColor3f")||same(name,"glColor4f")){
+ if(same(name,"glVertex3f")||same(name,"glColor3f")||
+    same(name,"glColor4f")||same(name,"glTranslatef")||
+    same(name,"glScalef")||same(name,"glTexCoord2f")){
   float args[4]={0.0f,0.0f,0.0f,0.0f};
-  size_t count=same(name,"glColor4f")?4u:3u;
+  size_t count=same(name,"glColor4f")?4u:
+               same(name,"glTexCoord2f")?2u:3u;
   for(size_t i=0;i<count;i++)args[i]=xmm_float(g->xmm_low64[i]);
   return rendered(mxb_gl_dispatch_import(s,library,name,0,args,count));
  }
