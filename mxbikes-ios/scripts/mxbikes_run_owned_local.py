@@ -25,6 +25,7 @@ SCRIPTS = ROOT / "scripts"
 PINNED_EXE_SHA256 = "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
 MAX_EXE = 750 * 1024 * 1024
 MAX_DLL = 64 * 1024 * 1024
+MAX_CORE_INI = 64 * 1024
 COPY_BLOCK = 1024 * 1024
 
 
@@ -81,6 +82,27 @@ def archive_member(zf: zipfile.ZipFile, name: str, limit: int) -> zipfile.ZipInf
     return hits[0]
 
 
+def optional_owned_core_ini(zf: zipfile.ZipFile) -> zipfile.ZipInfo | None:
+    """Only the exact root core.ini, never an arbitrary user/host path.
+
+    A missing file is allowed (original Windows fopen would return NULL).
+    A duplicate, encrypted, symlink or oversized file is not. The contents
+    remain private and are only extracted to the temporary owned-game dir.
+    """
+    matches=[x for x in zf.infolist() if not x.is_dir()
+             and x.filename.replace("\\\\","/").lower()=="core.ini"]
+    if len(matches)>1:
+        raise InputRejected("duplicate_original_core_ini")
+    if not matches:
+        return None
+    member=matches[0]
+    mode=(member.external_attr>>16)&0o170000
+    if (member.flag_bits&1 or mode==0o120000 or
+        member.file_size<=0 or member.file_size>MAX_CORE_INI):
+        raise InputRejected("unsafe_or_oversized_original_core_ini")
+    return member
+
+
 def bounded_extract(zf: zipfile.ZipFile, member: zipfile.ZipInfo, destination: Path) -> None:
     total = 0
     with zf.open(member, "r") as src, destination.open("xb") as output:
@@ -108,6 +130,9 @@ def extract_owned_archive(archive: Path, destination: Path) -> tuple[Path, Path]
         dll = destination / "steam_api64.dll"
         bounded_extract(zf, exe_info, exe)
         bounded_extract(zf, dll_info, dll)
+        core_info=optional_owned_core_ini(zf)
+        if core_info is not None:
+            bounded_extract(zf,core_info,destination/"core.ini")
     validate_owned_pair(exe, dll)
     return exe, dll
 
@@ -125,6 +150,14 @@ def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
                 steam_init_success_probe: bool = False,
                 steam_subscription_research_probe: bool = False) -> dict:
     manifest = validate_owned_pair(exe, dll)
+    core_ini=exe.parent/"core.ini"
+    if core_ini.is_symlink():
+        raise InputRejected("owned_core_ini_symlink_rejected")
+    core_present=core_ini.is_file()
+    if core_present and not 0<core_ini.stat().st_size<=MAX_CORE_INI:
+        raise InputRejected("owned_core_ini_size_budget")
+    manifest["owned_core_ini_present"]=core_present
+    manifest["owned_core_ini_size_bytes"]=core_ini.stat().st_size if core_present else 0
     output.mkdir(parents=True, exist_ok=True)
     (output / "owned-steam-file-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
