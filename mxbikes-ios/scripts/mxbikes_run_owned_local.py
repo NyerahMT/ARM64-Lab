@@ -122,7 +122,8 @@ def public_safe_output(path: Path) -> Path:
 
 def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
                 steam_failure_probe: bool = False,
-                steam_init_success_probe: bool = False) -> dict:
+                steam_init_success_probe: bool = False,
+                steam_subscription_research_probe: bool = False) -> dict:
     manifest = validate_owned_pair(exe, dll)
     output.mkdir(parents=True, exist_ok=True)
     (output / "owned-steam-file-manifest.json").write_text(
@@ -133,21 +134,24 @@ def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
     # ROOT.parent/tools, NOT the old ROOT/arm64-lab/tools checkout.
     sys.path.insert(0, str(PUBLIC_REPO_ROOT))
     sys.path.insert(0, str(SCRIPTS))
-    if steam_failure_probe or steam_init_success_probe:
+    if steam_failure_probe or steam_init_success_probe or steam_subscription_research_probe:
         from mxbikes_startup_fast_blocks import execute
         # Probe the genuine guest game failure path; never synthesize Steam
         # authentication or pass through unsupported interface creation.
         guest = execute(exe, dll, output,
             steam_failure_probe=steam_failure_probe,
-            steam_init_success_probe=steam_init_success_probe)
+            steam_init_success_probe=steam_init_success_probe,
+            steam_subscription_research_probe=steam_subscription_research_probe)
         result = {
             "mode": mode,
             "steam_failure_probe": steam_failure_probe,
             "steam_init_success_probe": steam_init_success_probe,
+            "steam_subscription_research_probe": steam_subscription_research_probe,
             "real_original_x64_executed": guest["original_guest_basic_block_executions"]>0,
             "explicit_failed_steam_returns": guest["steam_failure_probe"]["original_guest_steam_failure_return_count"],
             "modeled_steam_returns": guest["steam_failure_probe"]["original_guest_steam_modeled_return_count"],
-            "modeled_init_success_is_not_real_authentication": steam_init_success_probe,
+            "modeled_init_success_is_not_real_authentication": steam_init_success_probe or steam_subscription_research_probe,
+            "synthetic_ownership_method_reached": bool(guest.get("synthetic_steam_subscription_research") and guest["synthetic_steam_subscription_research"]["original_subscription_vtable_call_reached"]),
             "real_original_blocks_after_first_failed_return": len(guest["original_post_failure_block_rvas"]),
             "stop": guest["stop"]["status"],
             "blocked_import": guest["stop"].get("import"),
@@ -156,7 +160,9 @@ def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
             "license_or_entitlement_granted": False,
             "native_ios_game_running": False,
         }
-        report_name = "local-steam-init-success-probe.json" if steam_init_success_probe else "local-steam-failure-probe.json"
+        report_name = ("local-steam-init-success-probe.json" if steam_init_success_probe else
+                       "local-steam-subscription-research.json" if steam_subscription_research_probe else
+                       "local-steam-failure-probe.json")
         (output / report_name).write_text(
             json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
@@ -202,10 +208,12 @@ def run_cli(argv=None) -> int:
                         help="Opt-in diagnostic: execute original game with documented Steam false/failure returns")
     scenarios.add_argument("--steam-init-success-probe", action="store_true",
                         help="Opt-in counterfactual x64 branch probe: model Steam Init true WITHOUT real authentication or interfaces")
+    scenarios.add_argument("--steam-subscription-research-probe", action="store_true",
+                        help="Research-only: model one SteamApps virtual method true to map original post-subscription code; NOT entitlement")
     parser.add_argument("--validate-only", action="store_true",
                         help="Verify owned inputs without running any original instructions")
     args = parser.parse_args(argv)
-    if (args.steam_failure_probe or args.steam_init_success_probe) and (args.validate_only or args.static_graphics_only):
+    if (args.steam_failure_probe or args.steam_init_success_probe or args.steam_subscription_research_probe) and (args.validate_only or args.static_graphics_only):
         parser.error("Steam branch probes require execution, not --validate-only/--static-graphics-only")
 
     if bool(args.game_exe) != bool(args.steam_dll):
@@ -245,7 +253,8 @@ def run_cli(argv=None) -> int:
                     return 0
             report = make_report(exe, dll, out, mode,
                                  steam_failure_probe=args.steam_failure_probe,
-                                 steam_init_success_probe=args.steam_init_success_probe)
+                                 steam_init_success_probe=args.steam_init_success_probe,
+                                 steam_subscription_research_probe=args.steam_subscription_research_probe)
             if args.map_graphics_paths:
                 report["static_graph"] = graph_overview
             print(json.dumps(report, indent=2))
