@@ -74,7 +74,7 @@ class FifthMemsetTests(unittest.TestCase):
         self.assertEqual(service.summary()["synthetic_original_image_memset_count"],4)
         self.assertEqual(service.summary()["original_image_memset_events"][-1]
                          ["original_call_rva"],hex(FIFTH_MEMSET_CALL_RVA))
-        with self.assertRaisesRegex(GuestHeapResearchRejected,"budget"):
+        with self.assertRaisesRegex(GuestHeapResearchRejected,"sixth_memset_before_verified_second_malloc"):
             service.handle_image_memset(
                 cpu,PE(),{"ok":True},"MSVCR90.dll","memset",verified)
 
