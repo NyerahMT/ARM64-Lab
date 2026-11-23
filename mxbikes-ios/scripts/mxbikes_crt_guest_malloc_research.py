@@ -27,6 +27,9 @@ FOLLOWUP_HEAP_MAX_TOTAL_BYTES=16*1024*1024
 FOLLOWUP_HEAP_GUEST_OFFSET=0x100
 MEMMOVE_ZERO_ORIGINAL_CALL_RVA=0x15C1AA
 MEMMOVE_ZERO_ORIGINAL_RETURN_RVA=MEMMOVE_ZERO_ORIGINAL_CALL_RVA+5
+INITIALIZE_296_MEMSET_CALL_RVA=0x15C1F2
+INITIALIZE_296_MEMSET_RETURN_RVA=INITIALIZE_296_MEMSET_CALL_RVA+5
+INITIALIZE_296_BYTES=296
 
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
@@ -78,6 +81,7 @@ class SingleGuestMallocResearch:
         self.second_malloc_events=[]
         self.followup_malloc_events=[]
         self.zero_len_memmove_events=[]
+        self.followup_heap_memset_events=[]
         self.followup_heap_cursor=0
         self.memset_events=[]
         self.image_memset_events=[]
@@ -244,6 +248,58 @@ class SingleGuestMallocResearch:
             "bytes_moved":0,
             "guest_memory_read_or_written":False,
             "host_crt_used":False,
+        })
+        return True
+
+    def handle_followup_heap_memset(self,u,pe,slots,library,symbol,verify):
+        """Original single 296-byte memset on the most recent 296-byte malloc.
+
+        No PE data / host pointer may be touched; the entire zero fill must
+        fit the LAST allocation's recorded requested bounds (not page slack).
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="memset":
+            return False
+        if (not self.zero_len_memmove_events or self.followup_heap_memset_events
+            or not self.followup_malloc_events):
+            raise GuestHeapResearchRejected("followup_heap_memset_original_sequence_or_budget")
+        last=self.followup_malloc_events[-1]
+        requested=last.get("requested_bytes")
+        mapped=last.get("mapped_guest_bytes")
+        if requested!=INITIALIZE_296_BYTES or not isinstance(mapped,int):
+            raise GuestHeapResearchRejected("followup_heap_memset_last_allocation_mismatch")
+        last_ptr=(FOLLOWUP_HEAP_BASE+self.followup_heap_cursor-mapped
+                  +FOLLOWUP_HEAP_GUEST_OFFSET)
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        dest=u.reg_read(UC_X86_REG_RCX)
+        fill=u.reg_read(UC_X86_REG_RDX)
+        length=u.reg_read(UC_X86_REG_R8)
+        if (rsp&15!=8 or dest!=last_ptr or fill!=0
+            or length!=INITIALIZE_296_BYTES):
+            raise GuestHeapResearchRejected("followup_heap_memset_original_abi_or_bounds")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("followup_heap_memset_unreadable_return") from exc
+        if (ret!=IMAGE_BASE+INITIALIZE_296_MEMSET_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(INITIALIZE_296_MEMSET_CALL_RVA)):
+            raise GuestHeapResearchRejected("followup_heap_memset_original_callsite_unverified")
+        try:
+            if len(u.mem_read(dest,length))!=length:
+                raise GuestHeapResearchRejected("followup_heap_memset_guest_buffer_short")
+        except GuestHeapResearchRejected:
+            raise
+        except Exception as exc:
+            raise GuestHeapResearchRejected("followup_heap_memset_guest_buffer_unmapped") from exc
+        try:
+            u.mem_write(dest,bytes(length))
+        except Exception as exc:
+            raise GuestHeapResearchRejected("followup_heap_memset_guest_write_failed") from exc
+        u.reg_write(UC_X86_REG_RAX,dest)
+        self.followup_heap_memset_events.append({
+            "original_call_rva":hex(INITIALIZE_296_MEMSET_CALL_RVA),
+            "zeroed_bytes":length,
+            "bounded_to_last_guest_allocation":True,
+            "host_memory_or_CRT_used":False,
         })
         return True
 
@@ -477,6 +533,8 @@ class SingleGuestMallocResearch:
                 "bounded_followup_malloc_mapped_bytes":self.followup_heap_cursor,
                 "original_zero_length_memmove_count":len(self.zero_len_memmove_events),
                 "original_zero_length_memmove_events":list(self.zero_len_memmove_events),
+                "original_followup_heap_memset_count":len(self.followup_heap_memset_events),
+                "original_followup_heap_memset_events":list(self.followup_heap_memset_events),
                 "synthetic_original_memset_count":len(self.memset_events),
                 "allocations":list(self.events),
                 "memset_events":list(self.memset_events),
