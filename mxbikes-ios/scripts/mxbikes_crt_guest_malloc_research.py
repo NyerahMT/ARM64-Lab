@@ -7,7 +7,7 @@ general Windows malloc replacement, not a game patch and not an iOS heap.
 """
 from __future__ import annotations
 import struct
-from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8
+from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8,UC_X86_REG_R9
 
 IMAGE_BASE=0x140000000
 MALLOC_ORIGINAL_CALL_RVA=0x283956
