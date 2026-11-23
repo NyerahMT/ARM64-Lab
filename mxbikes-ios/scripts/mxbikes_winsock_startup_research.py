@@ -20,6 +20,10 @@ WSA_STARTUP_CALL_RVA=0x284EC3
 WSA_STARTUP_RETURN_RVA=WSA_STARTUP_CALL_RVA+6
 INET_PTON_CALL_RVA=0x284D26
 INET_PTON_RETURN_RVA=INET_PTON_CALL_RVA+6
+GETNAMEINFO_CALL_RVA=0x284D4C
+GETNAMEINFO_RETURN_RVA=GETNAMEINFO_CALL_RVA+6
+ORIGINAL_SOCKADDR_LENGTH=28
+ORIGINAL_GNI_HOST_BUFFER_SIZE=1025
 MAX_IP_TEXT_BYTES=64
 AF_INET_WINDOWS=2
 AF_INET6_WINDOWS=23
@@ -57,6 +61,7 @@ class OfflineWinsockResearch:
     def __init__(self):
         self.events=[]
         self.pton_events=[]
+        self.nameinfo_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -191,12 +196,88 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_getnameinfo(self,guest,pe,slots,library,symbol,verify):
+        """Model numeric fallback, NOT reverse DNS, for one original IPv4 query.
+
+        The exact original getnameinfo request has Flags=0, no service buffer,
+        and a 1025-byte node buffer. Windows can return numeric IP text when
+        a name is unavailable and NI_NAMEREQD was not set. We deliberately do
+        not resolve names or contact the network. Unverified requests fail.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="getnameinfo":
+            return False
+        if not self.pton_events or self.nameinfo_events:
+            raise OfflineWinsockRejected("getnameinfo_not_in_original_sequence")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        sockaddr=guest.reg_read(UC_X86_REG_RCX)
+        sockaddr_len=guest.reg_read(UC_X86_REG_RDX)
+        node=guest.reg_read(UC_X86_REG_R8)
+        node_len=guest.reg_read(UC_X86_REG_R9)
+        if rsp&15!=8:
+            raise OfflineWinsockRejected("getnameinfo_original_win64_stack_alignment")
+        if (not sockaddr or not node or
+            sockaddr_len!=ORIGINAL_SOCKADDR_LENGTH or
+            node_len!=ORIGINAL_GNI_HOST_BUFFER_SIZE):
+            raise OfflineWinsockRejected("getnameinfo_original_buffer_sizes_changed")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+            service,service_len,flags=struct.unpack(
+                "<QQQ",bytes(guest.mem_read(rsp+0x28,24)))
+        except Exception as exc:
+            raise OfflineWinsockRejected("getnameinfo_unreadable_guest_stack") from exc
+        if (ret!=IMAGE_BASE+GETNAMEINFO_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(GETNAMEINFO_CALL_RVA)):
+            raise OfflineWinsockRejected("getnameinfo_original_import_mismatch")
+        if service or service_len or flags:
+            raise OfflineWinsockRejected("getnameinfo_guest_dns_or_service_policy_changed")
+        try:
+            binary=bytes(guest.mem_read(sockaddr,16))
+        except Exception as exc:
+            raise OfflineWinsockRejected("getnameinfo_unreadable_sockaddr") from exc
+        if len(binary)!=16 or struct.unpack_from("<H",binary,0)[0]!=AF_INET_WINDOWS:
+            raise OfflineWinsockRejected("getnameinfo_original_not_ipv4")
+        address=ipaddress.IPv4Address(binary[4:8])
+        output=(str(address).encode("ascii")+bytes((0,)))
+        if len(output)>node_len:
+            raise OfflineWinsockRejected("getnameinfo_original_node_buffer_too_small")
+        if IMAGE_BASE<=node<IMAGE_BASE+0x8000000:
+            rva=node-IMAGE_BASE
+            if not any((rva>=base and
+                        rva-base<=max(vsize,rawsize)-len(output) and
+                        f&0x80000000 and not f&0x20000000)
+                       for _,vsize,base,rawsize,_,f in pe.sections):
+                raise OfflineWinsockRejected("getnameinfo_node_not_writable_pe_data")
+        try:
+            if len(guest.mem_read(node,len(output)))!=len(output):
+                raise OfflineWinsockRejected("getnameinfo_unmapped_node_buffer")
+        except OfflineWinsockRejected:
+            raise
+        except Exception as exc:
+            raise OfflineWinsockRejected("getnameinfo_unmapped_node_buffer") from exc
+        try:
+            guest.mem_write(node,output)
+        except Exception as exc:
+            raise OfflineWinsockRejected("getnameinfo_node_not_writable") from exc
+        guest.reg_write(UC_X86_REG_RAX,0)
+        self.nameinfo_events.append({
+            "original_call_rva":hex(GETNAMEINFO_CALL_RVA),
+            "offline_numeric_fallback_only":True,
+            "reverse_dns_performed":False,
+            "is_loopback":address.is_loopback,
+            "is_unspecified":address.is_unspecified,
+            "host_text_bytes_written":len(output),
+            "service_text_written":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
             "events":list(self.events),
             "verified_original_guest_inet_pton_handled":len(self.pton_events),
             "inet_pton_events":list(self.pton_events),
+            "verified_original_guest_getnameinfo_handled":len(self.nameinfo_events),
+            "getnameinfo_events":list(self.nameinfo_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
