@@ -39,7 +39,7 @@ def ready():
     m.called=True
     m.events=[{"original_initial_malloc":True}]
     m.image_memset_events=[{"original_call":hex(r)}
-                           for r,ret,sz in IMAGE_MEMSET_STEPS]
+                           for r,ret,sz in IMAGE_MEMSET_STEPS[:4]]
     m.sprintf_events=[{"completed_original_dotted_ipv4":True}]
     return m
 
