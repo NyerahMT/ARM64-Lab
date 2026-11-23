@@ -515,12 +515,22 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     src=u.reg_read(UC_X86_REG_RDX)
                     n=u.reg_read(UC_X86_REG_R8)
                     from mxbikes_crt_guest_malloc_research import (
-                        FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_MAX_TOTAL_BYTES)
+                        FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_MAX_TOTAL_BYTES,
+                        HEAP_BASE,HEAP_BYTES,SECOND_HEAP_BASE,
+                        SECOND_HEAP_MAP_SIZE)
                     def classify(ptr):
                         if BASE<=ptr<image_hi:return "original_image"
                         if FOLLOWUP_HEAP_BASE<=ptr<FOLLOWUP_HEAP_BASE+FOLLOWUP_HEAP_MAX_TOTAL_BYTES:
                             return "bounded_guest_heap"
-                        if 0x700000000<=ptr<0x800000000:return "other_guest_mapping"
+                        if HEAP_BASE<=ptr<HEAP_BASE+HEAP_BYTES:
+                            return "first_guest_malloc_heap"
+                        if SECOND_HEAP_BASE<=ptr<SECOND_HEAP_BASE+SECOND_HEAP_MAP_SIZE:
+                            return "second_guest_malloc_heap"
+                        if 0x700000000<=ptr<0x710000000:
+                            return "bootstrap_guest_stack_or_heap"
+                        if 0x710000000<=ptr<0x720000000:
+                            return "mapped_guest_stack_or_data"
+                        if 0x720000000<=ptr<0x800000000:return "other_guest_mapping"
                         return "unknown"
                     blocker["original_next_memcpy_abi"]={
                         "original_call_rva":verified_import_return(
