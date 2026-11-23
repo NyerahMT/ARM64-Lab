@@ -619,6 +619,29 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 u.reg_read(UC_X86_REG_RCX),u.reg_read(UC_X86_REG_RDX),
                 u.reg_read(UC_X86_REG_R8),u.reg_read(UC_X86_REG_R9))
         except GuestServiceBlocked as exc:
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="fopen":
+                # Private-runner diagnostics only, no host file access or
+                # guessed resource creation. Path and mode originate from
+                # the original guest data and are at most 256 ASCII chars.
+                try:
+                    from mxbikes_owned_file_crt import read_guest_cstring
+                    rsp=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+                    filename=read_guest_cstring(u,u.reg_read(UC_X86_REG_RCX))
+                    mode=read_guest_cstring(u,u.reg_read(UC_X86_REG_RDX))
+                    blocker["next_original_fopen_abi"]={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "original_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "original_guest_filename":filename,
+                        "original_guest_mode":mode,
+                        "win64_stack_aligned":rsp&15==8,
+                        "original_steam_dll_handle_closed":not file.open,
+                        "new_external_file_was_not_opened":True,
+                    }
+                except Exception as inspect_exc:
+                    blocker["next_original_fopen_abi"]={
+                        "inspection_error":type(inspect_exc).__name__}
             stop(u,"blocked_guest_crt_call",**{"import":lib+"!"+symbol,
                                            "reason":str(exc)})
             return
