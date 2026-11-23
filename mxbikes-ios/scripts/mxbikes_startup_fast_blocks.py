@@ -288,8 +288,13 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 # memset completed; the second must pass independent exact
                 # caller/length/destination-section verification.
                 if malloc_research.memset_events:
-                    handled=malloc_research.handle_image_memset(
-                        u,pe,original_slots,lib,symbol,verified_import_return)
+                    from mxbikes_crt_guest_malloc_research import IMAGE_MEMSET_STEPS
+                    if len(malloc_research.image_memset_events)>=len(IMAGE_MEMSET_STEPS):
+                        handled=malloc_research.handle_bounded_image_memset(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    else:
+                        handled=malloc_research.handle_image_memset(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
                 else:
                     handled=malloc_research.handle_memset(
                         u,pe,original_slots,lib,symbol,verified_import_return)
