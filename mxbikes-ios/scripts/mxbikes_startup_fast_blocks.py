@@ -287,6 +287,9 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 elif symbol=="getnameinfo":
                     accepted=winsock_research.handle_getnameinfo(
                         u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="getaddrinfo":
+                    accepted=winsock_research.handle_getaddrinfo(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
                 else:
                     accepted=winsock_research.handle(
                         u,pe,original_slots,lib,symbol,verified_import_return)
