@@ -97,6 +97,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
     import_call_count=0
     actual_original_gl_import_events=0
     blocker={"status":None,"import":None,"reason":None}
+    steam_context_layout=None
     image_hi=BASE+max(rva+max(vsz,raw) for _,vsz,rva,raw,_,_ in pe.sections)
     def stop(u,status_name,**extra):
         if blocker["status"] is None:
@@ -142,7 +143,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
             stop(u,"original_basic_block_budget")
 
     def on_import(u,pc,size,ctx):
-        nonlocal import_call_count,actual_original_gl_import_events
+        nonlocal import_call_count,actual_original_gl_import_events,steam_context_layout
         if blocker["status"] is not None:return
         reference=imports.get(pc)
         if reference is None:
@@ -150,6 +151,10 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
             return
         import_call_count+=1
         lib,symbol=reference
+        if (steam_init_success_probe and lib.lower()=="steam_api64.dll" and
+            symbol=="SteamInternal_ContextInit"):
+            from mxbikes_steam_context_layout import inspect_context_init_data
+            steam_context_layout=inspect_context_init_data(u,BASE,image_hi)
         if steam_failure is not None and lib.lower()=="steam_api64.dll":
             from mxbikes_steam_failure_path import SteamFailureProbeRejected
             try:
@@ -240,6 +245,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "original_post_failure_block_rvas":post_failure_blocks,
         "authentic_post_failure_original_blocks_observed":len(post_failure_blocks)>0,
         "steam_failure_probe":steam_failure.summary() if steam_failure else None,
+        "original_steam_context_argument_snapshot":steam_context_layout,
     }
     out.mkdir(parents=True,exist_ok=True)
     report_name = ("startup-steam-failure-blocks" if steam_failure_probe else
