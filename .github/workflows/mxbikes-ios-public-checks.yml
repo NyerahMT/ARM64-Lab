@@ -84,6 +84,7 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_crt_bounded_image_memset.py -v
           python -m unittest discover -s tests -p test_mxbikes_crt_followup_malloc.py -v
           python -m unittest discover -s tests -p test_mxbikes_core_ini_owned_stream.py -v
+          python -m unittest discover -s tests -p test_mxbikes_win32_owned_core_ini.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
