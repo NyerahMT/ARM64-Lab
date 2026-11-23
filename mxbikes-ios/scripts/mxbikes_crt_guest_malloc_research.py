@@ -12,6 +12,12 @@ from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X8
 IMAGE_BASE=0x140000000
 MALLOC_ORIGINAL_CALL_RVA=0x283956
 MALLOC_ORIGINAL_RETURN_RVA=0x28395B
+SECOND_MALLOC_CALL_RVA=0x2DCDC9
+SECOND_MALLOC_RETURN_RVA=SECOND_MALLOC_CALL_RVA+5
+SECOND_MALLOC_BYTES=48
+SECOND_HEAP_BASE=0x7B0000000
+SECOND_HEAP_MAP_SIZE=0x1000
+SECOND_HEAP_RESULT=SECOND_HEAP_BASE+0x100
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
 SPRINTF_ORIGINAL_CALL_RVA=0x285469
@@ -51,6 +57,7 @@ class SingleGuestMallocResearch:
     def __init__(self):
         self.called=False
         self.events=[]
+        self.second_malloc_events=[]
         self.memset_events=[]
         self.image_memset_events=[]
         self.sprintf_events=[]
@@ -85,6 +92,43 @@ class SingleGuestMallocResearch:
             "original_call_rva":hex(MALLOC_ORIGINAL_CALL_RVA),
             "requested_bytes":size,
             "guest_heap_mapped_bytes":HEAP_BYTES,
+            "original_msvcr90_malloc_executed":False,
+        })
+        return True
+
+    def handle_second_malloc(self,u,pe,slots,library,symbol,verify):
+        """One 48-byte guest allocation through verified original lazy CRT wrapper.
+
+        Validates the original E8 CALL to 0x2BD710, complete lazy-wrapper
+        shape, original import-slot identity (via verify), and Win64 ABI.
+        The guest receives a new mapped page, never a host pointer.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="malloc":
+            return False
+        if (not self.called or self.second_malloc_events or
+            len(self.image_memset_events)!=len(IMAGE_MEMSET_STEPS)):
+            raise GuestHeapResearchRejected("second_malloc_original_order_or_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        size=u.reg_read(UC_X86_REG_RCX)
+        if rsp&15!=8 or size!=SECOND_MALLOC_BYTES:
+            raise GuestHeapResearchRejected("second_malloc_original_size_or_stack_mismatch")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("second_malloc_unreadable_original_stack") from exc
+        if (ret!=IMAGE_BASE+SECOND_MALLOC_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(SECOND_MALLOC_CALL_RVA)):
+            raise GuestHeapResearchRejected("second_malloc_original_lazy_wrapper_not_verified")
+        try:
+            u.mem_map(SECOND_HEAP_BASE,SECOND_HEAP_MAP_SIZE)
+        except Exception as exc:
+            raise GuestHeapResearchRejected("second_malloc_guest_page_unavailable") from exc
+        u.reg_write(UC_X86_REG_RAX,SECOND_HEAP_RESULT)
+        self.second_malloc_events.append({
+            "original_call_rva":hex(SECOND_MALLOC_CALL_RVA),
+            "malloc_wrapper_target_rva":"0x2bd710",
+            "requested_bytes":SECOND_MALLOC_BYTES,
+            "guest_heap_mapping_bytes":SECOND_HEAP_MAP_SIZE,
             "original_msvcr90_malloc_executed":False,
         })
         return True
@@ -236,6 +280,8 @@ class SingleGuestMallocResearch:
 
     def summary(self):
         return {"synthetic_original_malloc_count":len(self.events),
+                "synthetic_original_second_malloc_count":len(self.second_malloc_events),
+                "second_malloc_events":list(self.second_malloc_events),
                 "synthetic_original_memset_count":len(self.memset_events),
                 "allocations":list(self.events),
                 "memset_events":list(self.memset_events),
