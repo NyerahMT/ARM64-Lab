@@ -1,12 +1,13 @@
 """No commercial files: verify exact Win64 original WSAStartup import contract."""
 import struct,sys,unittest
 from pathlib import Path
-from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX
+from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
 from mxbikes_winsock_startup_research import (
     OfflineWinsockResearch,OfflineWinsockRejected,
     offline_wsadata64,IMAGE_BASE,WSA_STARTUP_CALL_RVA,WSA_STARTUP_RETURN_RVA,
-    WSA_REQUESTED_VERSION,WSADATA64_SIZE,WSADATA64_DESCRIPTION_OFFSET,
+    WSA_REQUESTED_VERSION,INET_PTON_CALL_RVA,INET_PTON_RETURN_RVA,
+    AF_INET_WINDOWS,AF_INET6_WINDOWS,WSADATA64_SIZE,WSADATA64_DESCRIPTION_OFFSET,
     WSADATA64_STATUS_OFFSET
 )
 
@@ -82,5 +83,89 @@ class WsaStartupResearchTests(unittest.TestCase):
         self.assertFalse(service.handle(u,None,{"verified":True},
                                         "KERNEL32.dll","#115",verified))
         self.assertEqual(u.memory_written,[])
+
+class InetPtonOriginalResearchTests(unittest.TestCase):
+    class IPGuest:
+        SOURCE=0x750020000
+        DEST=0x750030000
+        RSP=0x750040008
+        def __init__(self,text=b"127.0.0.1"+bytes((0,)),family=AF_INET_WINDOWS,
+                     return_pc=IMAGE_BASE+INET_PTON_RETURN_RVA,output_mapped=True):
+            self.text=text
+            self.return_pc=return_pc
+            self.output_mapped=output_mapped
+            self.regs={UC_X86_REG_RSP:self.RSP,UC_X86_REG_RCX:family,
+                       UC_X86_REG_RDX:self.SOURCE,UC_X86_REG_R8:self.DEST,
+                       UC_X86_REG_RAX:0xBAD}
+            self.writes=[]
+        def reg_read(self,r):return self.regs[r]
+        def reg_write(self,r,v):self.regs[r]=v
+        def mem_read(self,addr,n):
+            if addr==self.RSP and n==8:
+                return struct.pack("<Q",self.return_pc)
+            if n==1 and self.SOURCE<=addr<self.SOURCE+len(self.text):
+                return self.text[addr-self.SOURCE:addr-self.SOURCE+1]
+            if addr==self.DEST and n in (4,16) and self.output_mapped:
+                return b"Z"*n
+            raise ValueError("unmapped")
+        def mem_write(self,addr,payload):self.writes.append((addr,bytes(payload)))
+    @staticmethod
+    def verify(_,ret,lib,sym,slots):
+        if (slots.get("ok") and ret==IMAGE_BASE+INET_PTON_RETURN_RVA and
+            lib.lower()=="ws2_32.dll" and sym=="inet_pton"):
+            return hex(INET_PTON_CALL_RVA)
+        return None
+    @staticmethod
+    def initialized(): 
+        service=OfflineWinsockResearch()
+        service.events=[{"synthetic_wsa_startup":True}]
+        return service
+
+    def test_ipv4_conversion_is_network_order_and_no_socket_created(self):
+        u=self.IPGuest();service=self.initialized()
+        self.assertTrue(service.handle_inet_pton(
+            u,None,{"ok":True},"WS2_32.dll","inet_pton",self.verify))
+        self.assertEqual(u.reg_read(UC_X86_REG_RAX),1)
+        self.assertEqual(u.writes,[(u.DEST,bytes((127,0,0,1)))])
+        self.assertEqual(service.summary()["verified_original_guest_inet_pton_handled"],1)
+        self.assertTrue(service.summary()["inet_pton_events"][0]["is_loopback"])
+        self.assertEqual(service.summary()["real_sockets_created"],0)
+
+    def test_ipv6_writes_sixteen_bytes(self):
+        u=self.IPGuest(text=b"::1"+bytes((0,)),family=AF_INET6_WINDOWS)
+        service=self.initialized()
+        self.assertTrue(service.handle_inet_pton(
+            u,None,{"ok":True},"WS2_32.dll","inet_pton",self.verify))
+        self.assertEqual(u.writes,[(u.DEST,bytes((0,)*15+(1,)))])
+        self.assertEqual(service.summary()["inet_pton_events"][0]["ip_version"],6)
+
+    def test_invalid_literal_returns_zero_without_memory_writes(self):
+        u=self.IPGuest(text=b"not.an.ip"+bytes((0,)))
+        service=self.initialized()
+        self.assertTrue(service.handle_inet_pton(
+            u,None,{"ok":True},"WS2_32.dll","inet_pton",self.verify))
+        self.assertEqual(u.reg_read(UC_X86_REG_RAX),0)
+        self.assertEqual(u.writes,[])
+
+    def test_mismatched_abi_memory_and_provenance_fail_closed(self):
+        cases=[
+            (self.IPGuest(family=999),{"ok":True}),
+            (self.IPGuest(return_pc=IMAGE_BASE+INET_PTON_RETURN_RVA+1),{"ok":True}),
+            (self.IPGuest(output_mapped=False),{"ok":True}),
+            (self.IPGuest(text=b"A"*64),{"ok":True}),
+            (self.IPGuest(),{}),
+        ]
+        for u,slots in cases:
+            service=self.initialized()
+            with self.assertRaises(OfflineWinsockRejected):
+                service.handle_inet_pton(u,None,slots,
+                                         "WS2_32.dll","inet_pton",self.verify)
+            self.assertEqual(u.reg_read(UC_X86_REG_RAX),0xBAD)
+            self.assertEqual(u.writes,[])
+        u=self.IPGuest()
+        service=OfflineWinsockResearch()
+        with self.assertRaises(OfflineWinsockRejected):
+            service.handle_inet_pton(u,None,{"ok":True},
+                                     "WS2_32.dll","inet_pton",self.verify)
 
 if __name__=="__main__":unittest.main()
