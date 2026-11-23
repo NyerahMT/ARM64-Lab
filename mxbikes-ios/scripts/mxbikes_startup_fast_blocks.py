@@ -245,6 +245,28 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                                                  verified_import_return):
                     return
             except GuestHeapResearchRejected as exc:
+                # Record only Win64 ABI/provenance metadata at the second
+                # malloc-independent memset. Never read or publish buffers.
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    blocked_memset={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "guest_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "dst_is_guest_allocated_heap":(
+                            u.reg_read(UC_X86_REG_RCX)==
+                            __import__("mxbikes_crt_guest_malloc_research").HEAP_RESULT),
+                        "dst_is_original_image":(BASE<=u.reg_read(UC_X86_REG_RCX)<image_hi),
+                        "dst_alignment_mod8":u.reg_read(UC_X86_REG_RCX)&7,
+                        "fill_byte":u.reg_read(UC_X86_REG_RDX)&255,
+                        "fill_value_high_bits_zero":u.reg_read(UC_X86_REG_RDX)>>8==0,
+                        "length":u.reg_read(UC_X86_REG_R8),
+                        "guest_stack_aligned":stack&15==8,
+                    }
+                    blocker["next_memset_abi"]=blocked_memset
+                except Exception as abi_exc:
+                    blocker["next_memset_abi"]={"error":type(abi_exc).__name__}
                 stop(u,"original_guest_memset_research_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
