@@ -99,7 +99,7 @@ no Steam authentication, host networking or original engine rendering occurs.
 | `0x284ec3` | `WS2_32!#115 = WSAStartup` | Requested Winsock version **0x0002 (2.0)**; Win64 408-byte WSADATA written in mapped guest memory; returned synthetic success |
 | `0x284cf9` | second `MSVCR90!memset` | Zero-filled **400** bytes only after validating destination is a writable, non-executable PE data section |
 | `0x284d26` | `WS2_32!inet_pton` | Read a bounded, NUL-terminated guest IP literal; converted IPv4/IPv6 to network-order bytes without sockets |
-| `0x284d4c` | `WS2_32!getnameinfo` | Verified original Win64 arguments: family 2 (IPv4), sockaddr byte count 28, host capacity 1025, no service buffer, flags=0. A numeric-only, no-DNS fallback has been implemented and validated in public CI; owned-game private run **not yet verified as of this documentation update** |
+| `0x284d4c` | `WS2_32!getnameinfo` | Verified original Win64 arguments: family 2 (IPv4), sockaddr byte count 28, host capacity 1025, no service buffer, flags=0. An offline numeric fallback **passed private original-executable execution**, progressing to the next WS2_32 import, `getaddrinfo` at RVA `0x284d61` |
 
 Private original executable results:
 - [WSAStartup accepted, next second memset](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45116994979)
@@ -115,3 +115,19 @@ It must not be mistaken for completed networking compatibility.
 Production-level work remains: cross-architecture integration, actual game
 asset startup, platform input/video rendering, legal entitlement integration,
 and true offline/online networking decisions. The main menu has not been reached.
+
+
+## Latest verified continuation: getnameinfo to getaddrinfo
+
+The owned original-game private runner completed successfully with
+the audited, DNS-free numeric `getnameinfo` fallback at `0x284d4c`.
+This is a synthetic service response based on documented Windows
+numeric-fallback behavior, not a resolved hostname or online networking.
+
+Next actual unsupported original import:
+`WS2_32.dll!getaddrinfo`, original IAT CALL RVA `0x284d61`,
+return RVA `0x284d67`. Do not implement DNS, socket handles or
+network I/O until their precise original call arguments and usage
+have been independently inspected.
+
+Evidence: [private original-game getnameinfo test](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45117838100).
