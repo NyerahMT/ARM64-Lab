@@ -19,6 +19,8 @@ CREATEFILEA_ORIGINAL_CALL_RVA=0x1578c2
 CREATEFILEA_ORIGINAL_RETURN_RVA=CREATEFILEA_ORIGINAL_CALL_RVA+6
 GETFILETIME_ORIGINAL_CALL_RVA=0x1578dd
 GETFILETIME_ORIGINAL_RETURN_RVA=GETFILETIME_ORIGINAL_CALL_RVA+6
+CLOSEHANDLE_ORIGINAL_CALL_RVA=0x1578e6
+CLOSEHANDLE_ORIGINAL_RETURN_RVA=CLOSEHANDLE_ORIGINAL_CALL_RVA+6
 GENERIC_READ=0x80000000
 FILE_SHARE_READ=0x1
 OPEN_EXISTING=3
@@ -42,6 +44,7 @@ class OwnedCoreIniWin32Research:
         self.open=False
         self.calls=[]
         self.filetime_calls=[]
+        self.close_calls=[]
 
     def handle_createfilea(self,u,pe,slots,lib,symbol,verify):
         if lib.lower()!="kernel32.dll" or symbol!="CreateFileA":
@@ -138,12 +141,40 @@ class OwnedCoreIniWin32Research:
         })
         return True
 
+    def handle_closehandle(self,u,pe,slots,lib,symbol,verify):
+        """Close only the exact synthetic owned core.ini Win32 guest handle."""
+        if lib.lower()!="kernel32.dll" or symbol!="CloseHandle":
+            return False
+        if (not self.open or len(self.filetime_calls)!=1 or self.close_calls):
+            raise CoreIniWin32Rejected("original_core_ini_win32_close_order_or_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        handle=u.reg_read(UC_X86_REG_RCX)
+        if rsp&15!=8 or handle!=CORE_INI_WIN32_HANDLE:
+            raise CoreIniWin32Rejected("original_core_ini_close_wrong_guest_handle_or_stack")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise CoreIniWin32Rejected("original_core_ini_close_unreadable_guest_stack") from exc
+        if (ret!=IMAGE_BASE+CLOSEHANDLE_ORIGINAL_RETURN_RVA or
+            verify(pe,ret,lib,symbol,slots)!=hex(CLOSEHANDLE_ORIGINAL_CALL_RVA)):
+            raise CoreIniWin32Rejected("original_core_ini_close_original_import_unverified")
+        self.open=False
+        u.reg_write(UC_X86_REG_RAX,1)
+        self.close_calls.append({
+            "original_call_rva":hex(CLOSEHANDLE_ORIGINAL_CALL_RVA),
+            "only_owned_core_ini_guest_handle_closed":True,
+            "host_windows_file_api_called":False,
+        })
+        return True
+
     def summary(self):
         return {
             "original_core_ini_win32_createfile_count":len(self.calls),
             "original_core_ini_win32_calls":list(self.calls),
             "original_core_ini_win32_getfiletime_count":len(self.filetime_calls),
             "original_core_ini_win32_getfiletime_calls":list(self.filetime_calls),
+            "original_core_ini_win32_closehandle_count":len(self.close_calls),
+            "original_core_ini_win32_closehandle_calls":list(self.close_calls),
             "win32_guest_handle_currently_open":self.open,
             "win32_guest_file_cursor":self.cursor,
             "no_host_file_api_called":True,
