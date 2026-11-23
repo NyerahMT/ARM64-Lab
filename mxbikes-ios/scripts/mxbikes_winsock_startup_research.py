@@ -22,6 +22,14 @@ INET_PTON_CALL_RVA=0x284D26
 INET_PTON_RETURN_RVA=INET_PTON_CALL_RVA+6
 GETNAMEINFO_CALL_RVA=0x284D4C
 GETNAMEINFO_RETURN_RVA=GETNAMEINFO_CALL_RVA+6
+GETADDRINFO_CALL_RVA=0x284D61
+GETADDRINFO_RETURN_RVA=GETADDRINFO_CALL_RVA+6
+ADDRINFO_MOCK_BASE=0x7A0000000
+ADDRINFO_MOCK_SIZE=0x1000
+ADDRINFO_HEAD=ADDRINFO_MOCK_BASE+0x100
+ADDRINFO_SOCKADDR=ADDRINFO_MOCK_BASE+0x200
+WIN64_ADDRINFO_SIZE=48
+IPV4_SOCKADDR_BYTES=16
 ORIGINAL_SOCKADDR_LENGTH=28
 ORIGINAL_GNI_HOST_BUFFER_SIZE=1025
 MAX_IP_TEXT_BYTES=64
@@ -62,6 +70,7 @@ class OfflineWinsockResearch:
         self.events=[]
         self.pton_events=[]
         self.nameinfo_events=[]
+        self.addrinfo_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -270,6 +279,84 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_getaddrinfo(self,guest,pe,slots,library,symbol,verify):
+        """Research-only numeric IPv4 loopback, without DNS or real sockets.
+
+        One synthetic Win64 ADDRINFOA and sockaddr_in is allocated in GUEST
+        memory, with only one TCP entry. That is enough to explore how
+        original code *consumes* an address list; this is not a complete
+        Winsock implementation or proof of identical Windows results.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="getaddrinfo":
+            return False
+        if (len(self.nameinfo_events)!=1 or self.addrinfo_events or
+            not self.nameinfo_events[0].get("offline_numeric_fallback_only")):
+            raise OfflineWinsockRejected("getaddrinfo_not_verified_original_sequence")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        node=guest.reg_read(UC_X86_REG_RCX)
+        service=guest.reg_read(UC_X86_REG_RDX)
+        hints=guest.reg_read(UC_X86_REG_R8)
+        output=guest.reg_read(UC_X86_REG_R9)
+        if rsp&15!=8 or not node or not output or output&7:
+            raise OfflineWinsockRejected("getaddrinfo_guest_win64_stack_or_pointer")
+        if service or hints:
+            raise OfflineWinsockRejected("getaddrinfo_requires_unimplemented_service_or_hints")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise OfflineWinsockRejected("getaddrinfo_unmapped_original_return") from exc
+        if (ret!=IMAGE_BASE+GETADDRINFO_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(GETADDRINFO_CALL_RVA)):
+            raise OfflineWinsockRejected("getaddrinfo_original_import_provenance")
+        raw=bytearray()
+        for index in range(64):
+            try:
+                ch=bytes(guest.mem_read(node+index,1))
+            except Exception as exc:
+                raise OfflineWinsockRejected("getaddrinfo_guest_ip_unmapped") from exc
+            if len(ch)!=1:
+                raise OfflineWinsockRejected("getaddrinfo_guest_ip_short")
+            if ch==bytes((0,)):
+                break
+            raw.extend(ch)
+        else:
+            raise OfflineWinsockRejected("getaddrinfo_guest_ip_unterminated")
+        if bytes(raw)!=b"127.0.0.1":
+            raise OfflineWinsockRejected("getaddrinfo_not_verified_loopback_literal")
+        try:
+            if bytes(guest.mem_read(output,8))!=bytes(8):
+                raise OfflineWinsockRejected("getaddrinfo_original_result_not_initially_null")
+        except OfflineWinsockRejected:
+            raise
+        except Exception as exc:
+            raise OfflineWinsockRejected("getaddrinfo_original_result_unmapped") from exc
+        # sizeof(ADDRINFOA)==48 on Win64: flags/family/type/protocol (4*4),
+        # ai_addrlen (size_t), three pointers (canonname,addr,next).
+        # sockaddr_in: AF_INET (little endian), port 0 (network byte order),
+        # loopback 127.0.0.1 in network byte order, 8 reserved bytes.
+        sockaddr=struct.pack("<HH",AF_INET_WINDOWS,0)+bytes((127,0,0,1))+bytes(8)
+        addrinfo=struct.pack("<iiiiQQQQ",0,AF_INET_WINDOWS,1,6,
+                             IPV4_SOCKADDR_BYTES,0,ADDRINFO_SOCKADDR,0)
+        if len(addrinfo)!=WIN64_ADDRINFO_SIZE or len(sockaddr)!=IPV4_SOCKADDR_BYTES:
+            raise OfflineWinsockRejected("getaddrinfo_synthetic_layout_invalid")
+        try:
+            guest.mem_map(ADDRINFO_MOCK_BASE,ADDRINFO_MOCK_SIZE)
+            guest.mem_write(ADDRINFO_SOCKADDR,sockaddr)
+            guest.mem_write(ADDRINFO_HEAD,addrinfo)
+            guest.mem_write(output,struct.pack("<Q",ADDRINFO_HEAD))
+        except Exception as exc:
+            raise OfflineWinsockRejected("getaddrinfo_mock_guest_memory_unavailable") from exc
+        guest.reg_write(UC_X86_REG_RAX,0)
+        self.addrinfo_events.append({
+            "original_call_rva":hex(GETADDRINFO_CALL_RVA),
+            "single_synthetic_tcp_ipv4_result":True,
+            "guest_addrinfo_structure_bytes":WIN64_ADDRINFO_SIZE,
+            "guest_sockaddr_bytes":IPV4_SOCKADDR_BYTES,
+            "resolved_loopback_without_dns":True,
+            "real_network_access":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
@@ -278,6 +365,8 @@ class OfflineWinsockResearch:
             "inet_pton_events":list(self.pton_events),
             "verified_original_guest_getnameinfo_handled":len(self.nameinfo_events),
             "getnameinfo_events":list(self.nameinfo_events),
+            "verified_original_guest_getaddrinfo_handled":len(self.addrinfo_events),
+            "getaddrinfo_events":list(self.addrinfo_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
