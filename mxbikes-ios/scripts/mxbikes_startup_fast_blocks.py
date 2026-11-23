@@ -60,7 +60,8 @@ def verified_import_return(pe, return_va, library, symbol, original_slots):
 
 
 def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False,
-            steam_init_success_probe=False):
+            steam_init_success_probe=False,
+            steam_subscription_research_probe=False):
     from tools.pe_probe import PE
     pe=PE(executable)
     if hashlib.sha256(pe.b).hexdigest()!=INPUT_SHA:
@@ -76,13 +77,18 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         pe,0,FILE_HANDLE,0x1305c0,0x1305b6,return_cpu=True)
     imports=install_import_dispatch(uc,pe)
     original_slots={rva:(lib.lower(),name) for rva,lib,name in import_slots(pe)}
-    if steam_failure_probe and steam_init_success_probe:
+    if sum(bool(v) for v in (steam_failure_probe,steam_init_success_probe,
+                             steam_subscription_research_probe))>1:
         raise ValueError("Choose exactly one Steam diagnostic scenario")
     steam_failure = None
-    if steam_failure_probe or steam_init_success_probe:
+    if steam_failure_probe or steam_init_success_probe or steam_subscription_research_probe:
         from mxbikes_steam_failure_path import SteamFailureProbe
         steam_failure = SteamFailureProbe(pe,
-            init_success_branch_probe=steam_init_success_probe)
+            init_success_branch_probe=steam_init_success_probe or steam_subscription_research_probe)
+    research=None
+    if steam_subscription_research_probe:
+        from mxbikes_steam_offline_research import OfflineAppsResearchProbe
+        research=OfflineAppsResearchProbe()
     starts,ends=unwind_index(pe)
     crt=ReadOnlyCRT(file)
     decoded={}
@@ -109,6 +115,10 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         if blocker["status"] is not None:return
         if pc in imports:
             return
+        if research is not None:
+            from mxbikes_steam_offline_research import SUBSCRIPTION_METHOD
+            if pc == SUBSCRIPTION_METHOD:
+                return  # synthetic one-byte RET; never counted as original code
         if not BASE<=pc<image_hi:
             stop(u,"guest_executed_outside_original_image")
             return
@@ -151,10 +161,26 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
             return
         import_call_count+=1
         lib,symbol=reference
-        if (steam_init_success_probe and lib.lower()=="steam_api64.dll" and
+        if ((steam_init_success_probe or research is not None) and
+            lib.lower()=="steam_api64.dll" and
             symbol=="SteamInternal_ContextInit"):
             from mxbikes_steam_context_layout import inspect_context_init_data
             steam_context_layout=inspect_context_init_data(u,BASE,image_hi)
+            if research is not None:
+                from mxbikes_steam_offline_research import (
+                    OfflineResearchRejected,CONTEXT_CALL_RVA)
+                try:
+                    rsp=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+                    proven=verified_import_return(pe,ret,lib,symbol,original_slots)
+                    if proven!=hex(CONTEXT_CALL_RVA):
+                        raise OfflineResearchRejected("unverified_original_context_import")
+                    research.context_init(u,image_hi)
+                    return
+                except (OfflineResearchRejected,ValueError,struct.error) as exc:
+                    stop(u,"steam_research_context_rejected",**{"import":lib+"!"+symbol,
+                         "reason":str(exc)})
+                    return
         if steam_failure is not None and lib.lower()=="steam_api64.dll":
             from mxbikes_steam_failure_path import SteamFailureProbeRejected
             try:
@@ -197,6 +223,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
             return
         u.reg_write(UC_X86_REG_RAX,result&0xffffffffffffffff)
 
+    if research is not None:
+        from mxbikes_steam_offline_research import (
+            SUBSCRIPTION_METHOD,OfflineResearchRejected)
+        def on_subscription_method(u,pc,size,ctx):
+            try:
+                research.subscription_method(u)
+            except OfflineResearchRejected as exc:
+                stop(u,"steam_research_subscription_rejected",reason=str(exc))
+        uc.hook_add(UC_HOOK_CODE,on_subscription_method,
+                    begin=SUBSCRIPTION_METHOD,end=SUBSCRIPTION_METHOD)
     uc.hook_add(UC_HOOK_BLOCK,on_block)
     uc.hook_add(UC_HOOK_CODE,on_import,begin=STUBS,end=STUBS+STUB_BYTES-1)
     start=uc.reg_read(UC_X86_REG_RIP)
@@ -242,14 +278,17 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "original_game_engine_booted":False,
         "steam_failure_probe_enabled":bool(steam_failure_probe),
         "steam_init_success_probe_enabled":bool(steam_init_success_probe),
+        "steam_subscription_research_probe_enabled":bool(steam_subscription_research_probe),
         "original_post_failure_block_rvas":post_failure_blocks,
         "authentic_post_failure_original_blocks_observed":len(post_failure_blocks)>0,
         "steam_failure_probe":steam_failure.summary() if steam_failure else None,
         "original_steam_context_argument_snapshot":steam_context_layout,
+        "synthetic_steam_subscription_research":research.summary() if research else None,
     }
     out.mkdir(parents=True,exist_ok=True)
     report_name = ("startup-steam-failure-blocks" if steam_failure_probe else
                    "startup-steam-init-success-probe" if steam_init_success_probe else
+                   "startup-steam-subscribed-research" if steam_subscription_research_probe else
                    "startup-fast-blocks")
     (out/(report_name+".json")).write_text(json.dumps(result,indent=2)+"\n")
     lines=["# MX Bikes — fast multi-block original game execution","",
