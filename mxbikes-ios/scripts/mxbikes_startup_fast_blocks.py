@@ -360,6 +360,66 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     }
                 except Exception as exc:
                     blocker["original_getnameinfo_abi"]={"error":type(exc).__name__}
+            if (winsock_research is not None and
+                lib.lower()=="ws2_32.dll" and symbol=="getaddrinfo"):
+                # Capture non-sensitive Win64 ABI metadata only: no raw node,
+                # service strings, guest pointers, or private EXE data.
+                try:
+                    import ipaddress
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    node=u.reg_read(UC_X86_REG_RCX)
+                    service=u.reg_read(UC_X86_REG_RDX)
+                    hints=u.reg_read(UC_X86_REG_R8)
+                    output=u.reg_read(UC_X86_REG_R9)
+                    def classify_guest_cstr(pointer):
+                        if not pointer:return {"kind":"null"}
+                        raw=bytearray()
+                        for pos in range(128):
+                            ch=bytes(u.mem_read(pointer+pos,1))
+                            if ch==bytes((0,)):break
+                            raw.extend(ch)
+                        else:return {"kind":"unterminated","length_at_least":128}
+                        if not raw:return {"kind":"empty","length":0}
+                        try:
+                            name=raw.decode("ascii")
+                            parsed=ipaddress.ip_address(name)
+                            return {"kind":"numeric_ipv"+str(parsed.version),
+                                    "length":len(raw),
+                                    "loopback":parsed.is_loopback,
+                                    "unspecified":parsed.is_unspecified}
+                        except (ValueError,UnicodeError):
+                            return {"kind":"other","length":len(raw),
+                                    "ascii":all(x<128 for x in raw)}
+                    hint_values=None
+                    if hints:
+                        h=bytes(u.mem_read(hints,48))
+                        flags,family,socktype,protocol,alen,cname,addr,nxt=struct.unpack(
+                            "<iiiiQQQQ",h)
+                        hint_values={"flags":flags,"family":family,
+                                     "socktype":socktype,"protocol":protocol,
+                                     "addrlen_zero":alen==0,
+                                     "canonname_null":cname==0,
+                                     "addr_null":addr==0,"next_null":nxt==0}
+                    original_out=bytes(u.mem_read(output,8)) if output else None
+                    blocker["original_getaddrinfo_abi"]={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "original_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "win64_stack_aligned":stack&15==8,
+                        "node":classify_guest_cstr(node),
+                        "service":classify_guest_cstr(service),
+                        "hints_present":bool(hints),
+                        "hints":hint_values,
+                        "result_pointer_present":bool(output),
+                        "result_pointer_alignment_mod8":output&7 if output else None,
+                        "result_pointer_currently_zero":original_out==bytes(8)
+                          if original_out is not None else None,
+                        "external_dns_invoked":False,
+                    }
+                except Exception as exc:
+                    blocker["original_getaddrinfo_abi"]={
+                        "inspection_error":type(exc).__name__}
             try:
                 return_va=struct.unpack("<Q",bytes(u.mem_read(u.reg_read(UC_X86_REG_RSP),8)))[0]
             except Exception:
