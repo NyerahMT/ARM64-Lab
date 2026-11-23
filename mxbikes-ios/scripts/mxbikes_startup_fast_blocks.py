@@ -331,6 +331,32 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     blocker["observed_original_wsa_startup"]={
                         "inspection_error":type(exc).__name__
                     }
+            if (winsock_research is not None and lib.lower()=="ws2_32.dll"
+                and symbol=="getnameinfo"):
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    sa=u.reg_read(UC_X86_REG_RCX)
+                    sa_len=u.reg_read(UC_X86_REG_RDX)
+                    node=u.reg_read(UC_X86_REG_R8)
+                    node_len=u.reg_read(UC_X86_REG_R9)
+                    service_buffer,service_len,flags=struct.unpack(
+                        "<QQQ",bytes(u.mem_read(stack+0x28,24)))
+                    sa_family=struct.unpack("<H",bytes(u.mem_read(sa,2)))[0]
+                    blocker["original_getnameinfo_abi"]={
+                        "source_call_rva":verified_import_return(pe,ret,lib,symbol,original_slots),
+                        "stack_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "sockaddr_family":sa_family,
+                        "sockaddr_byte_length":sa_len,
+                        "node_buffer_present":node!=0,
+                        "node_buffer_size":node_len,
+                        "service_buffer_present":service_buffer!=0,
+                        "service_buffer_size":service_len,
+                        "flags_hex":hex(flags),
+                        "host_resolution_not_attempted":True,
+                    }
+                except Exception as exc:
+                    blocker["original_getnameinfo_abi"]={"error":type(exc).__name__}
             try:
                 return_va=struct.unpack("<Q",bytes(u.mem_read(u.reg_read(UC_X86_REG_RSP),8)))[0]
             except Exception:
