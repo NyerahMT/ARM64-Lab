@@ -151,7 +151,7 @@ def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
             "native_ios_game_running": False,
         }
         (output / "local-steam-failure-probe.json").write_text(
-            json.dumps(result, indent=2) + "\\n", encoding="utf-8"
+            json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
         return result
     from mxbikes_original_game_graphics_handoff import run
