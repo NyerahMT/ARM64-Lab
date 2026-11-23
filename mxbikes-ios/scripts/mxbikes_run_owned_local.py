@@ -10,6 +10,7 @@ that a game frame was rendered without original-game provenance.
 from __future__ import annotations
 
 import argparse
+import calendar
 import hashlib
 import json
 import os
@@ -132,7 +133,20 @@ def extract_owned_archive(archive: Path, destination: Path) -> tuple[Path, Path]
         bounded_extract(zf, dll_info, dll)
         core_info=optional_owned_core_ini(zf)
         if core_info is not None:
-            bounded_extract(zf,core_info,destination/"core.ini")
+            core_path=destination/"core.ini"
+            bounded_extract(zf,core_info,core_path)
+            # ZIP stores naive local-wall-clock timestamps, not UTC offsets.
+            # For deterministic research, preserve the archived wall-clock
+            # fields as a UTC-assumed mtime on this PRIVATE temporary copy.
+            # This must not be represented as the true Windows NTFS time.
+            try:
+                zip_time=calendar.timegm((*core_info.date_time,0,0,0))
+                if zip_time<0:
+                    raise ValueError("ZIP time predates Unix epoch")
+                os.utime(core_path,ns=(zip_time*1_000_000_000,
+                                        zip_time*1_000_000_000))
+            except (OverflowError,ValueError,OSError) as exc:
+                raise InputRejected("invalid_original_core_ini_archive_time") from exc
     validate_owned_pair(exe, dll)
     return exe, dll
 
@@ -158,6 +172,16 @@ def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
         raise InputRejected("owned_core_ini_size_budget")
     manifest["owned_core_ini_present"]=core_present
     manifest["owned_core_ini_size_bytes"]=core_ini.stat().st_size if core_present else 0
+    # This is provenance metadata only. The 100ns value is based on a ZIP
+    # local datetime *treated as UTC* or on an installed file's native mtime.
+    # It is NOT a claim of exact original Windows creation/access timestamps.
+    win_filetime_offset=116444736000000000
+    filetime=(core_ini.stat().st_mtime_ns//100+win_filetime_offset
+              if core_present else None)
+    if filetime is not None and not 0<=filetime<2**64:
+        raise InputRejected("owned_core_ini_filetime_outside_win64_range")
+    manifest["owned_core_ini_last_write_filetime_100ns"]=filetime
+    manifest["owned_core_ini_zip_wall_clock_assumed_utc"]=mode=="owned_zip"
     output.mkdir(parents=True, exist_ok=True)
     (output / "owned-steam-file-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
