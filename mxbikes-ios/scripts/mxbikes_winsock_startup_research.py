@@ -24,6 +24,9 @@ GETNAMEINFO_CALL_RVA=0x284D4C
 GETNAMEINFO_RETURN_RVA=GETNAMEINFO_CALL_RVA+6
 GETADDRINFO_CALL_RVA=0x284D61
 GETADDRINFO_RETURN_RVA=GETADDRINFO_CALL_RVA+6
+FOLLOWUP_GETNAMEINFO_CALL_RVA=0x284DAD
+FOLLOWUP_GETNAMEINFO_RETURN_RVA=FOLLOWUP_GETNAMEINFO_CALL_RVA+6
+NI_NUMERICHOST_WINDOWS=0x02
 ADDRINFO_MOCK_BASE=0x7A0000000
 ADDRINFO_MOCK_SIZE=0x1000
 ADDRINFO_HEAD=ADDRINFO_MOCK_BASE+0x100
@@ -71,6 +74,7 @@ class OfflineWinsockResearch:
         self.pton_events=[]
         self.nameinfo_events=[]
         self.addrinfo_events=[]
+        self.followup_nameinfo_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -357,6 +361,74 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_followup_getnameinfo(self,guest,pe,slots,library,symbol,verify):
+        """Read back the one synthetic getaddrinfo sockaddr with NI_NUMERICHOST.
+
+        The original executable calls getnameinfo again at a DIFFERENT
+        original CALL, this time with NI_NUMERICHOST 0x02 and sockaddr_len
+        16. It requests the numeric 127.0.0.1 string, never DNS.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="getnameinfo":
+            return False
+        if (len(self.nameinfo_events)!=1 or len(self.addrinfo_events)!=1
+            or self.followup_nameinfo_events):
+            raise OfflineWinsockRejected("followup_getnameinfo_original_order_or_budget")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        sa=guest.reg_read(UC_X86_REG_RCX)
+        sa_len=guest.reg_read(UC_X86_REG_RDX)
+        node=guest.reg_read(UC_X86_REG_R8)
+        node_len=guest.reg_read(UC_X86_REG_R9)
+        if (rsp&15!=8 or sa!=ADDRINFO_SOCKADDR or
+            sa_len!=IPV4_SOCKADDR_BYTES or not node or
+            node_len!=ORIGINAL_GNI_HOST_BUFFER_SIZE):
+            raise OfflineWinsockRejected("followup_getnameinfo_guest_abi_mismatch")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+            service,service_len,flags=struct.unpack(
+                "<QQQ",bytes(guest.mem_read(rsp+0x28,24)))
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_getnameinfo_original_stack_unmapped") from exc
+        if (ret!=IMAGE_BASE+FOLLOWUP_GETNAMEINFO_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(FOLLOWUP_GETNAMEINFO_CALL_RVA)):
+            raise OfflineWinsockRejected("followup_getnameinfo_callsite_mismatch")
+        if service or service_len or flags!=NI_NUMERICHOST_WINDOWS:
+            raise OfflineWinsockRejected("followup_getnameinfo_dns_or_service_disallowed")
+        try:
+            sockaddr=bytes(guest.mem_read(sa,IPV4_SOCKADDR_BYTES))
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_getnameinfo_sockaddr_unmapped") from exc
+        expected=struct.pack("<HH",AF_INET_WINDOWS,0)+bytes((127,0,0,1))+bytes(8)
+        if sockaddr!=expected:
+            raise OfflineWinsockRejected("followup_getnameinfo_unexpected_sockaddr")
+        output=b"127.0.0.1"+bytes((0,))
+        if IMAGE_BASE<=node<IMAGE_BASE+0x8000000:
+            rva=node-IMAGE_BASE
+            if not any((rva>=base and
+                        rva-base<=max(vsize,rawsize)-len(output) and
+                        flag&0x80000000 and not flag&0x20000000)
+                       for _,vsize,base,rawsize,_,flag in pe.sections):
+                raise OfflineWinsockRejected("followup_getnameinfo_unsafe_output_section")
+        try:
+            if len(guest.mem_read(node,len(output)))!=len(output):
+                raise OfflineWinsockRejected("followup_getnameinfo_short_output")
+        except OfflineWinsockRejected:
+            raise
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_getnameinfo_output_unmapped") from exc
+        try:
+            guest.mem_write(node,output)
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_getnameinfo_write_rejected") from exc
+        guest.reg_write(UC_X86_REG_RAX,0)
+        self.followup_nameinfo_events.append({
+            "original_call_rva":hex(FOLLOWUP_GETNAMEINFO_CALL_RVA),
+            "numeric_flag":NI_NUMERICHOST_WINDOWS,
+            "numeric_loopback_only":True,
+            "no_reverse_dns":True,
+            "guest_output_bytes":len(output),
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
@@ -367,6 +439,8 @@ class OfflineWinsockResearch:
             "getnameinfo_events":list(self.nameinfo_events),
             "verified_original_guest_getaddrinfo_handled":len(self.addrinfo_events),
             "getaddrinfo_events":list(self.addrinfo_events),
+            "verified_original_guest_followup_getnameinfo_handled":len(self.followup_nameinfo_events),
+            "followup_getnameinfo_events":list(self.followup_nameinfo_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
