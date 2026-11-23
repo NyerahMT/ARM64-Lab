@@ -52,6 +52,41 @@ class ImportReturnProvenanceTests(unittest.TestCase):
              FakeThunkPE(bytes((0xe8,))+struct.pack("<i",0x20),thunk),
              BASE+CALL_RVA+5,LIB,API,{IAT_SLOT:(LIB.lower(),API)}))
 
+    def test_original_lazy_malloc_wrapper_call_provenance(self):
+        caller_rva=0x2dcdc9
+        wrapper_rva=0x2bd710
+        malloc_slot=0x3211f8
+        cache_slot=0x3d9ac8
+        call=bytes((0xe8,))+struct.pack("<i",wrapper_rva-(caller_rva+5))
+        body=(bytes((0x48,0x8b,0x05))+
+              struct.pack("<i",cache_slot-(wrapper_rva+7))+
+              bytes((0x48,0x85,0xc0,0x74,0x03,0x48,0xff,0xe0,
+                     0x48,0xff,0x25))+
+              struct.pack("<i",malloc_slot-(wrapper_rva+22)))
+        self.assertEqual(len(body),22)
+        class LazyPE:
+            def __init__(self, wrapper):self.wrapper=wrapper
+            def read_rva(self,rva,n):
+                if rva==caller_rva and n==5:return call
+                if rva==wrapper_rva and n==6:return self.wrapper[:6]
+                if rva==wrapper_rva and n==22:return self.wrapper
+                raise ValueError("synthetic original PE not mapped")
+        slots={malloc_slot:("msvcr90.dll","malloc")}
+        self.assertEqual(verified_import_return(
+            LazyPE(body),BASE+caller_rva+5,"MSVCR90.dll","malloc",slots),
+            hex(caller_rva))
+        for wrong_body,wrong_slots in (
+            (bytes((0x90,))+body[1:],slots),
+            (body[:-1]+bytes((0x00,)),slots),
+            (body,{malloc_slot:("msvcr90.dll","free")}),
+            (body,{}),
+        ):
+            self.assertIsNone(verified_import_return(
+                LazyPE(wrong_body),BASE+caller_rva+5,
+                "MSVCR90.dll","malloc",wrong_slots))
+        self.assertIsNone(verified_import_return(
+            LazyPE(body),BASE+caller_rva+5,"KERNEL32.dll","malloc",slots))
+
     def test_wrong_import_opcode_stack_pc_and_slot_fail(self):
         raw=bytes((0xff,0x15))+struct.pack("<i",IAT_SLOT-(CALL_RVA+6))
         slots={IAT_SLOT:(LIB.lower(),API)}
