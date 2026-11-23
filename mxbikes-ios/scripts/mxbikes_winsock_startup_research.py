@@ -140,7 +140,7 @@ class OfflineWinsockResearch:
                 raise OfflineWinsockRejected("inet_pton_original_string_unmapped") from exc
             if len(ch)!=1:
                 raise OfflineWinsockRejected("inet_pton_original_string_truncated")
-            if ch==b"\\0":
+            if ch==bytes((0,)):
                 break
             if not 32<=ch[0]<127:
                 raise OfflineWinsockRejected("inet_pton_original_nonascii_string")
