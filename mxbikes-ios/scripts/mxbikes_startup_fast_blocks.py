@@ -300,6 +300,45 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 if accepted:
                     return
             except OfflineWinsockRejected as exc:
+                if symbol=="inet_pton" and winsock_research.pton_events:
+                    try:
+                        import ipaddress
+                        stack=u.reg_read(UC_X86_REG_RSP)
+                        ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                        source=u.reg_read(UC_X86_REG_RDX)
+                        dest=u.reg_read(UC_X86_REG_R8)
+                        chars=bytearray()
+                        for i in range(64):
+                            c=bytes(u.mem_read(source+i,1))
+                            if c==bytes((0,)):break
+                            chars.extend(c)
+                        else:
+                            raise ValueError("unterminated address")
+                        try:
+                            ip=ipaddress.ip_address(chars.decode("ascii"))
+                            source_class={"numeric_version":ip.version,
+                                          "loopback":ip.is_loopback,
+                                          "unspecified":ip.is_unspecified,
+                                          "length":len(chars)}
+                        except (ValueError,UnicodeError):
+                            source_class={"numeric_version":None,
+                                          "length":len(chars)}
+                        blocker["followup_inet_pton_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,ret,lib,symbol,original_slots),
+                            "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                            "stack_aligned":stack&15==8,
+                            "address_family":u.reg_read(UC_X86_REG_RCX),
+                            "source":source_class,
+                            "destination_present":dest!=0,
+                            "destination_is_in_original_image":BASE<=dest<image_hi,
+                            "destination_aligned_mod4":dest&3,
+                            "original_getaddrinfo_mock_active":bool(winsock_research.addrinfo_events),
+                            "no_host_dns_or_socket":True,
+                        }
+                    except Exception as ex:
+                        blocker["followup_inet_pton_abi"]={
+                            "inspection_error":type(ex).__name__}
                 if symbol=="getnameinfo" and winsock_research.nameinfo_events:
                     try:
                         stack=u.reg_read(UC_X86_REG_RSP)
