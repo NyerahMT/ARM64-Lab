@@ -251,7 +251,13 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="malloc":
             from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
             try:
-                if malloc_research.handle(u,pe,original_slots,lib,symbol,verified_import_return):
+                if malloc_research.called:
+                    accepted=malloc_research.handle_second_malloc(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=malloc_research.handle(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if accepted:
                     return
             except GuestHeapResearchRejected as exc:
                 if malloc_research.called:
