@@ -301,6 +301,9 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 elif symbol=="freeaddrinfo":
                     accepted=winsock_research.handle_freeaddrinfo(
                         u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="#14":
+                    accepted=winsock_research.handle_ntohl(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
                 else:
                     accepted=winsock_research.handle(
                         u,pe,original_slots,lib,symbol,verified_import_return)
