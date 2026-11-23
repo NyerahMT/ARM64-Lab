@@ -30,6 +30,8 @@ FOLLOWUP_INET_PTON_CALL_RVA=0x284DF9
 FOLLOWUP_INET_PTON_RETURN_RVA=FOLLOWUP_INET_PTON_CALL_RVA+6
 FREEADDRINFO_CALL_RVA=0x284E27
 FREEADDRINFO_RETURN_RVA=FREEADDRINFO_CALL_RVA+6
+NTOHL_CALL_RVA=0x285424
+NTOHL_RETURN_RVA=NTOHL_CALL_RVA+6
 NI_NUMERICHOST_WINDOWS=0x02
 ADDRINFO_MOCK_BASE=0x7A0000000
 ADDRINFO_MOCK_SIZE=0x1000
@@ -81,6 +83,7 @@ class OfflineWinsockResearch:
         self.followup_nameinfo_events=[]
         self.followup_pton_events=[]
         self.freeaddrinfo_events=[]
+        self.ntohl_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -548,6 +551,40 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_ntohl(self,guest,pe,slots,library,symbol,verify):
+        """Exact original Win64 WS2_32 ordinal 14, 32-bit byte swap only.
+
+        Windows ULONG ntohl(ULONG netlong) converts 4 network-order bytes
+        into host order. No sockets or networking are initialized or used.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="#14":
+            return False
+        if len(self.freeaddrinfo_events)!=1 or self.ntohl_events:
+            raise OfflineWinsockRejected("ntohl_original_order_or_budget")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        if rsp&15!=8:
+            raise OfflineWinsockRejected("ntohl_original_win64_stack_alignment")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise OfflineWinsockRejected("ntohl_unreadable_original_return") from exc
+        if (ret!=IMAGE_BASE+NTOHL_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(NTOHL_CALL_RVA)):
+            raise OfflineWinsockRejected("ntohl_original_import_callsite_mismatch")
+        n=guest.reg_read(UC_X86_REG_RCX)&0xffffffff
+        swapped=(((n&0x000000ff)<<24)|
+                 ((n&0x0000ff00)<<8)|
+                 ((n&0x00ff0000)>>8)|
+                 ((n&0xff000000)>>24))
+        guest.reg_write(UC_X86_REG_RAX,swapped)
+        self.ntohl_events.append({
+            "original_call_rva":hex(NTOHL_CALL_RVA),
+            "converted_one_32bit_network_order_value":True,
+            "guest_only":True,
+            "host_network_used":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
@@ -564,6 +601,8 @@ class OfflineWinsockResearch:
             "followup_inet_pton_events":list(self.followup_pton_events),
             "verified_original_guest_freeaddrinfo_handled":len(self.freeaddrinfo_events),
             "freeaddrinfo_events":list(self.freeaddrinfo_events),
+            "verified_original_guest_ntohl_handled":len(self.ntohl_events),
+            "ntohl_events":list(self.ntohl_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
