@@ -89,6 +89,7 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_win32_core_closehandle.py -v
           python -m unittest discover -s tests -p test_mxbikes_crt_zero_memmove.py -v
           python -m unittest discover -s tests -p test_mxbikes_crt_followup_heap_memset.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_small_memcpy.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
