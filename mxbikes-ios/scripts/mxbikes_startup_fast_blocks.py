@@ -235,6 +235,24 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 if malloc_research.handle(u,pe,original_slots,lib,symbol,verified_import_return):
                     return
             except GuestHeapResearchRejected as exc:
+                if malloc_research.called:
+                    try:
+                        sp=u.reg_read(UC_X86_REG_RSP)
+                        return_addr=struct.unpack("<Q",bytes(u.mem_read(sp,8)))[0]
+                        blocker["original_second_malloc_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,return_addr,lib,symbol,original_slots),
+                            "original_return_rva":hex(return_addr-BASE)
+                                if BASE<=return_addr<image_hi else None,
+                            "size_bytes":u.reg_read(UC_X86_REG_RCX),
+                            "win64_stack_aligned":sp&15==8,
+                            "previous_malloc_allocations":len(malloc_research.events),
+                            "image_data_memset_count":len(malloc_research.image_memset_events),
+                            "host_allocation_not_attempted":True,
+                        }
+                    except Exception as observe_exc:
+                        blocker["original_second_malloc_abi"]={
+                            "observation_error":type(observe_exc).__name__}
                 stop(u,"original_guest_malloc_research_rejected",**{
                    "import":lib+"!"+symbol,"reason":str(exc)})
                 return
