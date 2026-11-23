@@ -24,6 +24,9 @@ SECOND_MEMSET_LENGTH=400
 THIRD_MEMSET_CALL_RVA=0x2A7D03
 THIRD_MEMSET_RETURN_RVA=THIRD_MEMSET_CALL_RVA+5
 THIRD_MEMSET_LENGTH=3776
+FOURTH_MEMSET_CALL_RVA=0x297857
+FOURTH_MEMSET_RETURN_RVA=FOURTH_MEMSET_CALL_RVA+5
+FOURTH_MEMSET_LENGTH=4666112
 IMAGE_SCN_MEM_WRITE=0x80000000
 IMAGE_SCN_MEM_EXECUTE=0x20000000
 EXPECTED_ALLOC_BYTES=0x2580
@@ -106,7 +109,7 @@ class SingleGuestMallocResearch:
         return True
 
     def handle_image_memset(self,u,pe,slots,library,symbol,verify):
-        """Two independent original PE-data zero-fills, each with exact ABI.
+        """Three independent original PE-data zero-fills, each with exact ABI.
 
         The first clears 400 writable data bytes; following original IPv4
         formatting, the second clears 3776 more. Never clear arbitrary
@@ -115,7 +118,7 @@ class SingleGuestMallocResearch:
         if library.lower()!="msvcr90.dll" or symbol!="memset":
             return False
         count=len(self.image_memset_events)
-        if not self.memset_events or count>1:
+        if not self.memset_events or count>2:
             raise GuestHeapResearchRejected("image_memset_order_or_budget")
         if count==0:
             if self.sprintf_events:
@@ -123,12 +126,18 @@ class SingleGuestMallocResearch:
             call,ret_rva,length=(SECOND_MEMSET_CALL_RVA,
                                  SECOND_MEMSET_RETURN_RVA,
                                  SECOND_MEMSET_LENGTH)
-        else:
+        elif count==1:
             if len(self.sprintf_events)!=1:
                 raise GuestHeapResearchRejected("third_memset_before_original_ipv4_sprintf")
             call,ret_rva,length=(THIRD_MEMSET_CALL_RVA,
                                  THIRD_MEMSET_RETURN_RVA,
                                  THIRD_MEMSET_LENGTH)
+        else:
+            if len(self.sprintf_events)!=1:
+                raise GuestHeapResearchRejected("fourth_memset_before_original_ipv4_sprintf")
+            call,ret_rva,length=(FOURTH_MEMSET_CALL_RVA,
+                                 FOURTH_MEMSET_RETURN_RVA,
+                                 FOURTH_MEMSET_LENGTH)
         rsp=u.reg_read(UC_X86_REG_RSP)
         dest=u.reg_read(UC_X86_REG_RCX)
         fill=u.reg_read(UC_X86_REG_RDX)
