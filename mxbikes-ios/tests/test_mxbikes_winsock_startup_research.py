@@ -1,12 +1,14 @@
 """No commercial files: verify exact Win64 original WSAStartup import contract."""
 import struct,sys,unittest
 from pathlib import Path
-from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8
+from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8,UC_X86_REG_R9
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
 from mxbikes_winsock_startup_research import (
     OfflineWinsockResearch,OfflineWinsockRejected,
     offline_wsadata64,IMAGE_BASE,WSA_STARTUP_CALL_RVA,WSA_STARTUP_RETURN_RVA,
     WSA_REQUESTED_VERSION,INET_PTON_CALL_RVA,INET_PTON_RETURN_RVA,
+    GETNAMEINFO_CALL_RVA,GETNAMEINFO_RETURN_RVA,
+    ORIGINAL_SOCKADDR_LENGTH,ORIGINAL_GNI_HOST_BUFFER_SIZE,
     AF_INET_WINDOWS,AF_INET6_WINDOWS,WSADATA64_SIZE,WSADATA64_DESCRIPTION_OFFSET,
     WSADATA64_STATUS_OFFSET
 )
@@ -167,5 +169,81 @@ class InetPtonOriginalResearchTests(unittest.TestCase):
         with self.assertRaises(OfflineWinsockRejected):
             service.handle_inet_pton(u,None,{"ok":True},
                                      "WS2_32.dll","inet_pton",self.verify)
+
+class GetNameInfoOriginalResearchTests(unittest.TestCase):
+    class SockGuest:
+        RSP=0x770000008
+        SOCK=0x770001000
+        HOST=0x770003000
+        def __init__(self,flags=0,family=AF_INET_WINDOWS,host_size=1025):
+            self.flags=flags
+            self.binary=struct.pack("<HH",family,0)+bytes((127,0,0,1))+bytes(8)
+            self.regs={
+                UC_X86_REG_RSP:self.RSP,
+                UC_X86_REG_RAX:0xBAD,
+                UC_X86_REG_RCX:self.SOCK,
+                UC_X86_REG_RDX:ORIGINAL_SOCKADDR_LENGTH,
+                UC_X86_REG_R8:self.HOST,
+                UC_X86_REG_R9:host_size,
+            }
+            self.writes=[]
+        def reg_read(self,r):return self.regs[r]
+        def reg_write(self,r,v):self.regs[r]=v
+        def mem_read(self,addr,n):
+            if addr==self.RSP and n==8:
+                return struct.pack("<Q",IMAGE_BASE+GETNAMEINFO_RETURN_RVA)
+            if addr==self.RSP+0x28 and n==24:
+                return struct.pack("<QQQ",0,0,self.flags)
+            if addr==self.SOCK and n==16:
+                return self.binary
+            if addr==self.HOST and n<=16:
+                return b"X"*n
+            raise ValueError("unmapped")
+        def mem_write(self,addr,payload):self.writes.append((addr,bytes(payload)))
+    @staticmethod
+    def verified(_,ret,lib,sym,slots):
+        if (slots.get("ok") and ret==IMAGE_BASE+GETNAMEINFO_RETURN_RVA
+            and lib.lower()=="ws2_32.dll" and sym=="getnameinfo"):
+            return hex(GETNAMEINFO_CALL_RVA)
+        return None
+    @staticmethod
+    def ready():
+        service=OfflineWinsockResearch()
+        service.events=[{"wsa":True}]
+        service.pton_events=[{"pton":True}]
+        return service
+
+    def test_original_ipv4_numeric_fallback_only(self):
+        u=self.SockGuest();service=self.ready()
+        self.assertTrue(service.handle_getnameinfo(
+            u,None,{"ok":True},"WS2_32.dll","getnameinfo",self.verified))
+        self.assertEqual(u.reg_read(UC_X86_REG_RAX),0)
+        self.assertEqual(u.writes,[(u.HOST,b"127.0.0.1"+bytes((0,)))])
+        self.assertTrue(service.summary()["getnameinfo_events"][0]["offline_numeric_fallback_only"])
+        self.assertFalse(service.summary()["getnameinfo_events"][0]["reverse_dns_performed"])
+        self.assertEqual(service.summary()["real_sockets_created"],0)
+        with self.assertRaises(OfflineWinsockRejected):
+            service.handle_getnameinfo(
+                u,None,{"ok":True},"WS2_32.dll","getnameinfo",self.verified)
+
+    def test_changed_flags_size_family_or_import_fail_closed(self):
+        tests=[
+            (self.SockGuest(flags=8),{"ok":True}),
+            (self.SockGuest(family=AF_INET6_WINDOWS),{"ok":True}),
+            (self.SockGuest(host_size=16),{"ok":True}),
+            (self.SockGuest(),{}),
+        ]
+        for guest,slots in tests:
+            service=self.ready()
+            with self.assertRaises(OfflineWinsockRejected):
+                service.handle_getnameinfo(
+                    guest,None,slots,"WS2_32.dll","getnameinfo",self.verified)
+            self.assertEqual(guest.writes,[])
+            self.assertEqual(guest.reg_read(UC_X86_REG_RAX),0xBAD)
+        not_ready=OfflineWinsockResearch()
+        with self.assertRaises(OfflineWinsockRejected):
+            not_ready.handle_getnameinfo(
+                self.SockGuest(),None,{"ok":True},
+                "WS2_32.dll","getnameinfo",self.verified)
 
 if __name__=="__main__":unittest.main()
