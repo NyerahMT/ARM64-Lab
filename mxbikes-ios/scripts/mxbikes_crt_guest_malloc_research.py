@@ -30,6 +30,11 @@ MEMMOVE_ZERO_ORIGINAL_RETURN_RVA=MEMMOVE_ZERO_ORIGINAL_CALL_RVA+5
 INITIALIZE_296_MEMSET_CALL_RVA=0x15C1F2
 INITIALIZE_296_MEMSET_RETURN_RVA=INITIALIZE_296_MEMSET_CALL_RVA+5
 INITIALIZE_296_BYTES=296
+MEMCPY_FOUR_ORIGINAL_CALL_RVA=0x1599DF
+MEMCPY_FOUR_ORIGINAL_RETURN_RVA=MEMCPY_FOUR_ORIGINAL_CALL_RVA+5
+MEMCPY_FOUR_BYTES=4
+GUEST_TEMP_DATA_MIN=0x710000000
+GUEST_TEMP_DATA_MAX=0x720000000
 
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
@@ -82,6 +87,7 @@ class SingleGuestMallocResearch:
         self.followup_malloc_events=[]
         self.zero_len_memmove_events=[]
         self.followup_heap_memset_events=[]
+        self.guest_small_memcpy_events=[]
         self.followup_heap_cursor=0
         self.memset_events=[]
         self.image_memset_events=[]
@@ -300,6 +306,71 @@ class SingleGuestMallocResearch:
             "zeroed_bytes":length,
             "bounded_to_last_guest_allocation":True,
             "host_memory_or_CRT_used":False,
+        })
+        return True
+
+    def handle_guest_small_memcpy(self,u,pe,slots,library,symbol,verify):
+        """Original Win64 memcpy of 4 bytes from validated malloc to guest data.
+
+        Never touches the original PE, host resources, or any address outside
+        a recorded bounded user allocation and readable, mapped temporary
+        guest-data region. The original caller alone authorizes this event.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="memcpy":
+            return False
+        if (not self.followup_heap_memset_events or self.guest_small_memcpy_events
+            or not self.followup_malloc_events):
+            raise GuestHeapResearchRejected("guest_small_memcpy_original_sequence_or_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        dest=u.reg_read(UC_X86_REG_RCX)
+        src=u.reg_read(UC_X86_REG_RDX)
+        length=u.reg_read(UC_X86_REG_R8)
+        if (rsp&15!=8 or length!=MEMCPY_FOUR_BYTES or
+            not GUEST_TEMP_DATA_MIN<=dest<=GUEST_TEMP_DATA_MAX-length):
+            raise GuestHeapResearchRejected("guest_small_memcpy_unverified_destination_or_abi")
+        # Reconstruct each map's logical user bounds, excluding page slack.
+        cursor=0
+        source_in_owned_user_allocation=False
+        for item in self.followup_malloc_events:
+            allocated=item.get("mapped_guest_bytes")
+            requested=item.get("requested_bytes")
+            if (not isinstance(allocated,int) or not isinstance(requested,int)
+                or allocated<=0 or requested<=0):
+                raise GuestHeapResearchRejected("guest_small_memcpy_corrupt_allocation_log")
+            owner=FOLLOWUP_HEAP_BASE+cursor+FOLLOWUP_HEAP_GUEST_OFFSET
+            if owner<=src and src+length<=owner+requested:
+                source_in_owned_user_allocation=True
+            cursor+=allocated
+        if not source_in_owned_user_allocation or cursor!=self.followup_heap_cursor:
+            raise GuestHeapResearchRejected("guest_small_memcpy_source_not_verified_guest_malloc")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("guest_small_memcpy_stack_return_unreadable") from exc
+        if (ret!=IMAGE_BASE+MEMCPY_FOUR_ORIGINAL_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(MEMCPY_FOUR_ORIGINAL_CALL_RVA)):
+            raise GuestHeapResearchRejected("guest_small_memcpy_original_callsite_mismatch")
+        try:
+            source_bytes=bytes(u.mem_read(src,length))
+            prior=bytes(u.mem_read(dest,length))
+            if len(source_bytes)!=length or len(prior)!=length:
+                raise GuestHeapResearchRejected("guest_small_memcpy_unmapped_data")
+        except GuestHeapResearchRejected:
+            raise
+        except Exception as exc:
+            raise GuestHeapResearchRejected("guest_small_memcpy_unreadable_guest_data") from exc
+        try:
+            u.mem_write(dest,source_bytes)
+        except Exception as exc:
+            raise GuestHeapResearchRejected("guest_small_memcpy_unwritable_guest_data") from exc
+        u.reg_write(UC_X86_REG_RAX,dest)
+        self.guest_small_memcpy_events.append({
+            "original_call_rva":hex(MEMCPY_FOUR_ORIGINAL_CALL_RVA),
+            "bytes_moved":length,
+            "source_is_recorded_guest_malloc":True,
+            "destination_is_mapped_nonimage_guest_data":True,
+            "original_source_bytes_not_logged":True,
+            "host_crt_used":False,
         })
         return True
 
@@ -535,6 +606,8 @@ class SingleGuestMallocResearch:
                 "original_zero_length_memmove_events":list(self.zero_len_memmove_events),
                 "original_followup_heap_memset_count":len(self.followup_heap_memset_events),
                 "original_followup_heap_memset_events":list(self.followup_heap_memset_events),
+                "original_small_memcpy_guest_count":len(self.guest_small_memcpy_events),
+                "original_small_memcpy_guest_events":list(self.guest_small_memcpy_events),
                 "synthetic_original_memset_count":len(self.memset_events),
                 "allocations":list(self.events),
                 "memset_events":list(self.memset_events),
