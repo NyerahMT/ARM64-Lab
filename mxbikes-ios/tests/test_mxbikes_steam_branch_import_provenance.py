@@ -28,6 +28,30 @@ class ImportReturnProvenanceTests(unittest.TestCase):
                                    LIB,API,{IAT_SLOT:(LIB.lower(),API)}),
             hex(CALL_RVA))
 
+    def test_original_direct_call_to_rip_import_thunk(self):
+        thunk_rva=0x2100
+        caller=bytes((0xe8,))+struct.pack("<i",thunk_rva-(CALL_RVA+5))
+        thunk=bytes((0xff,0x25))+struct.pack("<i",IAT_SLOT-(thunk_rva+6))
+        class FakeThunkPE:
+            def __init__(self,call,thunk):self.call=call;self.thunk=thunk
+            def read_rva(self,rva,n):
+                if rva==CALL_RVA and n==5:return self.call
+                if rva==thunk_rva and n==6:return self.thunk
+                raise ValueError("unmapped")
+        pe=FakeThunkPE(caller,thunk)
+        self.assertEqual(verified_import_return(pe,BASE+CALL_RVA+5,
+                             LIB,API,{IAT_SLOT:(LIB.lower(),API)}),hex(CALL_RVA))
+        bad=FakeThunkPE(caller,bytes((0x90,))+thunk[1:])
+        self.assertIsNone(verified_import_return(bad,BASE+CALL_RVA+5,
+                             LIB,API,{IAT_SLOT:(LIB.lower(),API)}))
+        self.assertIsNone(verified_import_return(pe,BASE+CALL_RVA+5,
+                             LIB,API,{IAT_SLOT:("steam_api64.dll",API)}))
+        # An attacker-supplied jump target with the wrong opcode must not
+        # authorize any imported function or pointer.
+        self.assertIsNone(verified_import_return(
+             FakeThunkPE(bytes((0xe8,))+struct.pack("<i",0x20),thunk),
+             BASE+CALL_RVA+5,LIB,API,{IAT_SLOT:(LIB.lower(),API)}))
+
     def test_wrong_import_opcode_stack_pc_and_slot_fail(self):
         raw=bytes((0xff,0x15))+struct.pack("<i",IAT_SLOT-(CALL_RVA+6))
         slots={IAT_SLOT:(LIB.lower(),API)}
