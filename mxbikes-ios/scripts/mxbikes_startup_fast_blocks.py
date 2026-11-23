@@ -23,7 +23,7 @@ from capstone import Cs,CS_ARCH_X86,CS_MODE_64
 import mxbikes_main_joined_callee_native as joined
 import mxbikes_steam_fopen_result_probe as bootstrap
 from mxbikes_owned_file_crt import (
-    GuestServiceBlocked,OwnedReadOnlyFile,ReadOnlyCRT,FILE_HANDLE
+    GuestServiceBlocked,OwnedReadOnlyFile,ReadOnlyCRT,FILE_HANDLE,CORE_INI_HANDLE
 )
 from mxbikes_startup_batch_runner import (
     install_import_dispatch,unwind_index,owner_rva,symbol_is_supported,
@@ -139,7 +139,15 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         from mxbikes_winsock_startup_research import OfflineWinsockResearch
         winsock_research=OfflineWinsockResearch()
     starts,ends=unwind_index(pe)
-    crt=ReadOnlyCRT(file)
+    core_stream=None
+    extra_owned_streams={}
+    if research is not None and manifest.get("owned_core_ini_present") is True:
+        core_path=Path(executable).parent/"core.ini"
+        core_stream=OwnedReadOnlyFile.from_private_path(
+            core_path,manifest.get("owned_core_ini_size_bytes"),
+            filename="core.ini",handle=CORE_INI_HANDLE,initially_open=False)
+        extra_owned_streams["core.ini"]=core_stream
+    crt=ReadOnlyCRT(file,extra_owned_streams)
     decoded={}
     md=Cs(CS_ARCH_X86,CS_MODE_64)
     counters=Counter()
@@ -691,6 +699,10 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "actual_original_gl_import_events":actual_original_gl_import_events,
         "original_GL_calls_from_synthetic_fixture":0,
         "supported_crt_calls":dict(crt.calls),
+        "owned_core_ini_guest_stream_available":core_stream is not None,
+        "original_core_ini_guest_stream_cursor":(core_stream.cursor if core_stream else None),
+        "original_core_ini_guest_stream_closed":(not core_stream.open if core_stream else None),
+        "original_core_ini_owned_file_size":(len(core_stream.content) if core_stream else None),
         "guest_file_final_cursor":file.cursor,
         "guest_file_closed":not file.open,
         "first_original_block_rvas":first,
