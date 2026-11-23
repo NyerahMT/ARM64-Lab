@@ -37,7 +37,8 @@ MAX_INSTRUCTIONS=15000000
 MAX_USEC=25000000
 
 
-def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False):
+def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False,
+            steam_init_success_probe=False):
     from tools.pe_probe import PE
     pe=PE(executable)
     if hashlib.sha256(pe.b).hexdigest()!=INPUT_SHA:
@@ -52,10 +53,13 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
     _,uc=bootstrap.original_case(
         pe,0,FILE_HANDLE,0x1305c0,0x1305b6,return_cpu=True)
     imports=install_import_dispatch(uc,pe)
+    if steam_failure_probe and steam_init_success_probe:
+        raise ValueError("Choose exactly one Steam diagnostic scenario")
     steam_failure = None
-    if steam_failure_probe:
+    if steam_failure_probe or steam_init_success_probe:
         from mxbikes_steam_failure_path import SteamFailureProbe
-        steam_failure = SteamFailureProbe(pe)
+        steam_failure = SteamFailureProbe(pe,
+            init_success_branch_probe=steam_init_success_probe)
     starts,ends=unwind_index(pe)
     crt=ReadOnlyCRT(file)
     decoded={}
@@ -201,12 +205,15 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "actual_ios_steam_client_initialized":False,
         "original_game_engine_booted":False,
         "steam_failure_probe_enabled":bool(steam_failure_probe),
+        "steam_init_success_probe_enabled":bool(steam_init_success_probe),
         "original_post_failure_block_rvas":post_failure_blocks,
         "authentic_post_failure_original_blocks_observed":len(post_failure_blocks)>0,
         "steam_failure_probe":steam_failure.summary() if steam_failure else None,
     }
     out.mkdir(parents=True,exist_ok=True)
-    report_name = "startup-steam-failure-blocks" if steam_failure_probe else "startup-fast-blocks"
+    report_name = ("startup-steam-failure-blocks" if steam_failure_probe else
+                   "startup-steam-init-success-probe" if steam_init_success_probe else
+                   "startup-fast-blocks")
     (out/(report_name+".json")).write_text(json.dumps(result,indent=2)+"\n")
     lines=["# MX Bikes — fast multi-block original game execution","",
        "- Original guest translated BASIC BLOCK executions: **"+str(original_blocks)+"**",
@@ -219,7 +226,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
        "- Real original x64 import calls handled: **"+str(import_call_count)+"**",
        "- Actual game-produced GL imported calls: **"+str(actual_original_gl_import_events)+"**",
        "- Supported service calls: **"+str(dict(crt.calls))+"**",
-       "- Failure-path probe calls: **"+str(len(steam_failure.events))+"**" if steam_failure is not None else "- Failure-path probe: disabled",
+       "- Experimental Steam response calls: **"+str(len(steam_failure.events))+"**" if steam_failure is not None else "- Steam response probe: disabled",
        "- Original blocks after probe call observed: **"+str(len(post_failure_blocks))+"**",
        "- Stop: **"+str(blocker["status"])+"**"+
           (", import "+str(blocker["import"]) if blocker.get("import") else "")+
