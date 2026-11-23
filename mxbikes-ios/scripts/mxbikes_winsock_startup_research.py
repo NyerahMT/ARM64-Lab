@@ -9,13 +9,20 @@ All other Winsock services remain unsupported (fail closed).
 """
 from __future__ import annotations
 import struct
+import ipaddress
 from unicorn.x86_const import (
-    UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX
+    UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX,
+    UC_X86_REG_R8
 )
 
 IMAGE_BASE=0x140000000
 WSA_STARTUP_CALL_RVA=0x284EC3
 WSA_STARTUP_RETURN_RVA=WSA_STARTUP_CALL_RVA+6
+INET_PTON_CALL_RVA=0x284D26
+INET_PTON_RETURN_RVA=INET_PTON_CALL_RVA+6
+MAX_IP_TEXT_BYTES=64
+AF_INET_WINDOWS=2
+AF_INET6_WINDOWS=23
 WSA_REQUESTED_VERSION=0x0002
 WSA_HIGHEST_VERSION=0x0202
 WSADATA64_SIZE=408
@@ -49,6 +56,7 @@ def offline_wsadata64(version_word=WSA_REQUESTED_VERSION):
 class OfflineWinsockResearch:
     def __init__(self):
         self.events=[]
+        self.pton_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -96,10 +104,99 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_inet_pton(self,guest,pe,slots,library,symbol,verify):
+        """Execute one exact original inet_pton CALL without creating sockets.
+
+        Validates native Win64 ABI, original callsite, and source terminator;
+        only writes the 4/16-byte binary address after a complete mapped
+        guest destination preflight. Never transmits anything over a network.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="inet_pton":
+            return False
+        if not self.events or self.pton_events:
+            raise OfflineWinsockRejected("inet_pton_without_wsa_startup_or_repeat")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        family=guest.reg_read(UC_X86_REG_RCX)
+        text_ptr=guest.reg_read(UC_X86_REG_RDX)
+        output=guest.reg_read(UC_X86_REG_R8)
+        if rsp&15!=8:
+            raise OfflineWinsockRejected("inet_pton_guest_stack_alignment")
+        if family not in (AF_INET_WINDOWS,AF_INET6_WINDOWS):
+            raise OfflineWinsockRejected("inet_pton_unsupported_original_family")
+        if not text_ptr or not output:
+            raise OfflineWinsockRejected("inet_pton_original_null_pointer")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise OfflineWinsockRejected("inet_pton_original_unreadable_return") from exc
+        if (ret!=IMAGE_BASE+INET_PTON_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(INET_PTON_CALL_RVA)):
+            raise OfflineWinsockRejected("inet_pton_original_callsite_mismatch")
+        chars=bytearray()
+        for i in range(MAX_IP_TEXT_BYTES):
+            try:
+                ch=bytes(guest.mem_read(text_ptr+i,1))
+            except Exception as exc:
+                raise OfflineWinsockRejected("inet_pton_original_string_unmapped") from exc
+            if len(ch)!=1:
+                raise OfflineWinsockRejected("inet_pton_original_string_truncated")
+            if ch==b"\\0":
+                break
+            if not 32<=ch[0]<127:
+                raise OfflineWinsockRejected("inet_pton_original_nonascii_string")
+            chars.extend(ch)
+        else:
+            raise OfflineWinsockRejected("inet_pton_original_string_unterminated")
+        try:
+            address=ipaddress.ip_address(chars.decode("ascii"))
+            if address.version!=(4 if family==AF_INET_WINDOWS else 6):
+                raise ValueError("family mismatch")
+        except ValueError:
+            guest.reg_write(UC_X86_REG_RAX,0)
+            self.pton_events.append({
+                "original_call_rva":hex(INET_PTON_CALL_RVA),
+                "address_was_valid":False,
+                "bytes_written":0,
+                "host_network_used":False,
+            })
+            return True
+        output_bytes=address.packed
+        if IMAGE_BASE<=output<IMAGE_BASE+0x8000000:
+            rva=output-IMAGE_BASE
+            if not any((rva>=base and
+                        rva-base<=max(vsize,rawsize)-len(output_bytes) and
+                        flags&0x80000000 and not flags&0x20000000)
+                       for _,vsize,base,rawsize,_,flags in pe.sections):
+                raise OfflineWinsockRejected("inet_pton_original_output_not_writable_pe_data")
+        try:
+            if len(guest.mem_read(output,len(output_bytes)))!=len(output_bytes):
+                raise OfflineWinsockRejected("inet_pton_original_output_short")
+        except OfflineWinsockRejected:
+            raise
+        except Exception as exc:
+            raise OfflineWinsockRejected("inet_pton_original_output_unmapped") from exc
+        try:
+            guest.mem_write(output,output_bytes)
+        except Exception as exc:
+            raise OfflineWinsockRejected("inet_pton_original_output_not_writable") from exc
+        guest.reg_write(UC_X86_REG_RAX,1)
+        self.pton_events.append({
+            "original_call_rva":hex(INET_PTON_CALL_RVA),
+            "address_was_valid":True,
+            "ip_version":address.version,
+            "is_unspecified":address.is_unspecified,
+            "is_loopback":address.is_loopback,
+            "bytes_written":len(output_bytes),
+            "host_network_used":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
             "events":list(self.events),
+            "verified_original_guest_inet_pton_handled":len(self.pton_events),
+            "inet_pton_events":list(self.pton_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
