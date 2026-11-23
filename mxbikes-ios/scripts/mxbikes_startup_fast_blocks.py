@@ -76,6 +76,26 @@ def verified_import_return(pe, return_va, library, symbol, original_slots):
         slot=thunk_rva+6+struct.unpack_from("<i",thunk,2)[0]
         if original_slots.get(slot)==(library.lower(),symbol):
             return hex(call_rva)
+        # Original 48-byte allocation uses CALL -> lazily initialized
+        # CRT wrapper. That wrapper checks its cached function pointer
+        # and tail-jumps through a REX-prefixed imported IAT JMP on the
+        # observed cold-start branch. Verify the entire exact original
+        # instruction shape and IAT identity, never simply trust RAX.
+        if (call_rva==0x2dcdc9 and thunk_rva==0x2bd710 and
+            library.lower()=="msvcr90.dll" and symbol=="malloc"):
+            lazy=bytes(pe.read_rva(thunk_rva,22))
+            if (len(lazy)==22 and
+                lazy[:3]==bytes((0x48,0x8b,0x05)) and
+                lazy[7:10]==bytes((0x48,0x85,0xc0)) and
+                lazy[10:12]==bytes((0x74,0x03)) and
+                lazy[12:15]==bytes((0x48,0xff,0xe0)) and
+                lazy[15:18]==bytes((0x48,0xff,0x25))):
+                cached_slot=thunk_rva+7+struct.unpack_from("<i",lazy,3)[0]
+                imported_slot=thunk_rva+22+struct.unpack_from("<i",lazy,18)[0]
+                if (imported_slot in original_slots and
+                    original_slots[imported_slot]==("msvcr90.dll","malloc") and
+                    cached_slot!=imported_slot):
+                    return hex(call_rva)
         return None
     except (ValueError,struct.error,OverflowError):
         return None
