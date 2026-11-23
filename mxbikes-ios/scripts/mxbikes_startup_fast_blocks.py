@@ -489,6 +489,38 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
         if not symbol_is_supported(lib,symbol):
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="memmove":
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    dest=u.reg_read(UC_X86_REG_RCX)
+                    source=u.reg_read(UC_X86_REG_RDX)
+                    size=u.reg_read(UC_X86_REG_R8)
+                    def mapped_region(pointer,length):
+                        if BASE<=pointer<image_hi:
+                            return "original_image"
+                        if (malloc_research is not None and
+                            pointer>=0x7C0000000 and pointer<0x7C1000000):
+                            return "bounded_followup_guest_heap"
+                        if pointer>=0x700000000 and pointer<0x800000000:
+                            return "other_guest_mapping"
+                        return "unknown"
+                    blocker["original_memmove_abi"]={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "guest_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "size_bytes":size,
+                        "destination_region":mapped_region(dest,size),
+                        "source_region":mapped_region(source,size),
+                        "source_equals_destination":source==dest,
+                        "destination_alignment_mod8":dest&7,
+                        "source_alignment_mod8":source&7,
+                        "guest_stack_aligned":stack&15==8,
+                        "original_guest_memory_not_modified":True,
+                    }
+                except Exception as exc:
+                    blocker["original_memmove_abi"]={"inspection_error":type(exc).__name__}
+
             if (core_win32 is not None and lib.lower()=="kernel32.dll"
                 and symbol=="GetFileTime"):
                 try:
