@@ -110,7 +110,7 @@ class SingleGuestMallocResearch:
         if library.lower()!="msvcr90.dll" or symbol!="malloc":
             return False
         if (not self.called or self.second_malloc_events or
-            len(self.image_memset_events)!=len(IMAGE_MEMSET_STEPS)):
+            len(self.image_memset_events)!=4):
             raise GuestHeapResearchRejected("second_malloc_original_order_or_budget")
         rsp=u.reg_read(UC_X86_REG_RSP)
         size=u.reg_read(UC_X86_REG_RCX)
