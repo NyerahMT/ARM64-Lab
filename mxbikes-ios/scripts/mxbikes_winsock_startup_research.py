@@ -32,6 +32,8 @@ FREEADDRINFO_CALL_RVA=0x284E27
 FREEADDRINFO_RETURN_RVA=FREEADDRINFO_CALL_RVA+6
 NTOHL_CALL_RVA=0x285424
 NTOHL_RETURN_RVA=NTOHL_CALL_RVA+6
+NTOHS_CALL_RVA=0x285430
+NTOHS_RETURN_RVA=NTOHS_CALL_RVA+6
 NI_NUMERICHOST_WINDOWS=0x02
 ADDRINFO_MOCK_BASE=0x7A0000000
 ADDRINFO_MOCK_SIZE=0x1000
@@ -84,6 +86,7 @@ class OfflineWinsockResearch:
         self.followup_pton_events=[]
         self.freeaddrinfo_events=[]
         self.ntohl_events=[]
+        self.ntohs_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -585,6 +588,32 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_ntohs(self,guest,pe,slots,library,symbol,verify):
+        """Original WS2_32 ordinal 15, pure 16-bit network-byte-order swap."""
+        if library.lower()!="ws2_32.dll" or symbol!="#15":
+            return False
+        if len(self.ntohl_events)!=1 or self.ntohs_events:
+            raise OfflineWinsockRejected("ntohs_original_order_or_budget")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        if rsp&15!=8:
+            raise OfflineWinsockRejected("ntohs_original_win64_stack_alignment")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise OfflineWinsockRejected("ntohs_original_return_unmapped") from exc
+        if (ret!=IMAGE_BASE+NTOHS_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(NTOHS_CALL_RVA)):
+            raise OfflineWinsockRejected("ntohs_original_import_callsite_mismatch")
+        n=guest.reg_read(UC_X86_REG_RCX)&0xffff
+        swapped=((n&0xff)<<8)|((n>>8)&0xff)
+        guest.reg_write(UC_X86_REG_RAX,swapped)
+        self.ntohs_events.append({
+            "original_call_rva":hex(NTOHS_CALL_RVA),
+            "converted_one_16bit_network_order_value":True,
+            "host_network_used":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
@@ -603,6 +632,8 @@ class OfflineWinsockResearch:
             "freeaddrinfo_events":list(self.freeaddrinfo_events),
             "verified_original_guest_ntohl_handled":len(self.ntohl_events),
             "ntohl_events":list(self.ntohl_events),
+            "verified_original_guest_ntohs_handled":len(self.ntohs_events),
+            "ntohs_events":list(self.ntohs_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
