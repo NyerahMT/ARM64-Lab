@@ -464,6 +464,35 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                             "reason":type(exc).__name__})
                     return
         if not symbol_is_supported(lib,symbol):
+            if (research is not None and lib.lower()=="kernel32.dll"
+                and symbol=="CreateFileA"):
+                # Private-runner ABI inspection; neither host filesystem nor
+                # original guest contents are changed.
+                try:
+                    from mxbikes_owned_file_crt import read_guest_cstring
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    name=read_guest_cstring(u,u.reg_read(UC_X86_REG_RCX))
+                    creation,flags,template=struct.unpack(
+                        "<QQQ",bytes(u.mem_read(stack+0x28,24)))
+                    blocker["original_create_file_a_abi"]={
+                        "original_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "guest_requested_path":name,
+                        "desired_access_hex":hex(u.reg_read(UC_X86_REG_RDX)&0xffffffff),
+                        "share_mode_hex":hex(u.reg_read(UC_X86_REG_R8)&0xffffffff),
+                        "security_attributes_null":u.reg_read(UC_X86_REG_R9)==0,
+                        "creation_disposition":creation&0xffffffff,
+                        "flags_and_attributes_hex":hex(flags&0xffffffff),
+                        "template_handle_null":template==0,
+                        "win64_stack_aligned":stack&15==8,
+                        "host_createfile_not_called":True,
+                    }
+                except Exception as exc:
+                    blocker["original_create_file_a_abi"]={
+                        "inspection_error":type(exc).__name__}
+
             # One-time, metadata-only original Win64 Winsock initialization ABI
             # survey. Do not write WSADATA, signal success, or execute the DLL.
             if (research is not None and lib.lower()=="ws2_32.dll" and
