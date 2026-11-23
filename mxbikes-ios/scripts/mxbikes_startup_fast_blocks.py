@@ -478,6 +478,32 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
         if not symbol_is_supported(lib,symbol):
+            if (core_win32 is not None and lib.lower()=="kernel32.dll"
+                and symbol=="GetFileTime"):
+                try:
+                    from mxbikes_win32_owned_core_ini import CORE_INI_WIN32_HANDLE
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    ptrs=[u.reg_read(UC_X86_REG_RDX),
+                          u.reg_read(UC_X86_REG_R8),
+                          u.reg_read(UC_X86_REG_R9)]
+                    blocker["original_core_ini_get_file_time_abi"]={
+                        "original_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "handle_is_verified_read_only_core_ini":(
+                            u.reg_read(UC_X86_REG_RCX)==CORE_INI_WIN32_HANDLE),
+                        "creation_time_output_present":ptrs[0]!=0,
+                        "access_time_output_present":ptrs[1]!=0,
+                        "write_time_output_present":ptrs[2]!=0,
+                        "output_pointer_alignment_mod8":[p&7 if p else None for p in ptrs],
+                        "win64_stack_aligned":stack&15==8,
+                        "original_windows_metadata_not_invented":True,
+                    }
+                except Exception as exc:
+                    blocker["original_core_ini_get_file_time_abi"]={
+                        "inspection_error":type(exc).__name__}
+
             if (research is not None and lib.lower()=="kernel32.dll"
                 and symbol=="CreateFileA"):
                 # Private-runner ABI inspection; neither host filesystem nor
