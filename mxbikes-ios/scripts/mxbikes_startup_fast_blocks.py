@@ -281,8 +281,13 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         if winsock_research is not None and lib.lower()=="ws2_32.dll":
             from mxbikes_winsock_startup_research import OfflineWinsockRejected
             try:
-                if winsock_research.handle(u,pe,original_slots,lib,symbol,
-                                           verified_import_return):
+                if symbol=="inet_pton":
+                    accepted=winsock_research.handle_inet_pton(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=winsock_research.handle(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if accepted:
                     return
             except OfflineWinsockRejected as exc:
                 stop(u,"original_wsa_startup_research_rejected",**{
