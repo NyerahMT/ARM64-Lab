@@ -71,11 +71,10 @@ def verified_import_return(pe, return_va, library, symbol, original_slots):
         if thunk_rva<0 or thunk_rva>=0x8000000:
             return None
         thunk=bytes(pe.read_rva(thunk_rva,6))
-        if len(thunk)!=6 or thunk[:2]!=bytes((0xff,0x25)):
-            return None
-        slot=thunk_rva+6+struct.unpack_from("<i",thunk,2)[0]
-        if original_slots.get(slot)==(library.lower(),symbol):
-            return hex(call_rva)
+        if len(thunk)==6 and thunk[:2]==bytes((0xff,0x25)):
+            slot=thunk_rva+6+struct.unpack_from("<i",thunk,2)[0]
+            if original_slots.get(slot)==(library.lower(),symbol):
+                return hex(call_rva)
         # Original 48-byte allocation uses CALL -> lazily initialized
         # CRT wrapper. That wrapper checks its cached function pointer
         # and tail-jumps through a REX-prefixed imported IAT JMP on the
