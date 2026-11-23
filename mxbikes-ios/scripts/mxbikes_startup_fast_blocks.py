@@ -349,6 +349,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 stop(u,"original_guest_memset_research_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memcpy":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if malloc_research.handle_guest_small_memcpy(
+                    u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except GuestHeapResearchRejected as exc:
+                stop(u,"original_guest_small_memcpy_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memmove":
             from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
             try:
