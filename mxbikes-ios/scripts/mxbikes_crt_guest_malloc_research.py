@@ -14,6 +14,11 @@ MALLOC_ORIGINAL_CALL_RVA=0x283956
 MALLOC_ORIGINAL_RETURN_RVA=0x28395B
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
+SECOND_MEMSET_CALL_RVA=0x284CF9
+SECOND_MEMSET_RETURN_RVA=SECOND_MEMSET_CALL_RVA+5
+SECOND_MEMSET_LENGTH=400
+IMAGE_SCN_MEM_WRITE=0x80000000
+IMAGE_SCN_MEM_EXECUTE=0x20000000
 EXPECTED_ALLOC_BYTES=0x2580
 HEAP_BASE=0x790000000
 HEAP_BYTES=0x100000
@@ -26,6 +31,7 @@ class SingleGuestMallocResearch:
         self.called=False
         self.events=[]
         self.memset_events=[]
+        self.image_memset_events=[]
 
     def handle(self,u,pe,slots,library,symbol,verify):
         if library.lower()!="msvcr90.dll" or symbol!="malloc":
@@ -91,10 +97,66 @@ class SingleGuestMallocResearch:
         })
         return True
 
+    def handle_image_memset(self,u,pe,slots,library,symbol,verify):
+        """One audited original 400-byte zeroing of non-executable PE data.
+
+        The entire destination must fit inside a declared, writable,
+        non-executable original section; guest CPU/memory remain untouched
+        if the original CALL source, Win64 ABI, or size differs.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="memset":
+            return False
+        if self.image_memset_events or not self.memset_events:
+            raise GuestHeapResearchRejected("second_memset_order_or_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        dest=u.reg_read(UC_X86_REG_RCX)
+        fill=u.reg_read(UC_X86_REG_RDX)
+        length=u.reg_read(UC_X86_REG_R8)
+        if rsp&15!=8 or not dest or fill!=0 or length!=SECOND_MEMSET_LENGTH:
+            raise GuestHeapResearchRejected("original_second_memset_abi_mismatch")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("second_memset_unreadable_return") from exc
+        if (ret!=IMAGE_BASE+SECOND_MEMSET_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(SECOND_MEMSET_CALL_RVA)):
+            raise GuestHeapResearchRejected("second_memset_original_callsite_mismatch")
+        section=None
+        rva=dest-IMAGE_BASE
+        for name,vsize,base,rawsize,_,flags in pe.sections:
+            span=max(vsize,rawsize)
+            if (rva>=base and rva-base<=span-SECOND_MEMSET_LENGTH and
+                flags&IMAGE_SCN_MEM_WRITE and not flags&IMAGE_SCN_MEM_EXECUTE):
+                section=name
+                break
+        if section is None:
+            raise GuestHeapResearchRejected("second_memset_not_verified_writable_pe_data")
+        try:
+            if len(u.mem_read(dest,SECOND_MEMSET_LENGTH))!=SECOND_MEMSET_LENGTH:
+                raise GuestHeapResearchRejected("second_memset_guest_range_short")
+        except GuestHeapResearchRejected:
+            raise
+        except Exception as exc:
+            raise GuestHeapResearchRejected("second_memset_guest_range_unmapped") from exc
+        try:
+            u.mem_write(dest,bytes(SECOND_MEMSET_LENGTH))
+        except Exception as exc:
+            raise GuestHeapResearchRejected("second_memset_guest_write_rejected") from exc
+        u.reg_write(UC_X86_REG_RAX,dest)
+        self.image_memset_events.append({
+            "original_call_rva":hex(SECOND_MEMSET_CALL_RVA),
+            "writable_data_section_name":section,
+            "zeroed_original_guest_data_bytes":length,
+            "original_msvcr90_memset_executed":False,
+        })
+        return True
+
     def summary(self):
         return {"synthetic_original_malloc_count":len(self.events),
                 "synthetic_original_memset_count":len(self.memset_events),
                 "allocations":list(self.events),
                 "memset_events":list(self.memset_events),
+                "synthetic_original_image_memset_count":len(self.image_memset_events),
+                "original_image_memset_events":list(self.image_memset_events),
                 "guest_malloc_semantics_are_synthetic":True,
                 "original_windows_crt_executed":False}
