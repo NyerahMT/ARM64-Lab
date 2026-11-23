@@ -21,6 +21,9 @@ SPRINTF_IPV4_OUTPUT=b"127.0.0.1"+bytes((0,))
 SECOND_MEMSET_CALL_RVA=0x284CF9
 SECOND_MEMSET_RETURN_RVA=SECOND_MEMSET_CALL_RVA+5
 SECOND_MEMSET_LENGTH=400
+THIRD_MEMSET_CALL_RVA=0x2A7D03
+THIRD_MEMSET_RETURN_RVA=THIRD_MEMSET_CALL_RVA+5
+THIRD_MEMSET_LENGTH=3776
 IMAGE_SCN_MEM_WRITE=0x80000000
 IMAGE_SCN_MEM_EXECUTE=0x20000000
 EXPECTED_ALLOC_BYTES=0x2580
@@ -103,53 +106,66 @@ class SingleGuestMallocResearch:
         return True
 
     def handle_image_memset(self,u,pe,slots,library,symbol,verify):
-        """One audited original 400-byte zeroing of non-executable PE data.
+        """Two independent original PE-data zero-fills, each with exact ABI.
 
-        The entire destination must fit inside a declared, writable,
-        non-executable original section; guest CPU/memory remain untouched
-        if the original CALL source, Win64 ABI, or size differs.
+        The first clears 400 writable data bytes; following original IPv4
+        formatting, the second clears 3776 more. Never clear arbitrary
+        regions, execute CRT, or write to an executable PE section.
         """
         if library.lower()!="msvcr90.dll" or symbol!="memset":
             return False
-        if self.image_memset_events or not self.memset_events:
-            raise GuestHeapResearchRejected("second_memset_order_or_budget")
+        count=len(self.image_memset_events)
+        if not self.memset_events or count>1:
+            raise GuestHeapResearchRejected("image_memset_order_or_budget")
+        if count==0:
+            if self.sprintf_events:
+                raise GuestHeapResearchRejected("image_memset_wrong_stage")
+            call,ret_rva,length=(SECOND_MEMSET_CALL_RVA,
+                                 SECOND_MEMSET_RETURN_RVA,
+                                 SECOND_MEMSET_LENGTH)
+        else:
+            if len(self.sprintf_events)!=1:
+                raise GuestHeapResearchRejected("third_memset_before_original_ipv4_sprintf")
+            call,ret_rva,length=(THIRD_MEMSET_CALL_RVA,
+                                 THIRD_MEMSET_RETURN_RVA,
+                                 THIRD_MEMSET_LENGTH)
         rsp=u.reg_read(UC_X86_REG_RSP)
         dest=u.reg_read(UC_X86_REG_RCX)
         fill=u.reg_read(UC_X86_REG_RDX)
-        length=u.reg_read(UC_X86_REG_R8)
-        if rsp&15!=8 or not dest or fill!=0 or length!=SECOND_MEMSET_LENGTH:
-            raise GuestHeapResearchRejected("original_second_memset_abi_mismatch")
+        requested=u.reg_read(UC_X86_REG_R8)
+        if rsp&15!=8 or not dest or fill!=0 or requested!=length:
+            raise GuestHeapResearchRejected("original_image_memset_abi_mismatch")
         try:
-            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+            return_pc=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
         except Exception as exc:
-            raise GuestHeapResearchRejected("second_memset_unreadable_return") from exc
-        if (ret!=IMAGE_BASE+SECOND_MEMSET_RETURN_RVA or
-            verify(pe,ret,library,symbol,slots)!=hex(SECOND_MEMSET_CALL_RVA)):
-            raise GuestHeapResearchRejected("second_memset_original_callsite_mismatch")
+            raise GuestHeapResearchRejected("original_image_memset_unreadable_return") from exc
+        if (return_pc!=IMAGE_BASE+ret_rva or
+            verify(pe,return_pc,library,symbol,slots)!=hex(call)):
+            raise GuestHeapResearchRejected("original_image_memset_callsite_mismatch")
         section=None
         rva=dest-IMAGE_BASE
         for name,vsize,base,rawsize,_,flags in pe.sections:
             span=max(vsize,rawsize)
-            if (rva>=base and rva-base<=span-SECOND_MEMSET_LENGTH and
+            if (rva>=base and rva-base<=span-length and
                 flags&IMAGE_SCN_MEM_WRITE and not flags&IMAGE_SCN_MEM_EXECUTE):
                 section=name
                 break
         if section is None:
-            raise GuestHeapResearchRejected("second_memset_not_verified_writable_pe_data")
+            raise GuestHeapResearchRejected("original_image_memset_not_safe_pe_data")
         try:
-            if len(u.mem_read(dest,SECOND_MEMSET_LENGTH))!=SECOND_MEMSET_LENGTH:
-                raise GuestHeapResearchRejected("second_memset_guest_range_short")
+            if len(u.mem_read(dest,length))!=length:
+                raise GuestHeapResearchRejected("original_image_memset_guest_range_short")
         except GuestHeapResearchRejected:
             raise
         except Exception as exc:
-            raise GuestHeapResearchRejected("second_memset_guest_range_unmapped") from exc
+            raise GuestHeapResearchRejected("original_image_memset_guest_range_unmapped") from exc
         try:
-            u.mem_write(dest,bytes(SECOND_MEMSET_LENGTH))
+            u.mem_write(dest,bytes(length))
         except Exception as exc:
-            raise GuestHeapResearchRejected("second_memset_guest_write_rejected") from exc
+            raise GuestHeapResearchRejected("original_image_memset_guest_write_rejected") from exc
         u.reg_write(UC_X86_REG_RAX,dest)
         self.image_memset_events.append({
-            "original_call_rva":hex(SECOND_MEMSET_CALL_RVA),
+            "original_call_rva":hex(call),
             "writable_data_section_name":section,
             "zeroed_original_guest_data_bytes":length,
             "original_msvcr90_memset_executed":False,
