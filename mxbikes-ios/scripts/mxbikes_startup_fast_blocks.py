@@ -257,6 +257,32 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                             "reason":type(exc).__name__})
                     return
         if not symbol_is_supported(lib,symbol):
+            # One-time, metadata-only original Win64 Winsock initialization ABI
+            # survey. Do not write WSADATA, signal success, or execute the DLL.
+            if (research is not None and lib.lower()=="ws2_32.dll" and
+                symbol=="#115"):
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    output=u.reg_read(UC_X86_REG_RDX)
+                    version=u.reg_read(UC_X86_REG_RCX)
+                    initial=bytes(u.mem_read(output,16))
+                    blocker["observed_original_wsa_startup"]={
+                        "original_import":lib+"!"+symbol,
+                        "guest_call_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "version_word_hex":hex(version & 0xffff),
+                        "rcx_high_bits_zero":version>>16==0,
+                        "output_pointer_nonnull":output!=0,
+                        "output_address_mod8":output&7,
+                        "output_memory_first_16_zero":initial==bytes(16),
+                        "output_is_in_original_image":BASE<=output<image_hi,
+                    }
+                except Exception as exc:
+                    blocker["observed_original_wsa_startup"]={
+                        "inspection_error":type(exc).__name__
+                    }
             try:
                 return_va=struct.unpack("<Q",bytes(u.mem_read(u.reg_read(UC_X86_REG_RSP),8)))[0]
             except Exception:
