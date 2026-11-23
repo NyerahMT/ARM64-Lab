@@ -282,8 +282,12 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
             from mxbikes_winsock_startup_research import OfflineWinsockRejected
             try:
                 if symbol=="inet_pton":
-                    accepted=winsock_research.handle_inet_pton(
-                        u,pe,original_slots,lib,symbol,verified_import_return)
+                    if winsock_research.followup_nameinfo_events:
+                        accepted=winsock_research.handle_followup_inet_pton(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    else:
+                        accepted=winsock_research.handle_inet_pton(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
                 elif symbol=="getnameinfo":
                     if winsock_research.addrinfo_events:
                         accepted=winsock_research.handle_followup_getnameinfo(
