@@ -3,6 +3,7 @@ from pathlib import Path
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 from unicorn.x86_const import UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RSP
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
