@@ -5,7 +5,7 @@ from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
 from mxbikes_steam_winmm_time_probe import (
     WinMMTimeGetTimeResearch,TimeGetTimeProbeRejected,
-    IMAGE_BASE,CALL_RVA,RETURN_RVA,BEGIN_PERIOD_CALL_RVA,BEGIN_PERIOD_RETURN_RVA,TEST_CLOCK_MS,MAX_CALLS)
+    IMAGE_BASE,CALL_RVA,RETURN_RVA,SECOND_CALL_RVA,SECOND_RETURN_RVA,BEGIN_PERIOD_CALL_RVA,BEGIN_PERIOD_RETURN_RVA,TEST_CLOCK_MS,MAX_CALLS)
 
 class CPU:
     def __init__(self,ret=IMAGE_BASE+RETURN_RVA,rsp=0x720000008,period=1):
@@ -22,8 +22,9 @@ class CPU:
 def verified(pe,ret,lib,sym,slots):
     if lib.lower()!="winmm.dll" or not slots.get("match"):
         return None
-    if ret==IMAGE_BASE+RETURN_RVA and sym=="timeGetTime":
-        return hex(CALL_RVA)
+    if sym=="timeGetTime":
+        if ret==IMAGE_BASE+RETURN_RVA:return hex(CALL_RVA)
+        if ret==IMAGE_BASE+SECOND_RETURN_RVA:return hex(SECOND_CALL_RVA)
     if ret==IMAGE_BASE+BEGIN_PERIOD_RETURN_RVA and sym=="timeBeginPeriod":
         return hex(BEGIN_PERIOD_CALL_RVA)
     return None
@@ -41,6 +42,15 @@ class WinMMTimeResearchTests(unittest.TestCase):
         self.assertFalse(clock.handle(bad,None,{"match":True},
                                       "kernel32.dll","timeGetTime",verified))
         self.assertEqual(bad.reg_read(UC_X86_REG_RAX),0x9988)
+
+    def test_second_authentic_time_get_time_import_callsite(self):
+        clock=WinMMTimeGetTimeResearch()
+        cpu=CPU(ret=IMAGE_BASE+SECOND_RETURN_RVA)
+        self.assertTrue(clock.handle(cpu,None,{"match":True},
+                                     "WINMM.dll","timeGetTime",verified))
+        self.assertEqual(cpu.reg_read(UC_X86_REG_RAX),TEST_CLOCK_MS)
+        self.assertEqual(clock.summary()["calls"][0]["original_call_rva"],hex(SECOND_CALL_RVA))
+        self.assertEqual(clock.summary()["calls"][0]["return_rva"],hex(SECOND_RETURN_RVA))
 
     def test_unverified_return_and_unmapped_stack_are_denied(self):
         for cpu,slots in ((CPU(ret=IMAGE_BASE+RETURN_RVA+1),{"match":True}),
