@@ -52,7 +52,10 @@ def verified_import_return(pe, return_va, library, symbol, original_slots):
         return None
     try:
         direct_rva=return_va-BASE-6
-        op=bytes(pe.read_rva(direct_rva,6))
+        try:
+            op=bytes(pe.read_rva(direct_rva,6))
+        except (ValueError,OverflowError):
+            op=b""
         if len(op)==6 and op[:2]==bytes((0xff,0x15)):
             slot=direct_rva+6+struct.unpack_from("<i",op,2)[0]
             if original_slots.get(slot)==(library.lower(),symbol):
