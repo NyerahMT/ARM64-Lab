@@ -109,6 +109,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
     research=None
     time_research=None
     malloc_research=None
+    winsock_research=None
     if steam_subscription_research_probe:
         from mxbikes_steam_offline_research import OfflineAppsResearchProbe
         research=OfflineAppsResearchProbe()
@@ -116,6 +117,8 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         time_research=WinMMTimeGetTimeResearch()
         from mxbikes_crt_guest_malloc_research import SingleGuestMallocResearch
         malloc_research=SingleGuestMallocResearch()
+        from mxbikes_winsock_startup_research import OfflineWinsockResearch
+        winsock_research=OfflineWinsockResearch()
     starts,ends=unwind_index(pe)
     crt=ReadOnlyCRT(file)
     decoded={}
@@ -245,6 +248,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 stop(u,"original_guest_memset_research_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
+        if winsock_research is not None and lib.lower()=="ws2_32.dll":
+            from mxbikes_winsock_startup_research import OfflineWinsockRejected
+            try:
+                if winsock_research.handle(u,pe,original_slots,lib,symbol,
+                                           verified_import_return):
+                    return
+            except OfflineWinsockRejected as exc:
+                stop(u,"original_wsa_startup_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if lib.lower()=="opengl32.dll":
             actual_original_gl_import_events+=1
             if graphics_handler is not None:
@@ -367,6 +380,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "synthetic_steam_subscription_research":research.summary() if research else None,
         "synthetic_winmm_timer_research":time_research.summary() if time_research else None,
         "synthetic_guest_malloc_research":malloc_research.summary() if malloc_research else None,
+        "synthetic_winsock_startup_research":winsock_research.summary() if winsock_research else None,
     }
     out.mkdir(parents=True,exist_ok=True)
     report_name = ("startup-steam-failure-blocks" if steam_failure_probe else
