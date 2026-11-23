@@ -12,6 +12,9 @@ from unicorn.x86_const import UC_X86_REG_RSP,UC_X86_REG_RAX,UC_X86_REG_RCX
 
 CALL_RVA=0x133F24
 RETURN_RVA=CALL_RVA+6
+SECOND_CALL_RVA=0x133F60
+SECOND_RETURN_RVA=SECOND_CALL_RVA+6
+GET_TIME_ORIGINAL_CALL_RVAS=(CALL_RVA,SECOND_CALL_RVA)
 BEGIN_PERIOD_CALL_RVA=0x133F5A
 BEGIN_PERIOD_RETURN_RVA=BEGIN_PERIOD_CALL_RVA+6
 MAX_CALLS=64
@@ -39,9 +42,16 @@ class WinMMTimeGetTimeResearch:
             ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
         except Exception as exc:
             raise TimeGetTimeProbeRejected("time_get_time_unmapped_return") from exc
-        call, return_rva = ((BEGIN_PERIOD_CALL_RVA,BEGIN_PERIOD_RETURN_RVA)
-                            if is_begin else (CALL_RVA,RETURN_RVA))
-        if ret!=IMAGE_BASE+return_rva or verify(pe,ret,library,symbol,original_slots)!=hex(call):
+        if is_begin:
+            call,return_rva=BEGIN_PERIOD_CALL_RVA,BEGIN_PERIOD_RETURN_RVA
+            valid = (ret==IMAGE_BASE+return_rva and
+                     verify(pe,ret,library,symbol,original_slots)==hex(call))
+        else:
+            call=ret-IMAGE_BASE-6
+            return_rva=call+6
+            valid=(call in GET_TIME_ORIGINAL_CALL_RVAS and
+                   verify(pe,ret,library,symbol,original_slots)==hex(call))
+        if not valid:
             raise TimeGetTimeProbeRejected("winmm_original_import_mismatch")
         if is_begin:
             period = guest.reg_read(UC_X86_REG_RCX) & 0xFFFFFFFF
