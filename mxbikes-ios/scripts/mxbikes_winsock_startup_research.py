@@ -28,6 +28,8 @@ FOLLOWUP_GETNAMEINFO_CALL_RVA=0x284DAD
 FOLLOWUP_GETNAMEINFO_RETURN_RVA=FOLLOWUP_GETNAMEINFO_CALL_RVA+6
 FOLLOWUP_INET_PTON_CALL_RVA=0x284DF9
 FOLLOWUP_INET_PTON_RETURN_RVA=FOLLOWUP_INET_PTON_CALL_RVA+6
+FREEADDRINFO_CALL_RVA=0x284E27
+FREEADDRINFO_RETURN_RVA=FREEADDRINFO_CALL_RVA+6
 NI_NUMERICHOST_WINDOWS=0x02
 ADDRINFO_MOCK_BASE=0x7A0000000
 ADDRINFO_MOCK_SIZE=0x1000
@@ -78,6 +80,7 @@ class OfflineWinsockResearch:
         self.addrinfo_events=[]
         self.followup_nameinfo_events=[]
         self.followup_pton_events=[]
+        self.freeaddrinfo_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -499,6 +502,52 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_freeaddrinfo(self,guest,pe,slots,library,symbol,verify):
+        """Deallocate ONLY the original getaddrinfo synthetic guest page.
+
+        Validates the exact original call, original mock allocation and
+        unchanged Win64 ADDRINFOA/sockaddr_in records. Does not interact with
+        Windows networking, host memory, sockets, or the original PE.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="freeaddrinfo":
+            return False
+        if (len(self.addrinfo_events)!=1 or
+            len(self.followup_pton_events)!=1 or self.freeaddrinfo_events):
+            raise OfflineWinsockRejected("freeaddrinfo_original_order_or_budget")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        head=guest.reg_read(UC_X86_REG_RCX)
+        if rsp&15!=8 or head!=ADDRINFO_HEAD:
+            raise OfflineWinsockRejected("freeaddrinfo_original_pointer_or_stack_mismatch")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise OfflineWinsockRejected("freeaddrinfo_unreadable_original_stack") from exc
+        if (ret!=IMAGE_BASE+FREEADDRINFO_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(FREEADDRINFO_CALL_RVA)):
+            raise OfflineWinsockRejected("freeaddrinfo_original_callsite_mismatch")
+        expected_info=struct.pack("<iiiiQQQQ",0,AF_INET_WINDOWS,1,6,
+                                  IPV4_SOCKADDR_BYTES,0,ADDRINFO_SOCKADDR,0)
+        expected_sock=struct.pack("<HH",AF_INET_WINDOWS,0)+bytes((127,0,0,1))+bytes(8)
+        try:
+            if (bytes(guest.mem_read(ADDRINFO_HEAD,WIN64_ADDRINFO_SIZE))!=expected_info or
+                bytes(guest.mem_read(ADDRINFO_SOCKADDR,IPV4_SOCKADDR_BYTES))!=expected_sock):
+                raise OfflineWinsockRejected("freeaddrinfo_mock_guest_data_was_mutated")
+        except OfflineWinsockRejected:
+            raise
+        except Exception as exc:
+            raise OfflineWinsockRejected("freeaddrinfo_original_result_unmapped") from exc
+        try:
+            guest.mem_unmap(ADDRINFO_MOCK_BASE,ADDRINFO_MOCK_SIZE)
+        except Exception as exc:
+            raise OfflineWinsockRejected("freeaddrinfo_mock_guest_unmap_failed") from exc
+        # Win32 void freeaddrinfo(PADDRINFOA): RAX is not a return value.
+        self.freeaddrinfo_events.append({
+            "original_call_rva":hex(FREEADDRINFO_CALL_RVA),
+            "synthetic_win64_addrinfo_guest_page_unmapped":True,
+            "real_windows_heap_or_dns_used":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
@@ -513,6 +562,8 @@ class OfflineWinsockResearch:
             "followup_getnameinfo_events":list(self.followup_nameinfo_events),
             "verified_original_guest_followup_inet_pton_handled":len(self.followup_pton_events),
             "followup_inet_pton_events":list(self.followup_pton_events),
+            "verified_original_guest_freeaddrinfo_handled":len(self.freeaddrinfo_events),
+            "freeaddrinfo_events":list(self.freeaddrinfo_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
