@@ -284,6 +284,9 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 if symbol=="inet_pton":
                     accepted=winsock_research.handle_inet_pton(
                         u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="getnameinfo":
+                    accepted=winsock_research.handle_getnameinfo(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
                 else:
                     accepted=winsock_research.handle(
                         u,pe,original_slots,lib,symbol,verified_import_return)
