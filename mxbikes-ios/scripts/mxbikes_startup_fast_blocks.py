@@ -151,7 +151,9 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
     core_win32=None
     if core_stream is not None:
         from mxbikes_win32_owned_core_ini import OwnedCoreIniWin32Research
-        core_win32=OwnedCoreIniWin32Research(core_stream.content)
+        core_win32=OwnedCoreIniWin32Research(
+            core_stream.content,
+            last_write_filetime_100ns=manifest.get("owned_core_ini_last_write_filetime_100ns"))
     decoded={}
     md=Cs(CS_ARCH_X86,CS_MODE_64)
     counters=Counter()
@@ -467,14 +469,20 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                          **{"import":lib+"!"+symbol,
                             "reason":type(exc).__name__})
                     return
-        if core_win32 is not None and lib.lower()=="kernel32.dll" and symbol=="CreateFileA":
+        if (core_win32 is not None and lib.lower()=="kernel32.dll"
+            and symbol in ("CreateFileA","GetFileTime")):
             from mxbikes_win32_owned_core_ini import CoreIniWin32Rejected
             try:
-                if core_win32.handle_createfilea(
-                    u,pe,original_slots,lib,symbol,verified_import_return):
+                if symbol=="CreateFileA":
+                    accepted=core_win32.handle_createfilea(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=core_win32.handle_getfiletime(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if accepted:
                     return
             except CoreIniWin32Rejected as exc:
-                stop(u,"original_win32_core_ini_createfile_rejected",**{
+                stop(u,"original_win32_core_ini_service_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
         if not symbol_is_supported(lib,symbol):
