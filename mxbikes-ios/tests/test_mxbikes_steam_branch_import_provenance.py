@@ -87,6 +87,40 @@ class ImportReturnProvenanceTests(unittest.TestCase):
         self.assertIsNone(verified_import_return(
             LazyPE(body),BASE+caller_rva+5,"KERNEL32.dll","malloc",slots))
 
+    def test_later_original_malloc_caller_uses_same_verified_lazy_import(self):
+        caller=0x2ad4b9
+        thunk=0x2bd710
+        iat=0x3211f8
+        cache=0x3d9ac8
+        call=bytes((0xe8,))+struct.pack("<i",thunk-caller-5)
+        lazy=(bytes((0x48,0x8b,0x05))+
+              struct.pack("<i",cache-thunk-7)+
+              bytes((0x48,0x85,0xc0,0x74,0x03,0x48,0xff,0xe0,
+                     0x48,0xff,0x25))+
+              struct.pack("<i",iat-thunk-22))
+        class PE:
+            def __init__(self,body=lazy,call_bytes=call):
+                self.body=body
+                self.call=call_bytes
+            def read_rva(self,rva,n):
+                if rva==caller and n==5:return self.call
+                if rva==thunk and n in (6,22):return self.body[:n]
+                raise ValueError("unmapped")
+        slots={iat:("msvcr90.dll","malloc")}
+        self.assertEqual(
+            verified_import_return(PE(),BASE+caller+5,"MSVCR90.dll","malloc",slots),
+            hex(caller))
+        self.assertIsNone(
+            verified_import_return(PE(lazy[:-1]+bytes((0,))),
+                                   BASE+caller+5,"MSVCR90.dll","malloc",slots))
+        self.assertIsNone(
+            verified_import_return(PE(),BASE+caller+5,
+                                   "MSVCR90.dll","malloc",{iat:("msvcr90.dll","free")}))
+        corrupted=bytes((0xe8,))+struct.pack("<i",thunk-caller-4)
+        self.assertIsNone(
+            verified_import_return(PE(call_bytes=corrupted),
+                                   BASE+caller+5,"MSVCR90.dll","malloc",slots))
+
     def test_wrong_import_opcode_stack_pc_and_slot_fail(self):
         raw=bytes((0xff,0x15))+struct.pack("<i",IAT_SLOT-(CALL_RVA+6))
         slots={IAT_SLOT:(LIB.lower(),API)}
