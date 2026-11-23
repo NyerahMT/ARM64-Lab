@@ -86,9 +86,12 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         steam_failure = SteamFailureProbe(pe,
             init_success_branch_probe=steam_init_success_probe or steam_subscription_research_probe)
     research=None
+    time_research=None
     if steam_subscription_research_probe:
         from mxbikes_steam_offline_research import OfflineAppsResearchProbe
         research=OfflineAppsResearchProbe()
+        from mxbikes_steam_winmm_time_probe import WinMMTimeGetTimeResearch
+        time_research=WinMMTimeGetTimeResearch()
     starts,ends=unwind_index(pe)
     crt=ReadOnlyCRT(file)
     decoded={}
@@ -190,6 +193,15 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 stop(u,"steam_failure_probe_rejected",**{"import":lib+"!"+symbol,
                                                      "reason":str(exc)})
                 return
+        if time_research is not None and lib.lower()=="winmm.dll":
+            from mxbikes_steam_winmm_time_probe import TimeGetTimeProbeRejected
+            try:
+                if time_research.handle(u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except TimeGetTimeProbeRejected as exc:
+                stop(u,"time_get_time_original_call_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if lib.lower()=="opengl32.dll":
             actual_original_gl_import_events+=1
             if graphics_handler is not None:
@@ -284,6 +296,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "steam_failure_probe":steam_failure.summary() if steam_failure else None,
         "original_steam_context_argument_snapshot":steam_context_layout,
         "synthetic_steam_subscription_research":research.summary() if research else None,
+        "synthetic_winmm_timer_research":time_research.summary() if time_research else None,
     }
     out.mkdir(parents=True,exist_ok=True)
     report_name = ("startup-steam-failure-blocks" if steam_failure_probe else
