@@ -53,7 +53,7 @@ class FourthMemsetTest(unittest.TestCase):
         self.assertEqual(cpu.writes[0][1].count(0),4666112)
         self.assertEqual(cpu.reg_read(UC_X86_REG_RAX),cpu.DST)
         self.assertEqual(mem.summary()["synthetic_original_image_memset_count"],3)
-        with self.assertRaisesRegex(GuestHeapResearchRejected,"budget"):
+        with self.assertRaisesRegex(GuestHeapResearchRejected,"abi_mismatch"):
             mem.handle_image_memset(
                 cpu,PE(),{"ok":True},"MSVCR90.dll","memset",verify)
     def test_bad_original_abi_or_unsafe_pe_permissions_rejected_without_write(self):
