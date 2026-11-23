@@ -12,7 +12,7 @@ import struct
 import ipaddress
 from unicorn.x86_const import (
     UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX,
-    UC_X86_REG_R8
+    UC_X86_REG_R8, UC_X86_REG_R9
 )
 
 IMAGE_BASE=0x140000000
