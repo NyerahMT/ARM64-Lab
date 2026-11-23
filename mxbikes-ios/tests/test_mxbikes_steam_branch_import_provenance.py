@@ -77,7 +77,7 @@ class ImportReturnProvenanceTests(unittest.TestCase):
             hex(caller_rva))
         for wrong_body,wrong_slots in (
             (bytes((0x90,))+body[1:],slots),
-            (body[:-1]+bytes((0x00,)),slots),
+            (body[:-1]+bytes((0x01,)),slots),
             (body,{malloc_slot:("msvcr90.dll","free")}),
             (body,{}),
         ):
