@@ -53,7 +53,7 @@ class ThirdMemsetTest(unittest.TestCase):
         self.assertEqual(u.reg_read(UC_X86_REG_RAX),u.DST)
         self.assertEqual(m.summary()["synthetic_original_image_memset_count"],2)
         self.assertEqual(m.summary()["original_image_memset_events"][-1]["zeroed_original_guest_data_bytes"],3776)
-        with self.assertRaisesRegex(GuestHeapResearchRejected,"budget"):
+        with self.assertRaisesRegex(GuestHeapResearchRejected,"abi_mismatch"):
             m.handle_image_memset(
                 u,PE(),{"ok":True},"MSVCR90.dll","memset",verify)
 
