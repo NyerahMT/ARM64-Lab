@@ -14,6 +14,10 @@ MALLOC_ORIGINAL_CALL_RVA=0x283956
 MALLOC_ORIGINAL_RETURN_RVA=0x28395B
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
+SPRINTF_ORIGINAL_CALL_RVA=0x285469
+SPRINTF_ORIGINAL_RETURN_RVA=SPRINTF_ORIGINAL_CALL_RVA+5
+SPRINTF_IPV4_FORMAT=b"%lu.%lu.%lu.%lu"+bytes((0,))
+SPRINTF_IPV4_OUTPUT=b"127.0.0.1"+bytes((0,))
 SECOND_MEMSET_CALL_RVA=0x284CF9
 SECOND_MEMSET_RETURN_RVA=SECOND_MEMSET_CALL_RVA+5
 SECOND_MEMSET_LENGTH=400
@@ -32,6 +36,7 @@ class SingleGuestMallocResearch:
         self.events=[]
         self.memset_events=[]
         self.image_memset_events=[]
+        self.sprintf_events=[]
 
     def handle(self,u,pe,slots,library,symbol,verify):
         if library.lower()!="msvcr90.dll" or symbol!="malloc":
@@ -151,6 +156,60 @@ class SingleGuestMallocResearch:
         })
         return True
 
+    def handle_sprintf_ipv4(self,u,pe,slots,library,symbol,verify):
+        """ONE authentic MSVCR90 sprintf using original IPv4 %lu form.
+
+        The only supported format is the SHA-pinned game's exact 4-argument
+        dotted decimal sequence. This is NOT an arbitrary format interpreter:
+        it performs no percent-n, pointer dereferences, Unicode, or host CRT.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="sprintf":
+            return False
+        if len(self.image_memset_events)!=1 or self.sprintf_events:
+            raise GuestHeapResearchRejected("sprintf_original_order_or_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        dst=u.reg_read(UC_X86_REG_RCX)
+        fmt=u.reg_read(UC_X86_REG_RDX)
+        if rsp&15!=8 or not dst or not fmt or dst&7:
+            raise GuestHeapResearchRejected("sprintf_original_abi_or_alignment")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+            args=struct.unpack("<QQ",bytes(u.mem_read(rsp+0x28,16)))
+            fmt_bytes=bytes(u.mem_read(fmt,len(SPRINTF_IPV4_FORMAT)))
+        except Exception as exc:
+            raise GuestHeapResearchRejected("sprintf_original_guest_operand_unmapped") from exc
+        if (ret!=IMAGE_BASE+SPRINTF_ORIGINAL_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(SPRINTF_ORIGINAL_CALL_RVA)):
+            raise GuestHeapResearchRejected("sprintf_original_callsite_mismatch")
+        if fmt_bytes!=SPRINTF_IPV4_FORMAT:
+            raise GuestHeapResearchRejected("sprintf_unexpected_original_format")
+        octets=(u.reg_read(UC_X86_REG_R8)&0xffffffff,
+                u.reg_read(UC_X86_REG_R9)&0xffffffff,
+                args[0]&0xffffffff,args[1]&0xffffffff)
+        if octets!=(127,0,0,1):
+            raise GuestHeapResearchRejected("sprintf_original_address_arguments_changed")
+        if IMAGE_BASE<=dst<IMAGE_BASE+0x8000000:
+            raise GuestHeapResearchRejected("sprintf_unexpected_original_image_destination")
+        try:
+            if len(u.mem_read(dst,len(SPRINTF_IPV4_OUTPUT)))!=len(SPRINTF_IPV4_OUTPUT):
+                raise GuestHeapResearchRejected("sprintf_guest_destination_short")
+        except GuestHeapResearchRejected:
+            raise
+        except Exception as exc:
+            raise GuestHeapResearchRejected("sprintf_guest_destination_unmapped") from exc
+        try:
+            u.mem_write(dst,SPRINTF_IPV4_OUTPUT)
+        except Exception as exc:
+            raise GuestHeapResearchRejected("sprintf_guest_destination_not_writable") from exc
+        u.reg_write(UC_X86_REG_RAX,len(SPRINTF_IPV4_OUTPUT)-1)
+        self.sprintf_events.append({
+            "original_call_rva":hex(SPRINTF_ORIGINAL_CALL_RVA),
+            "formatted_verified_ipv4_octets":4,
+            "guest_output_bytes_including_nul":len(SPRINTF_IPV4_OUTPUT),
+            "synthetic_guest_crt_only":True,
+        })
+        return True
+
     def summary(self):
         return {"synthetic_original_malloc_count":len(self.events),
                 "synthetic_original_memset_count":len(self.memset_events),
@@ -158,5 +217,7 @@ class SingleGuestMallocResearch:
                 "memset_events":list(self.memset_events),
                 "synthetic_original_image_memset_count":len(self.image_memset_events),
                 "original_image_memset_events":list(self.image_memset_events),
+                "original_ipv4_sprintf_count":len(self.sprintf_events),
+                "sprintf_events":list(self.sprintf_events),
                 "guest_malloc_semantics_are_synthetic":True,
                 "original_windows_crt_executed":False}
