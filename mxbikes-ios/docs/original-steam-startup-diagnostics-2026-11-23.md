@@ -85,3 +85,33 @@ initialization may be required even without online multiplayer.
 
 For a genuine usable iOS port, a lawful ownership/entitlement path and
 the still-incomplete Windows x64-to-ARM64/Metal compatibility work remain.
+
+
+## Follow-up: tested Winsock and PE data initialization (2026-11-23)
+
+The original Steam-version guest continues beyond the first Winsock import
+with an explicitly simulated, **offline** Windows compatibility layer.
+All behavior is confined to the SHA-verified original x64 Unicorn interpreter;
+no Steam authentication, host networking or original engine rendering occurs.
+
+| Original RVA | Original import / action | Observed ABI and experimental result |
+|---|---|---|
+| `0x284ec3` | `WS2_32!#115 = WSAStartup` | Requested Winsock version **0x0002 (2.0)**; Win64 408-byte WSADATA written in mapped guest memory; returned synthetic success |
+| `0x284cf9` | second `MSVCR90!memset` | Zero-filled **400** bytes only after validating destination is a writable, non-executable PE data section |
+| `0x284d26` | `WS2_32!inet_pton` | Read a bounded, NUL-terminated guest IP literal; converted IPv4/IPv6 to network-order bytes without sockets |
+| `0x284d4c` | `WS2_32!getnameinfo` | Verified original Win64 arguments: family 2 (IPv4), sockaddr byte count 28, host capacity 1025, no service buffer, flags=0. A numeric-only, no-DNS fallback has been implemented and validated in public CI; owned-game private run **not yet verified as of this documentation update** |
+
+Private original executable results:
+- [WSAStartup accepted, next second memset](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45116994979)
+- [Second PE data memset accepted, next inet_pton](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45117271472)
+- [inet_pton accepted, next getnameinfo](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45117468156)
+- [getnameinfo ABI observed](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45117590814)
+
+`getnameinfo` with original flags=0 can return a numeric IPv4 string if a
+name isn't available and `NI_NAMEREQD` is unset. Our deterministic adapter
+chooses that documented fallback **without attempting a DNS query**.
+It must not be mistaken for completed networking compatibility.
+
+Production-level work remains: cross-architecture integration, actual game
+asset startup, platform input/video rendering, legal entitlement integration,
+and true offline/online networking decisions. The main menu has not been reached.
