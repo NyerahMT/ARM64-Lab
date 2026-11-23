@@ -470,14 +470,17 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                             "reason":type(exc).__name__})
                     return
         if (core_win32 is not None and lib.lower()=="kernel32.dll"
-            and symbol in ("CreateFileA","GetFileTime")):
+            and symbol in ("CreateFileA","GetFileTime","CloseHandle")):
             from mxbikes_win32_owned_core_ini import CoreIniWin32Rejected
             try:
                 if symbol=="CreateFileA":
                     accepted=core_win32.handle_createfilea(
                         u,pe,original_slots,lib,symbol,verified_import_return)
-                else:
+                elif symbol=="GetFileTime":
                     accepted=core_win32.handle_getfiletime(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=core_win32.handle_closehandle(
                         u,pe,original_slots,lib,symbol,verified_import_return)
                 if accepted:
                     return
