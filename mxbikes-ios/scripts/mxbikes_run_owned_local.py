@@ -90,7 +90,7 @@ def optional_owned_core_ini(zf: zipfile.ZipFile) -> zipfile.ZipInfo | None:
     remain private and are only extracted to the temporary owned-game dir.
     """
     matches=[x for x in zf.infolist() if not x.is_dir()
-             and x.filename.replace("\\\\","/").lower()=="core.ini"]
+             and x.filename.replace(chr(92),"/").lower()=="core.ini"]
     if len(matches)>1:
         raise InputRejected("duplicate_original_core_ini")
     if not matches:
