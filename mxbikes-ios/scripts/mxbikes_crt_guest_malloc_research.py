@@ -50,6 +50,10 @@ IMAGE_MEMSET_STEPS=(
 )
 IMAGE_SCN_MEM_WRITE=0x80000000
 IMAGE_SCN_MEM_EXECUTE=0x20000000
+BOUNDED_IMAGE_MEMSET_MAX_CALLS=24
+BOUNDED_IMAGE_MEMSET_MAX_BYTES=8*1024*1024
+BOUNDED_IMAGE_MEMSET_TOTAL_LIMIT=32*1024*1024
+
 EXPECTED_ALLOC_BYTES=0x2580
 HEAP_BASE=0x790000000
 HEAP_BYTES=0x100000
@@ -64,6 +68,7 @@ class SingleGuestMallocResearch:
         self.second_malloc_events=[]
         self.memset_events=[]
         self.image_memset_events=[]
+        self.bounded_image_memset_events=[]
         self.sprintf_events=[]
 
     def handle(self,u,pe,slots,library,symbol,verify):
@@ -230,6 +235,80 @@ class SingleGuestMallocResearch:
         })
         return True
 
+    def handle_bounded_image_memset(self,u,pe,slots,library,symbol,verify):
+        """Guest-only CRT zero-fill for later proven original import CALLs.
+
+        Only after the five fixed, verified initializer CALLs (including the
+        second 48-byte malloc) may the research runner accept additional
+        original-image zero fills. Every individual call must come from the
+        unmodified original PE IAT (or its authenticated jump thunk), target
+        exactly one mapped writable/non-executable image section, request zero
+        fill, and stay within per-call and aggregate budgets. No host memory
+        or original file bytes are modified. This is not a general game loader.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="memset":
+            return False
+        if (len(self.image_memset_events)!=len(IMAGE_MEMSET_STEPS)
+            or len(self.second_malloc_events)!=1
+            or len(self.sprintf_events)!=1):
+            raise GuestHeapResearchRejected("bounded_memset_original_startup_prerequisite")
+        if len(self.bounded_image_memset_events)>=BOUNDED_IMAGE_MEMSET_MAX_CALLS:
+            raise GuestHeapResearchRejected("bounded_memset_call_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        dest=u.reg_read(UC_X86_REG_RCX)
+        fill=u.reg_read(UC_X86_REG_RDX)
+        size=u.reg_read(UC_X86_REG_R8)
+        if rsp&15!=8 or fill!=0 or not dest or not isinstance(size,int):
+            raise GuestHeapResearchRejected("bounded_memset_original_win64_abi")
+        if size<=0 or size>BOUNDED_IMAGE_MEMSET_MAX_BYTES:
+            raise GuestHeapResearchRejected("bounded_memset_invalid_size")
+        used=sum(item["zeroed_original_guest_data_bytes"]
+                 for item in self.bounded_image_memset_events)
+        if used+size>BOUNDED_IMAGE_MEMSET_TOTAL_LIMIT:
+            raise GuestHeapResearchRejected("bounded_memset_aggregate_budget")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("bounded_memset_unreadable_stack_return") from exc
+        exact_call=verify(pe,ret,library,symbol,slots)
+        if exact_call is None:
+            raise GuestHeapResearchRejected("bounded_memset_original_import_unverified")
+        try:
+            call_rva=int(exact_call,16)
+        except (ValueError,TypeError) as exc:
+            raise GuestHeapResearchRejected("bounded_memset_import_provenance_malformed") from exc
+        if call_rva in {original for original,_,_ in IMAGE_MEMSET_STEPS}:
+            raise GuestHeapResearchRejected("bounded_memset_prior_initializer_repeated")
+        rva=dest-IMAGE_BASE
+        section=None
+        for name,vsize,start,rawsize,_,flags in pe.sections:
+            span=max(vsize,rawsize)
+            if (rva>=start and rva-start<=span-size and
+                flags&IMAGE_SCN_MEM_WRITE and not flags&IMAGE_SCN_MEM_EXECUTE):
+                section=name
+                break
+        if section is None:
+            raise GuestHeapResearchRejected("bounded_memset_outside_safe_original_pe_data")
+        try:
+            if len(u.mem_read(dest,size))!=size:
+                raise GuestHeapResearchRejected("bounded_memset_short_guest_range")
+        except GuestHeapResearchRejected:
+            raise
+        except Exception as exc:
+            raise GuestHeapResearchRejected("bounded_memset_guest_range_unmapped") from exc
+        try:
+            u.mem_write(dest,bytes(size))
+        except Exception as exc:
+            raise GuestHeapResearchRejected("bounded_memset_guest_write_failed") from exc
+        u.reg_write(UC_X86_REG_RAX,dest)
+        self.bounded_image_memset_events.append({
+            "original_call_rva":hex(call_rva),
+            "writable_data_section_name":section,
+            "zeroed_original_guest_data_bytes":size,
+            "original_msvcr90_memset_executed":False,
+        })
+        return True
+
     def handle_sprintf_ipv4(self,u,pe,slots,library,symbol,verify):
         """ONE authentic MSVCR90 sprintf using original IPv4 %lu form.
 
@@ -293,6 +372,11 @@ class SingleGuestMallocResearch:
                 "memset_events":list(self.memset_events),
                 "synthetic_original_image_memset_count":len(self.image_memset_events),
                 "original_image_memset_events":list(self.image_memset_events),
+                "bounded_original_image_memset_count":len(self.bounded_image_memset_events),
+                "bounded_original_image_memset_events":list(self.bounded_image_memset_events),
+                "bounded_original_image_memset_total_bytes":sum(
+                    e["zeroed_original_guest_data_bytes"]
+                    for e in self.bounded_image_memset_events),
                 "original_ipv4_sprintf_count":len(self.sprintf_events),
                 "sprintf_events":list(self.sprintf_events),
                 "guest_malloc_semantics_are_synthetic":True,
