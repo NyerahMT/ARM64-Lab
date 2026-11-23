@@ -18,6 +18,14 @@ SECOND_MALLOC_BYTES=48
 SECOND_HEAP_BASE=0x7B0000000
 SECOND_HEAP_MAP_SIZE=0x1000
 SECOND_HEAP_RESULT=SECOND_HEAP_BASE+0x100
+# A deterministic guest-only bump heap for further ORIGINAL imported malloc
+# calls. No host allocation pointers ever cross this Win64 ABI boundary.
+FOLLOWUP_HEAP_BASE=0x7C0000000
+FOLLOWUP_HEAP_MAX_CALLS=32
+FOLLOWUP_HEAP_MAX_SINGLE_BYTES=2*1024*1024
+FOLLOWUP_HEAP_MAX_TOTAL_BYTES=16*1024*1024
+FOLLOWUP_HEAP_GUEST_OFFSET=0x100
+
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
 SPRINTF_ORIGINAL_CALL_RVA=0x285469
@@ -66,6 +74,8 @@ class SingleGuestMallocResearch:
         self.called=False
         self.events=[]
         self.second_malloc_events=[]
+        self.followup_malloc_events=[]
+        self.followup_heap_cursor=0
         self.memset_events=[]
         self.image_memset_events=[]
         self.bounded_image_memset_events=[]
@@ -139,6 +149,61 @@ class SingleGuestMallocResearch:
             "requested_bytes":SECOND_MALLOC_BYTES,
             "guest_heap_mapping_bytes":SECOND_HEAP_MAP_SIZE,
             "original_msvcr90_malloc_executed":False,
+        })
+        return True
+
+    def handle_followup_malloc(self,u,pe,slots,library,symbol,verify):
+        """Bounded guest RAM malloc from the exact original lazy CRT wrapper.
+
+        Only callable after the original 48-byte allocation and the first
+        verified *additional* image memset. This handles a real original PE
+        CALL via the original SHA-pinned 0x2bd710 lazy malloc wrapper, not a
+        generic pointer trampoline. No host memory is exposed to the game.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="malloc":
+            return False
+        if (len(self.second_malloc_events)!=1
+            or len(self.image_memset_events)!=len(IMAGE_MEMSET_STEPS)
+            or not self.bounded_image_memset_events):
+            raise GuestHeapResearchRejected("followup_malloc_original_sequence")
+        if len(self.followup_malloc_events)>=FOLLOWUP_HEAP_MAX_CALLS:
+            raise GuestHeapResearchRejected("followup_malloc_call_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        request=u.reg_read(UC_X86_REG_RCX)
+        if rsp&15!=8 or not isinstance(request,int):
+            raise GuestHeapResearchRejected("followup_malloc_original_win64_abi")
+        if request<=0 or request>FOLLOWUP_HEAP_MAX_SINGLE_BYTES:
+            raise GuestHeapResearchRejected("followup_malloc_size_budget")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("followup_malloc_unreadable_return") from exc
+        call=verify(pe,ret,library,symbol,slots)
+        if call is None:
+            raise GuestHeapResearchRejected("followup_malloc_original_import_unverified")
+        try:
+            call_rva=int(call,16)
+        except (TypeError,ValueError) as exc:
+            raise GuestHeapResearchRejected("followup_malloc_original_callsite_invalid") from exc
+        if call_rva in (MALLOC_ORIGINAL_CALL_RVA,SECOND_MALLOC_CALL_RVA):
+            raise GuestHeapResearchRejected("followup_malloc_prior_callsite_repeated")
+        size_to_map=(request+FOLLOWUP_HEAP_GUEST_OFFSET+0xfff)&~0xfff
+        if self.followup_heap_cursor+size_to_map>FOLLOWUP_HEAP_MAX_TOTAL_BYTES:
+            raise GuestHeapResearchRejected("followup_malloc_aggregate_memory_budget")
+        map_address=FOLLOWUP_HEAP_BASE+self.followup_heap_cursor
+        guest_ptr=map_address+FOLLOWUP_HEAP_GUEST_OFFSET
+        try:
+            u.mem_map(map_address,size_to_map)
+        except Exception as exc:
+            raise GuestHeapResearchRejected("followup_malloc_guest_mapping_failed") from exc
+        u.reg_write(UC_X86_REG_RAX,guest_ptr)
+        self.followup_heap_cursor+=size_to_map
+        self.followup_malloc_events.append({
+            "original_call_rva":hex(call_rva),
+            "requested_bytes":request,
+            "mapped_guest_bytes":size_to_map,
+            "synthetic_guest_pointer_valid":True,
+            "original_windows_crt_executed":False,
         })
         return True
 
@@ -367,6 +432,9 @@ class SingleGuestMallocResearch:
         return {"synthetic_original_malloc_count":len(self.events),
                 "synthetic_original_second_malloc_count":len(self.second_malloc_events),
                 "second_malloc_events":list(self.second_malloc_events),
+                "bounded_followup_malloc_count":len(self.followup_malloc_events),
+                "bounded_followup_malloc_events":list(self.followup_malloc_events),
+                "bounded_followup_malloc_mapped_bytes":self.followup_heap_cursor,
                 "synthetic_original_memset_count":len(self.memset_events),
                 "allocations":list(self.events),
                 "memset_events":list(self.memset_events),
