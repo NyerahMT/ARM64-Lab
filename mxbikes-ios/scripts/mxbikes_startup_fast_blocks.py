@@ -10,12 +10,12 @@ The resulting block-count instruction estimate is NOT a native ARM64 port,
 not a Steam client, not an authenticated game launch, and not a true CPU
 instruction counter if the run ends part-way through the final block.
 """
-import hashlib,json
+import hashlib,json,struct
 from collections import Counter
 from pathlib import Path
 from unicorn import UC_HOOK_BLOCK,UC_HOOK_CODE,UcError
 from unicorn.x86_const import (
- UC_X86_REG_RIP,UC_X86_REG_RAX,UC_X86_REG_RCX,
+ UC_X86_REG_RIP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RSP,
  UC_X86_REG_RDX,UC_X86_REG_R8,UC_X86_REG_R9,
 )
 from capstone import Cs,CS_ARCH_X86,CS_MODE_64
@@ -30,11 +30,33 @@ from mxbikes_startup_batch_runner import (
     STUBS,STUB_BYTES
 )
 from mxbikes_whole_game_map import INPUT_SHA
+from mxbikes_first_callee_emu import import_slots
 
 BASE=joined.BASE
 MAX_BLOCKS=1500000
 MAX_INSTRUCTIONS=15000000
 MAX_USEC=25000000
+
+
+def verified_import_return(pe, return_va, library, symbol, original_slots):
+    """Prove imported Win64 CALL from exact original source; never infer from a stub.
+
+    Returns original CALLsite RVA or None. Only the original 6-byte
+    RIP-relative IAT CALL form is certified; other call forms stay unknown.
+    """
+    if not isinstance(return_va, int) or return_va < BASE + 6:
+        return None
+    call_rva = return_va - BASE - 6
+    try:
+        code = bytes(pe.read_rva(call_rva, 6))
+    except (ValueError, struct.error, OverflowError):
+        return None
+    if len(code) != 6 or code[:2] != bytes((0xff,0x15)):
+        return None
+    slot = call_rva + 6 + struct.unpack_from("<i", code, 2)[0]
+    if original_slots.get(slot) != (library.lower(), symbol):
+        return None
+    return hex(call_rva)
 
 
 def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False,
@@ -53,6 +75,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
     _,uc=bootstrap.original_case(
         pe,0,FILE_HANDLE,0x1305c0,0x1305b6,return_cpu=True)
     imports=install_import_dispatch(uc,pe)
+    original_slots={rva:(lib.lower(),name) for rva,lib,name in import_slots(pe)}
     if steam_failure_probe and steam_init_success_probe:
         raise ValueError("Choose exactly one Steam diagnostic scenario")
     steam_failure = None
@@ -148,8 +171,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                             "reason":type(exc).__name__})
                     return
         if not symbol_is_supported(lib,symbol):
+            try:
+                return_va=struct.unpack("<Q",bytes(u.mem_read(u.reg_read(UC_X86_REG_RSP),8)))[0]
+            except Exception:
+                return_va=None
+            exact_site=verified_import_return(pe,return_va,lib,symbol,original_slots)
             stop(u,"unsupported_import",**{"import":lib+"!"+symbol,
-                                         "reason":"unsupported_service"})
+                      "reason":"unsupported_service",
+                      "verified_original_iat_call_rva":exact_site,
+                      "guest_stack_return_rva": (hex(return_va-BASE)
+                             if return_va is not None and BASE<=return_va<image_hi else None)})
             return
         try:
             result=crt.dispatch(u,symbol,
