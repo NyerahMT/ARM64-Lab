@@ -241,8 +241,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memset":
             from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
             try:
-                if malloc_research.handle_memset(u,pe,original_slots,lib,symbol,
-                                                 verified_import_return):
+                # Allow a second import only after the first malloc-backed
+                # memset completed; the second must pass independent exact
+                # caller/length/destination-section verification.
+                if malloc_research.memset_events:
+                    handled=malloc_research.handle_image_memset(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    handled=malloc_research.handle_memset(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if handled:
                     return
             except GuestHeapResearchRejected as exc:
                 # Record only Win64 ABI/provenance metadata at the second
