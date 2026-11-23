@@ -507,6 +507,37 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
         if not symbol_is_supported(lib,symbol):
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="memcpy":
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    dest=u.reg_read(UC_X86_REG_RCX)
+                    src=u.reg_read(UC_X86_REG_RDX)
+                    n=u.reg_read(UC_X86_REG_R8)
+                    from mxbikes_crt_guest_malloc_research import (
+                        FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_MAX_TOTAL_BYTES)
+                    def classify(ptr):
+                        if BASE<=ptr<image_hi:return "original_image"
+                        if FOLLOWUP_HEAP_BASE<=ptr<FOLLOWUP_HEAP_BASE+FOLLOWUP_HEAP_MAX_TOTAL_BYTES:
+                            return "bounded_guest_heap"
+                        if 0x700000000<=ptr<0x800000000:return "other_guest_mapping"
+                        return "unknown"
+                    blocker["original_next_memcpy_abi"]={
+                        "original_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "size_bytes":n,
+                        "source_region":classify(src),
+                        "destination_region":classify(dest),
+                        "source_alignment_mod8":src&7,
+                        "destination_alignment_mod8":dest&7,
+                        "source_equals_destination":src==dest,
+                        "stack_aligned":stack&15==8,
+                        "guest_memory_not_modified":True,
+                    }
+                except Exception as exc:
+                    blocker["original_next_memcpy_abi"]={"inspection_error":type(exc).__name__}
+
             if research is not None and lib.lower()=="msvcr90.dll" and symbol=="memmove":
                 try:
                     stack=u.reg_read(UC_X86_REG_RSP)
