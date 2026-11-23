@@ -74,6 +74,17 @@ class LocalOwnedRunnerTests(unittest.TestCase):
                     ])
                 self.assertEqual(ctx.exception.code, 2)
 
+    def test_init_success_probe_modes_reject_static_and_conflicting_scenarios(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for flag in ("--validate-only", "--static-graphics-only", "--steam-failure-probe"):
+                with self.assertRaises(SystemExit) as ctx:
+                    subject.run_cli([
+                        "--game-zip", str(Path(folder)/"dummy.zip"),
+                        "--out", str(Path(folder)/"out"),
+                        "--steam-init-success-probe", flag,
+                    ])
+                self.assertEqual(ctx.exception.code, 2)
+
     def test_validate_only_never_imports_guest_runtime(self):
         with tempfile.TemporaryDirectory() as folder:
             p = Path(folder)
