@@ -26,6 +26,8 @@ GETADDRINFO_CALL_RVA=0x284D61
 GETADDRINFO_RETURN_RVA=GETADDRINFO_CALL_RVA+6
 FOLLOWUP_GETNAMEINFO_CALL_RVA=0x284DAD
 FOLLOWUP_GETNAMEINFO_RETURN_RVA=FOLLOWUP_GETNAMEINFO_CALL_RVA+6
+FOLLOWUP_INET_PTON_CALL_RVA=0x284DF9
+FOLLOWUP_INET_PTON_RETURN_RVA=FOLLOWUP_INET_PTON_CALL_RVA+6
 NI_NUMERICHOST_WINDOWS=0x02
 ADDRINFO_MOCK_BASE=0x7A0000000
 ADDRINFO_MOCK_SIZE=0x1000
@@ -75,6 +77,7 @@ class OfflineWinsockResearch:
         self.nameinfo_events=[]
         self.addrinfo_events=[]
         self.followup_nameinfo_events=[]
+        self.followup_pton_events=[]
 
     def handle(self, guest, pe, slots, library, symbol, verify):
         if library.lower()!="ws2_32.dll" or symbol!="#115":
@@ -429,6 +432,73 @@ class OfflineWinsockResearch:
         })
         return True
 
+    def handle_followup_inet_pton(self,guest,pe,slots,library,symbol,verify):
+        """Handle second verified numeric loopback IPv4 conversion to PE data.
+
+        The original second call is from RVA 0x284df9 and writes a 4-byte
+        IPv4 address into writable (non-executable) original-image data.
+        No host socket or DNS resolution is available in this probe.
+        """
+        if library.lower()!="ws2_32.dll" or symbol!="inet_pton":
+            return False
+        if (len(self.followup_nameinfo_events)!=1 or
+            len(self.pton_events)!=1 or self.followup_pton_events):
+            raise OfflineWinsockRejected("followup_pton_original_sequence_or_budget")
+        rsp=guest.reg_read(UC_X86_REG_RSP)
+        family=guest.reg_read(UC_X86_REG_RCX)
+        source=guest.reg_read(UC_X86_REG_RDX)
+        output=guest.reg_read(UC_X86_REG_R8)
+        if (rsp&15!=8 or family!=AF_INET_WINDOWS or
+            not source or not output or output&3):
+            raise OfflineWinsockRejected("followup_pton_original_guest_abi_changed")
+        try:
+            ret=struct.unpack("<Q",bytes(guest.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_pton_guest_return_unmapped") from exc
+        if (ret!=IMAGE_BASE+FOLLOWUP_INET_PTON_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(FOLLOWUP_INET_PTON_CALL_RVA)):
+            raise OfflineWinsockRejected("followup_pton_original_import_mismatch")
+        chars=bytearray()
+        for index in range(64):
+            try:
+                ch=bytes(guest.mem_read(source+index,1))
+            except Exception as exc:
+                raise OfflineWinsockRejected("followup_pton_source_unmapped") from exc
+            if len(ch)!=1:
+                raise OfflineWinsockRejected("followup_pton_source_short")
+            if ch==bytes((0,)):
+                break
+            chars.extend(ch)
+        else:
+            raise OfflineWinsockRejected("followup_pton_source_unterminated")
+        if bytes(chars)!=b"127.0.0.1":
+            raise OfflineWinsockRejected("followup_pton_requires_verified_numeric_loopback")
+        rva=output-IMAGE_BASE
+        if not (0<=rva<0x8000000 and
+            any((rva>=base and rva-base<=max(vsize,rawsize)-4 and
+                 flags&0x80000000 and not flags&0x20000000)
+                for _,vsize,base,rawsize,_,flags in pe.sections)):
+            raise OfflineWinsockRejected("followup_pton_dest_not_writable_original_pe_data")
+        try:
+            if len(guest.mem_read(output,4))!=4:
+                raise OfflineWinsockRejected("followup_pton_guest_output_short")
+        except OfflineWinsockRejected:
+            raise
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_pton_guest_output_unmapped") from exc
+        try:
+            guest.mem_write(output,bytes((127,0,0,1)))
+        except Exception as exc:
+            raise OfflineWinsockRejected("followup_pton_guest_output_unwritable") from exc
+        guest.reg_write(UC_X86_REG_RAX,1)
+        self.followup_pton_events.append({
+            "original_call_rva":hex(FOLLOWUP_INET_PTON_CALL_RVA),
+            "written_ipv4_bytes":4,
+            "numeric_loopback":True,
+            "host_network_used":False,
+        })
+        return True
+
     def summary(self):
         return {
             "verified_original_guest_wsa_startup_handled":len(self.events),
@@ -441,6 +511,8 @@ class OfflineWinsockResearch:
             "getaddrinfo_events":list(self.addrinfo_events),
             "verified_original_guest_followup_getnameinfo_handled":len(self.followup_nameinfo_events),
             "followup_getnameinfo_events":list(self.followup_nameinfo_events),
+            "verified_original_guest_followup_inet_pton_handled":len(self.followup_pton_events),
+            "followup_inet_pton_events":list(self.followup_pton_events),
             "real_winsock_library_executed":False,
             "host_network_initialized":False,
             "real_sockets_created":0,
