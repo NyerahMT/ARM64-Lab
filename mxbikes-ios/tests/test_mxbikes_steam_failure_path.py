@@ -49,7 +49,7 @@ class SteamFailureProbeTests(unittest.TestCase):
     def setUp(self):
         self.pe = SyntheticPE()
 
-    def probe(self):
+    def probe(self, *, init_success_branch_probe=False):
         # import_slots from the PE reader is overridden only for fixtures.
         from unittest.mock import patch
         imported = [
@@ -57,7 +57,8 @@ class SteamFailureProbeTests(unittest.TestCase):
             for name in STEAM_FAILURE_SITES
         ]
         with patch("mxbikes_steam_failure_path.import_slots", return_value=imported):
-            return SteamFailureProbe(self.pe)
+            return SteamFailureProbe(self.pe,
+                init_success_branch_probe=init_success_branch_probe)
 
     def test_exact_two_original_calls_return_failed_results(self):
         handler = self.probe()
@@ -71,6 +72,25 @@ class SteamFailureProbeTests(unittest.TestCase):
             "original_guest_steam_failure_return_count"], 2)
         self.assertFalse(handler.summary()["steam_client_initialized"])
         self.assertFalse(handler.summary()["license_or_entitlement_granted"])
+
+    def test_counterfactual_success_is_never_real_authentication(self):
+        handler = self.probe(init_success_branch_probe=True)
+        for symbol, call in STEAM_FAILURE_SITES.items():
+            cpu = FakeCPU(call)
+            self.assertTrue(handler.handle(cpu, "steam_api64.dll", symbol))
+            self.assertEqual(cpu.reg_read(UC_X86_REG_RAX),
+                             int(symbol == "SteamAPI_Init"))
+        summary = handler.summary()
+        self.assertEqual(summary["original_guest_steam_modeled_return_count"], 2)
+        self.assertEqual(summary["original_guest_steam_failure_return_count"], 0)
+        self.assertTrue(summary["init_success_is_counterfactual_not_authenticated"])
+        self.assertFalse(summary["steam_client_initialized"])
+        self.assertFalse(summary["license_or_entitlement_granted"])
+        self.assertFalse(summary["all_steam_interfaces_implemented"])
+        self.assertTrue(summary["original_guest_steam_calls_given_modeled_returns"][1]
+                        ["modeled_test_return"])
+        self.assertFalse(summary["original_guest_steam_calls_given_modeled_returns"][0]
+                         ["modeled_test_return"])
 
     def test_does_not_emulate_context_or_other_imports(self):
         handler = self.probe()
