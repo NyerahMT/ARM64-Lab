@@ -148,6 +148,10 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
             filename="core.ini",handle=CORE_INI_HANDLE,initially_open=False)
         extra_owned_streams["core.ini"]=core_stream
     crt=ReadOnlyCRT(file,extra_owned_streams)
+    core_win32=None
+    if core_stream is not None:
+        from mxbikes_win32_owned_core_ini import OwnedCoreIniWin32Research
+        core_win32=OwnedCoreIniWin32Research(core_stream.content)
     decoded={}
     md=Cs(CS_ARCH_X86,CS_MODE_64)
     counters=Counter()
@@ -463,6 +467,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                          **{"import":lib+"!"+symbol,
                             "reason":type(exc).__name__})
                     return
+        if core_win32 is not None and lib.lower()=="kernel32.dll" and symbol=="CreateFileA":
+            from mxbikes_win32_owned_core_ini import CoreIniWin32Rejected
+            try:
+                if core_win32.handle_createfilea(
+                    u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except CoreIniWin32Rejected as exc:
+                stop(u,"original_win32_core_ini_createfile_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if not symbol_is_supported(lib,symbol):
             if (research is not None and lib.lower()=="kernel32.dll"
                 and symbol=="CreateFileA"):
@@ -732,6 +746,7 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
         "original_core_ini_guest_stream_cursor":(core_stream.cursor if core_stream else None),
         "original_core_ini_guest_stream_closed":(not core_stream.open if core_stream else None),
         "original_core_ini_owned_file_size":(len(core_stream.content) if core_stream else None),
+        "original_core_ini_win32_guest":core_win32.summary() if core_win32 else None,
         "guest_file_final_cursor":file.cursor,
         "guest_file_closed":not file.open,
         "first_original_block_rvas":first,
