@@ -306,7 +306,13 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 # caller/length/destination-section verification.
                 if malloc_research.memset_events:
                     from mxbikes_crt_guest_malloc_research import IMAGE_MEMSET_STEPS
-                    if len(malloc_research.image_memset_events)>=len(IMAGE_MEMSET_STEPS):
+                    if (malloc_research.zero_len_memmove_events
+                        and not malloc_research.followup_heap_memset_events
+                        and malloc_research.followup_malloc_events
+                        and malloc_research.followup_malloc_events[-1].get("requested_bytes")==296):
+                        handled=malloc_research.handle_followup_heap_memset(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    elif len(malloc_research.image_memset_events)>=len(IMAGE_MEMSET_STEPS):
                         handled=malloc_research.handle_bounded_image_memset(
                             u,pe,original_slots,lib,symbol,verified_import_return)
                     else:
