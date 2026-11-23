@@ -278,6 +278,18 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 stop(u,"original_guest_memset_research_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="sprintf":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if not (winsock_research is not None and winsock_research.ntohs_events):
+                    raise GuestHeapResearchRejected("original_sprintf_before_verified_winsock_byte_conversions")
+                if malloc_research.handle_sprintf_ipv4(
+                    u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except GuestHeapResearchRejected as exc:
+                stop(u,"original_ipv4_sprintf_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if winsock_research is not None and lib.lower()=="ws2_32.dll":
             from mxbikes_winsock_startup_research import OfflineWinsockRejected
             try:
