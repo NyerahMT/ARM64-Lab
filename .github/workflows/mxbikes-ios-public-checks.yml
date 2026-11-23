@@ -73,6 +73,7 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_winsock_getaddrinfo_research.py -v
           python -m unittest discover -s tests -p test_mxbikes_winsock_followup_nameinfo.py -v
           python -m unittest discover -s tests -p test_mxbikes_winsock_followup_pton.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_freeaddrinfo_research.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
