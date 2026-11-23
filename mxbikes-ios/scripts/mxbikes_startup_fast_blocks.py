@@ -296,6 +296,32 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 if accepted:
                     return
             except OfflineWinsockRejected as exc:
+                if symbol=="getnameinfo" and winsock_research.nameinfo_events:
+                    try:
+                        stack=u.reg_read(UC_X86_REG_RSP)
+                        ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                        sa=u.reg_read(UC_X86_REG_RCX)
+                        sa_len=u.reg_read(UC_X86_REG_RDX)
+                        node=u.reg_read(UC_X86_REG_R8)
+                        node_len=u.reg_read(UC_X86_REG_R9)
+                        service,service_len,flags=struct.unpack(
+                            "<QQQ",bytes(u.mem_read(stack+0x28,24)))
+                        sa_family=struct.unpack("<H",bytes(u.mem_read(sa,2)))[0]
+                        blocker["followup_getnameinfo_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,ret,lib,symbol,original_slots),
+                            "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                            "stack_aligned":stack&15==8,
+                            "family":sa_family,"sockaddr_length":sa_len,
+                            "sockaddr_matches_mock_getaddrinfo_result":(
+                                sa==__import__("mxbikes_winsock_startup_research").ADDRINFO_SOCKADDR),
+                            "node_buffer_present":node!=0,"node_buffer_length":node_len,
+                            "service_present":service!=0,"service_length":service_len,
+                            "flags_hex":hex(flags),"no_dns_used":True,
+                        }
+                    except Exception as observation_exc:
+                        blocker["followup_getnameinfo_abi"]={
+                            "inspection_error":type(observation_exc).__name__}
                 stop(u,"original_wsa_startup_research_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
