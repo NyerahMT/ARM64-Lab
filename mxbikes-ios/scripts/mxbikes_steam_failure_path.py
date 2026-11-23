@@ -89,5 +89,5 @@ class SteamFailureProbe:
             "steam_client_initialized": False,
             "license_or_entitlement_granted": False,
             "all_steam_interfaces_implemented": False,
-            "next_game_branch_observed_by_guest_runner": True,
+            "guest_execution_after_failure_not_implied": True,
         }
