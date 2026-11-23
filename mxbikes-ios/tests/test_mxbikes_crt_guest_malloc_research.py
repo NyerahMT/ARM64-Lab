@@ -88,7 +88,7 @@ class OriginalMallocGuestResearchTests(unittest.TestCase):
         self.assertEqual(cpu.mem_writes[-1],(ptr,bytes(SECOND_MEMSET_LENGTH)))
         self.assertEqual(cpu.reg_read(UC_X86_REG_RAX),ptr)
         self.assertEqual(mem.summary()["synthetic_original_image_memset_count"],1)
-        with self.assertRaisesRegex(GuestHeapResearchRejected,"budget"):
+        with self.assertRaisesRegex(GuestHeapResearchRejected,"before_original_ipv4_sprintf"):
             mem.handle_image_memset(
                 cpu,PE(),{"ok":True},"MSVCR90.dll","memset",verified)
 
