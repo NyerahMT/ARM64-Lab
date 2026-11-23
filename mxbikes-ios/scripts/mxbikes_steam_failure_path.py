@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Observe actual original MX Bikes guest code after *failed* Steam startup.
+"""Observe original MX Bikes guest branches after controlled Steam API responses.
 
 This is a bounded, opt-in diagnostics adapter, not a Steamworks replacement:
-RestartAppIfNecessary=false is a no-relaunch decision; SteamAPI_Init=false
-means initialization FAILED. Never supply Steam users, pipe handles, contexts,
+RestartAppIfNecessary=false is a no-relaunch decision. By default,
+SteamAPI_Init=false means initialization FAILED. A separate opt-in mode
+models Init=true solely to inspect the counterfactual next original branch;
+it DOES NOT establish a real Steam session. Never supply users, pipes, contexts,
 ownership, license keys, or interface pointers. Original guest code chooses
 the subsequent control flow, which must be inspected separately.
 """
@@ -36,8 +38,9 @@ class SteamFailureProbeRejected(ValueError):
 
 
 class SteamFailureProbe:
-    def __init__(self, pe):
+    def __init__(self, pe, *, init_success_branch_probe=False):
         self.pe = pe
+        self.init_success_branch_probe = bool(init_success_branch_probe)
         self.slots = {}
         for rva, lib, name in import_slots(pe):
             if rva in self.slots:
@@ -46,7 +49,7 @@ class SteamFailureProbe:
         self.events = []
 
     def handle(self, machine, library: str, symbol: str) -> bool:
-        """Handle only two *documented failure outcomes*. Others fail closed.
+        """Handle only two audited callsites. All other services fail closed.
 
         The caller's hook is at an IAT trampoline containing RET, so setting
         RAX is enough: Unicorn itself executes RET with authentic guest stack.
@@ -74,25 +77,30 @@ class SteamFailureProbe:
             machine.reg_read(UC_X86_REG_RCX) != RESTART_APP_ID):
             raise SteamFailureProbeRejected("unexpected_original_steam_app_id")
 
-        # A FALSE Init result is explicitly a *failed* Steam initialization.
-        # This reports the game's genuine failure-control-flow behavior, not
-        # a success path or a usable authentication/Steamworks context.
-        machine.reg_write(UC_X86_REG_RAX, 0)
+        # Init=true is a purely *counterfactual* branch probe: NO running
+        # Steam client, authentication, context, entitlement, or game boot.
+        # The caller still executes real original x64 code after the RET.
+        value = int(symbol == "SteamAPI_Init" and self.init_success_branch_probe)
+        machine.reg_write(UC_X86_REG_RAX, value)
         self.events.append({
             "original_call_rva": hex(call_rva),
             "original_return_rva": hex(call_rva + 6),
             "api": symbol,
-            "observed_test_return": False,
+            "modeled_test_return": bool(value),
             "auth_or_steam_context_established": False,
         })
         return True
 
     def summary(self):
         return {
-            "mode": "steam_explicit_failure_path",
+            "mode": ("steam_counterfactual_init_success_branch" if
+                     self.init_success_branch_probe else "steam_explicit_failure_path"),
             "mode_is_opt_in": True,
-            "original_guest_steam_calls_given_failure_results": list(self.events),
-            "original_guest_steam_failure_return_count": len(self.events),
+            "original_guest_steam_calls_given_modeled_returns": list(self.events),
+            "original_guest_steam_calls_given_failure_results": list(self.events) if not self.init_success_branch_probe else [],
+            "original_guest_steam_failure_return_count": len(self.events) if not self.init_success_branch_probe else 0,
+            "original_guest_steam_modeled_return_count": len(self.events),
+            "init_success_is_counterfactual_not_authenticated": self.init_success_branch_probe,
             "steam_client_initialized": False,
             "license_or_entitlement_granted": False,
             "all_steam_interfaces_implemented": False,
