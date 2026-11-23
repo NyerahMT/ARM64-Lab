@@ -39,25 +39,43 @@ MAX_USEC=25000000
 
 
 def verified_import_return(pe, return_va, library, symbol, original_slots):
-    """Prove imported Win64 CALL from exact original source; never infer from a stub.
+    """Verify the exact original imported CALL chain ending at the guest return PC.
 
-    Returns original CALLsite RVA or None. Only the original 6-byte
-    RIP-relative IAT CALL form is certified; other call forms stay unknown.
+    Two unmodified original PE patterns are accepted:
+      FF 15 disp32            => CALL QWORD PTR [RIP+disp32] (IAT)
+      E8 rel32 -> FF 25 disp32 => CALL original import JMP thunk to IAT.
+
+    Both must resolve to the claimed library/symbol using the original import
+    table. No synthetic callsite, unverified thunk, or patched EXE is accepted.
     """
-    if not isinstance(return_va, int) or return_va < BASE + 6:
+    if not isinstance(return_va,int) or not BASE+6<=return_va<BASE+0x8000000:
         return None
-    call_rva = return_va - BASE - 6
     try:
-        code = bytes(pe.read_rva(call_rva, 6))
-    except (ValueError, struct.error, OverflowError):
+        direct_rva=return_va-BASE-6
+        op=bytes(pe.read_rva(direct_rva,6))
+        if len(op)==6 and op[:2]==bytes((0xff,0x15)):
+            slot=direct_rva+6+struct.unpack_from("<i",op,2)[0]
+            if original_slots.get(slot)==(library.lower(),symbol):
+                return hex(direct_rva)
+        # Full original guest Win64 CALL stack contract: an E8 always has
+        # exactly five bytes. Its original callee must be a strict RIP-based
+        # imported JMP, never an arbitrary executable or writable pointer.
+        call_rva=return_va-BASE-5
+        call=bytes(pe.read_rva(call_rva,5))
+        if len(call)!=5 or call[0]!=0xe8:
+            return None
+        thunk_rva=call_rva+5+struct.unpack_from("<i",call,1)[0]
+        if thunk_rva<0 or thunk_rva>=0x8000000:
+            return None
+        thunk=bytes(pe.read_rva(thunk_rva,6))
+        if len(thunk)!=6 or thunk[:2]!=bytes((0xff,0x25)):
+            return None
+        slot=thunk_rva+6+struct.unpack_from("<i",thunk,2)[0]
+        if original_slots.get(slot)==(library.lower(),symbol):
+            return hex(call_rva)
         return None
-    if len(code) != 6 or code[:2] != bytes((0xff,0x15)):
+    except (ValueError,struct.error,OverflowError):
         return None
-    slot = call_rva + 6 + struct.unpack_from("<i", code, 2)[0]
-    if original_slots.get(slot) != (library.lower(), symbol):
-        return None
-    return hex(call_rva)
-
 
 def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False,
             steam_init_success_probe=False,
