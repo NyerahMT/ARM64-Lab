@@ -111,7 +111,7 @@ class ImportReturnProvenanceTests(unittest.TestCase):
             verified_import_return(PE(),BASE+caller+5,"MSVCR90.dll","malloc",slots),
             hex(caller))
         self.assertIsNone(
-            verified_import_return(PE(lazy[:-1]+bytes((0,))),
+            verified_import_return(PE(lazy[:15]+bytes((0x90,))+lazy[16:]),
                                    BASE+caller+5,"MSVCR90.dll","malloc",slots))
         self.assertIsNone(
             verified_import_return(PE(),BASE+caller+5,
