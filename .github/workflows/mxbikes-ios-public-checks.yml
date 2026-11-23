@@ -69,6 +69,7 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_steam_original_native_branch.py -v
           python -m unittest discover -s tests -p test_mxbikes_steam_winmm_time_probe.py -v
           python -m unittest discover -s tests -p test_mxbikes_crt_guest_malloc_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_startup_research.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
