@@ -235,6 +235,16 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 stop(u,"original_guest_malloc_research_rejected",**{
                    "import":lib+"!"+symbol,"reason":str(exc)})
                 return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memset":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if malloc_research.handle_memset(u,pe,original_slots,lib,symbol,
+                                                 verified_import_return):
+                    return
+            except GuestHeapResearchRejected as exc:
+                stop(u,"original_guest_memset_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if lib.lower()=="opengl32.dll":
             actual_original_gl_import_events+=1
             if graphics_handler is not None:
