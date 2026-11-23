@@ -10,6 +10,13 @@ the subsequent control flow, which must be inspected separately.
 from __future__ import annotations
 
 import struct
+import sys
+from pathlib import Path
+
+# The canonical public tools/ tree sits at the repository root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from unicorn.x86_const import UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RSP
 
