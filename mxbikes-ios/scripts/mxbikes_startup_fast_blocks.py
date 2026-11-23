@@ -505,6 +505,41 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 except Exception as exc:
                     blocker["original_getaddrinfo_abi"]={
                         "inspection_error":type(exc).__name__}
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="sprintf":
+                try:
+                    import re
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    dest=u.reg_read(UC_X86_REG_RCX)
+                    fmt=u.reg_read(UC_X86_REG_RDX)
+                    buf=bytearray()
+                    for n in range(128):
+                        ch=bytes(u.mem_read(fmt+n,1))
+                        if ch==bytes((0,)):break
+                        buf.extend(ch)
+                    else:
+                        raise ValueError("unterminated sprintf format")
+                    decoded_format=buf.decode("ascii")
+                    stack_args=struct.unpack("<QQQQ",bytes(u.mem_read(stack+0x28,32)))
+                    # Private-workflow-only metadata; original file remains
+                    # private. Do not commit literal proprietary format strings.
+                    blocker["original_sprintf_abi"]={
+                        "source_call_rva":verified_import_return(pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "stack_aligned":stack&15==8,
+                        "destination_in_original_image":BASE<=dest<image_hi,
+                        "destination_alignment_mod8":dest&7,
+                        "format_in_original_image":BASE<=fmt<image_hi,
+                        "format_ascii":decoded_format,
+                        "format_length":len(buf),
+                        "format_conversions":re.findall(r"%[-+ #0.0-9]*[a-zA-Z]",decoded_format),
+                        "arg3_low32":u.reg_read(UC_X86_REG_R8)&0xffffffff,
+                        "arg4_low32":u.reg_read(UC_X86_REG_R9)&0xffffffff,
+                        "stack_arg_low32":list(v&0xffffffff for v in stack_args),
+                        "host_sprintf_not_invoked":True,
+                    }
+                except Exception as exc:
+                    blocker["original_sprintf_abi"]={"inspection_error":type(exc).__name__}
             try:
                 return_va=struct.unpack("<Q",bytes(u.mem_read(u.reg_read(UC_X86_REG_RSP),8)))[0]
             except Exception:
