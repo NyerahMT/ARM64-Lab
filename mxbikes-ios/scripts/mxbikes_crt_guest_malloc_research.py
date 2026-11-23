@@ -25,6 +25,8 @@ FOLLOWUP_HEAP_MAX_CALLS=32
 FOLLOWUP_HEAP_MAX_SINGLE_BYTES=2*1024*1024
 FOLLOWUP_HEAP_MAX_TOTAL_BYTES=16*1024*1024
 FOLLOWUP_HEAP_GUEST_OFFSET=0x100
+MEMMOVE_ZERO_ORIGINAL_CALL_RVA=0x15C1AA
+MEMMOVE_ZERO_ORIGINAL_RETURN_RVA=MEMMOVE_ZERO_ORIGINAL_CALL_RVA+5
 
 MEMSET_ORIGINAL_CALL_RVA=0x28396D
 MEMSET_ORIGINAL_RETURN_RVA=0x283972
@@ -75,6 +77,7 @@ class SingleGuestMallocResearch:
         self.events=[]
         self.second_malloc_events=[]
         self.followup_malloc_events=[]
+        self.zero_len_memmove_events=[]
         self.followup_heap_cursor=0
         self.memset_events=[]
         self.image_memset_events=[]
@@ -204,6 +207,43 @@ class SingleGuestMallocResearch:
             "mapped_guest_bytes":size_to_map,
             "synthetic_guest_pointer_valid":True,
             "original_windows_crt_executed":False,
+        })
+        return True
+
+    def handle_zero_len_memmove(self,u,pe,slots,library,symbol,verify):
+        """One authentic Win64 CRT memmove(dst,src,0), no guest memory touched.
+
+        Validate call from exact original code; both pointers must be in the
+        mapped, bounded guest heap that this research runner allocated. The
+        Windows CRT return value is dst. Unknown lengths and destinations
+        remain unsupported.
+        """
+        if library.lower()!="msvcr90.dll" or symbol!="memmove":
+            return False
+        if not self.followup_malloc_events or self.zero_len_memmove_events:
+            raise GuestHeapResearchRejected("zero_memmove_original_order_or_budget")
+        rsp=u.reg_read(UC_X86_REG_RSP)
+        dest=u.reg_read(UC_X86_REG_RCX)
+        src=u.reg_read(UC_X86_REG_RDX)
+        n=u.reg_read(UC_X86_REG_R8)
+        heap_end=FOLLOWUP_HEAP_BASE+self.followup_heap_cursor
+        if (rsp&15!=8 or n!=0 or
+            not FOLLOWUP_HEAP_BASE<=dest<heap_end or
+            not FOLLOWUP_HEAP_BASE<=src<heap_end):
+            raise GuestHeapResearchRejected("zero_memmove_original_abi_or_pointer_unverified")
+        try:
+            ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+        except Exception as exc:
+            raise GuestHeapResearchRejected("zero_memmove_guest_return_unreadable") from exc
+        if (ret!=IMAGE_BASE+MEMMOVE_ZERO_ORIGINAL_RETURN_RVA or
+            verify(pe,ret,library,symbol,slots)!=hex(MEMMOVE_ZERO_ORIGINAL_CALL_RVA)):
+            raise GuestHeapResearchRejected("zero_memmove_original_import_not_verified")
+        u.reg_write(UC_X86_REG_RAX,dest)
+        self.zero_len_memmove_events.append({
+            "original_call_rva":hex(MEMMOVE_ZERO_ORIGINAL_CALL_RVA),
+            "bytes_moved":0,
+            "guest_memory_read_or_written":False,
+            "host_crt_used":False,
         })
         return True
 
@@ -435,6 +475,8 @@ class SingleGuestMallocResearch:
                 "bounded_followup_malloc_count":len(self.followup_malloc_events),
                 "bounded_followup_malloc_events":list(self.followup_malloc_events),
                 "bounded_followup_malloc_mapped_bytes":self.followup_heap_cursor,
+                "original_zero_length_memmove_count":len(self.zero_len_memmove_events),
+                "original_zero_length_memmove_events":list(self.zero_len_memmove_events),
                 "synthetic_original_memset_count":len(self.memset_events),
                 "allocations":list(self.events),
                 "memset_events":list(self.memset_events),
