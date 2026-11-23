@@ -75,12 +75,12 @@ def verified_import_return(pe, return_va, library, symbol, original_slots):
             slot=thunk_rva+6+struct.unpack_from("<i",thunk,2)[0]
             if original_slots.get(slot)==(library.lower(),symbol):
                 return hex(call_rva)
-        # Original 48-byte allocation uses CALL -> lazily initialized
+        # Original allocations use CALL -> lazily initialized
         # CRT wrapper. That wrapper checks its cached function pointer
         # and tail-jumps through a REX-prefixed imported IAT JMP on the
         # observed cold-start branch. Verify the entire exact original
         # instruction shape and IAT identity, never simply trust RAX.
-        if (call_rva==0x2dcdc9 and thunk_rva==0x2bd710 and
+        if (thunk_rva==0x2bd710 and
             library.lower()=="msvcr90.dll" and symbol=="malloc"):
             lazy=bytes(pe.read_rva(thunk_rva,22))
             if (len(lazy)==22 and
