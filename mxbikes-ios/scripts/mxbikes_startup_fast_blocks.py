@@ -298,6 +298,9 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                 elif symbol=="getaddrinfo":
                     accepted=winsock_research.handle_getaddrinfo(
                         u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="freeaddrinfo":
+                    accepted=winsock_research.handle_freeaddrinfo(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
                 else:
                     accepted=winsock_research.handle(
                         u,pe,original_slots,lib,symbol,verified_import_return)
