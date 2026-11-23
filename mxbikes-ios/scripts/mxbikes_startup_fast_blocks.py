@@ -285,8 +285,12 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     accepted=winsock_research.handle_inet_pton(
                         u,pe,original_slots,lib,symbol,verified_import_return)
                 elif symbol=="getnameinfo":
-                    accepted=winsock_research.handle_getnameinfo(
-                        u,pe,original_slots,lib,symbol,verified_import_return)
+                    if winsock_research.addrinfo_events:
+                        accepted=winsock_research.handle_followup_getnameinfo(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    else:
+                        accepted=winsock_research.handle_getnameinfo(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
                 elif symbol=="getaddrinfo":
                     accepted=winsock_research.handle_getaddrinfo(
                         u,pe,original_slots,lib,symbol,verified_import_return)
