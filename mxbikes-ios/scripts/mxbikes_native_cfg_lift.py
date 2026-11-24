@@ -239,7 +239,8 @@ def run(path=None,original_loop=False):
         negative=["#define NP 1u\n#define BASES {"+u(STACK)+"}\n",RUNTIME,EXTRA,bad_code,
                   "int smoke(void){State s={0};Cursor c=lifted_begin();",
                   "if(lifted_resume(&s,&c,17u)!=93||c.steps!=17u)return 1;",
-                  "if(lifted_resume(&s,&c,8192u)!=91||c.steps!=8192u)return 2;return 0;}",
+                  "if(lifted_resume(&s,&c,8192u)!=91||c.steps!=8192u){return 2;}",
+                  "return 0;}",
                   "#ifdef HOST\nint main(void){return smoke();}\n#endif"]
         compile_native("\n".join(negative))
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
