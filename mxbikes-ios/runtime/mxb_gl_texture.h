@@ -15,7 +15,8 @@ extern "C" {
 #define MXB_GL_NEAREST 0x2600u
 #define MXB_GL_LINEAR 0x2601u
 #define MXB_GL_MAX_TEXTURES 8u
-#define MXB_GL_MAX_TEX_DIM 256u
+#define MXB_GL_MAX_TEX_DIM 2048u
+#define MXB_GL_TEXTURE_BYTE_BUDGET (64u*1024u*1024u)
 typedef int (*MXBGLGuestWrite)(void *context,uint64_t guest_address,
                                 const void *input,size_t length);
 typedef struct MXBGLTextures MXBGLTextures;
