@@ -4,10 +4,10 @@ import re
 import struct
 from pathlib import Path
 
-from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u, owned_filename_input, FILENAME_GLOBAL
+from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u, owned_filename_input, owned_import_site, FILENAME_GLOBAL
 from mxbikes_main_joined_callee_native import inspect_original
 from mxbikes_native_local_discovery import discover_pe
-from mxbikes_private_apple_data import prepare_data
+from mxbikes_private_apple_data import prepare_data, prepare_file
 from mxbikes_first_callee_emu import import_slots
 from tools.crt_cfg_lift import translate_crt_cfg
 from tools.entry_wrapper import decode_entry_wrapper
@@ -19,6 +19,7 @@ def prepare_startup(executable: Path, destination: Path):
         raise ValueError("Wrong owned executable")
     pe=PE(executable)
     prepare_data(pe,destination)
+    prepare_file(executable.with_name('steam_api64.dll'),destination)
     base=pe.u64(pe.opt+24)
     entry=pe.u32(pe.opt+16)
     wrapper=pe.read_rva(entry,18)
@@ -279,6 +280,31 @@ def prepare_startup(executable: Path, destination: Path):
     platform_handoff=unit(pe.read_rva(0x133efb,0x133f08-0x133efb),0x133efb,0x130580,"platform_handoff")
     platform_prefix=unit(pe.read_rva(0x130580,0x1305ae-0x130580),0x130580,0x2aaebc,"platform_prefix")
     check_import(0x2aaebc,"jmp","fopen")
+    # Lift actual file and checksum instructions, including all original
+    # success/error branches up to their independently identified boundaries.
+    file_windows=[(base+0x1305ae,pe.read_rva(0x1305ae,0x1306ed-0x1305ae))]
+    file_imports={};file_iat={};file_disk={};known_windows=set()
+    file_slots={base+r:(dll.lower(),name) for r,(dll,name) in slots.items()}
+    file_calls=((0x1305a9,"fopen"),(0x1305d9,"fseek"),(0x1305e1,"ftell"),
+                (0x1305f0,"fseek"),(0x130601,"fclose"),(0x13065a,"fread"),(0x1306b3,"fclose"))
+    targets={}
+    for site,name in file_calls:
+        target=targets.setdefault(name,0x750002000+len(targets)*16)
+        pieces,slot,ret=owned_import_site(pe,base,file_slots,site,name,target)
+        file_imports[target]=name
+        for start,raw in pieces:
+            if start not in known_windows:
+                file_windows.append((start,raw));known_windows.add(start)
+        if slot not in file_iat:
+            file_iat[slot]=(target,[])
+            file_disk[slot]=int.from_bytes(pe.read_rva(slot-base,8),"little")
+        if file_iat[slot][0]!=target:raise ValueError("File import target mismatch")
+        file_iat[slot][1].append(ret)
+    file_code,_,_=decode_cfg(file_windows,base+0x2aaebc,base+0x1306ed,
+                             file_imports,file_iat,alternate_stops=(base+0x13072e,base+0x13073e),
+                             disk_imports=file_disk,additional_entries=(base+0x1305ae,),
+                             dynamic_limit=6000000)
+    file_body=file_code.replace("lifted_begin","file_body_begin").replace("lifted_resume","file_body_resume")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -286,7 +312,8 @@ def prepare_startup(executable: Path, destination: Path):
 #include "mxb_owned_startup.h"
 #include "mx_crt_services.h"
 #include "mx_crt_process_services.h"
-#include <string.h>
+ #include <string.h>
+extern int mxb_private_file_bind(MXBGuestState *);
 int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     if(!p || p->pc!=ENTRY_PC)return 0;
     IAT_CHECKS
@@ -621,6 +648,17 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     continuation_status=platform_prefix_resume(&p->cpu,&c,16);p->pc=c.pc;
     if(continuation_status||c.pc!=FOPEN_THUNK_PC||p->cpu.fault)return 0;
     p->instructions+=c.steps;
+    if(!mxb_private_file_bind(&p->cpu))return 0;
+    before=p->cpu.completed_crt_calls;
+    c=file_body_begin();
+    continuation_status=file_body_resume(&p->cpu,&c,6000000);p->pc=c.pc;
+    if(continuation_status||c.pc!=STEAM_CALL_PC||p->cpu.fault)return 0;
+    calls=p->cpu.completed_crt_calls-before;
+    if(calls!=256u||calls>c.steps||p->cpu.file.open||
+       p->cpu.file.total_read!=p->cpu.file.length||p->cpu.file.reads!=251u||
+       p->cpu.file.opens!=1u||p->cpu.file.seeks!=2u||p->cpu.file.tells!=1u||p->cpu.file.closes!=1u)return 0;
+    p->instructions+=c.steps-(unsigned)calls;p->services+=(unsigned)calls;
+    /* The original Steam API call is NOT executed or simulated. */
     return 1;
 }
 """
@@ -639,10 +677,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
                   ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780,CMDLINE_PC=base+0x2ab131,CMD_PTR_VA=cmd_ptr,WINMAIN_PC=base+0x136710,IMAGE_BASE=base,ASCII_CALL=base+0x2ab1ce,ASCII_RETURN=base+0x2ab1d4,ASCII_SLOT=base+ascii_slot,ASCII_VALUE=int.from_bytes(pe.read_rva(ascii_slot,8),'little'))
-    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80,GAME_SUBINIT_PC=base+0x133640,GAME_SUBINIT_RETURN=base+0x133efb,PLATFORM_INIT_PC=base+0x130580,FOPEN_THUNK_PC=base+0x2aaebc)
+    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80,GAME_SUBINIT_PC=base+0x133640,GAME_SUBINIT_RETURN=base+0x133efb,PLATFORM_INIT_PC=base+0x130580,FOPEN_THUNK_PC=base+0x2aaebc,STEAM_CALL_PC=base+0x1306ed)
     runner=re.sub(r'\b(?:'+ '|'.join(map(re.escape,fields)) + r')\b',lambda m:u(fields[m[0]]),runner)
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+init_body+subinit+platform_handoff+platform_prefix+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+init_body+subinit+platform_handoff+platform_prefix+file_body+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[

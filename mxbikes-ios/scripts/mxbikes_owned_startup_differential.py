@@ -14,13 +14,14 @@ from mxbikes_private_apple_directory import prepare
 from mxbikes_private_apple_startup import prepare_startup
 from mxbikes_main_joined_callee_native import inspect_original
 from mxbikes_private_apple_data import init_static_refs
+from mxbikes_owned_file_crt import OwnedReadOnlyFile,ReadOnlyCRT
 from tools.pe_probe import PE
 
 BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x2aaebc
+FRONTIER=BASE+0x1306ed
 STACK_BYTES=128*1024
 MODULE_PATH=br'C:\MXBikes\mxbikes.exe'
 DIRECTORY=MODULE_PATH[:MODULE_PATH.rfind(bytes([92]))+1]
@@ -33,11 +34,12 @@ BRIDGE=r"""
 #include "mxb_pe_guest_image.h"
 #include "mxb_game_startup_layout.h"
 #include "mxb_init_data_layout.h"
+#include "mxb_guest_crt.h"
 #include <string.h>
 extern int mxb_private_data_init(MXBOwnedStartup *,MXBGuestMemory *);
 int verify_data(const uint8_t *file,size_t n){
     MXBPEImage layout; MXBOwnedStartup p={0}; MXBGuestMemory m={0};
-    if(!mxb_guest_memory_smoke()||!mxb_pe_plan(file,n,&layout))return 0;
+    if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke()||!mxb_pe_plan(file,n,&layout))return 0;
     uint8_t *b=malloc(layout.image_size);if(!b)return 0;
     int ok=0;
     if(!mxb_pe_map(&p.cpu.memory,file,n,b,layout.image_size,&layout)||!mxb_private_data_init(&p,&m))goto done;
@@ -115,6 +117,10 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
     for(unsigned i=0;i<5;i++)if(!mxb_guest_read(&p.cpu.memory,game_globals[i],regs+226+i,sizes[i]))goto done;
     if(!mxb_guest_read(&p.cpu.memory,MXB_GAME_FILENAME,regs+231,262))goto done;
     for(unsigned i=0;i<MXB_INIT_DATA_COUNT;i++)if(!mxb_guest_read(&p.cpu.memory,mxb_init_data_addresses[i],regs+264+i,mxb_init_data_sizes[i]))goto done;
+    uint64_t *file_state=regs+264+MXB_INIT_DATA_COUNT;
+    file_state[0]=p.cpu.file.position;file_state[1]=p.cpu.file.total_read;
+    file_state[2]=p.cpu.file.open;file_state[3]=p.cpu.file.opens;file_state[4]=p.cpu.file.seeks;
+    file_state[5]=p.cpu.file.tells;file_state[6]=p.cpu.file.reads;file_state[7]=p.cpu.file.closes;
     for(unsigned i=0;i<sizeof(p.stack);i++)stack[i]=p.stack[i];
     ok=1;
 done:
@@ -126,6 +132,7 @@ done:
 def run(path):
     import pefile
     raw=path.read_bytes()
+    owned_dll=path.with_name('steam_api64.dll').read_bytes()
     pe=pefile.PE(data=raw)
     mapped=pe.get_memory_mapped_image()
     game_layout,_,_=inspect_original(PE(path))
@@ -139,7 +146,7 @@ def run(path):
         common=ROOT.parent/"runtime"
         libpath=d/"entry.so"
         subprocess.run(["cc","-O2","-std=c11","-shared","-fPIC","-I"+str(runtime),"-I"+str(common),
-                        str(d/"bridge.c"),str(d/"mxb_private_startup.c"),str(d/"mxb_private_image_data.c"),
+                        str(d/"bridge.c"),str(d/"mxb_private_startup.c"),str(d/"mxb_private_image_data.c"),str(d/"mxb_private_file.c"),
                         *[str(runtime/file) for file in ("mxb_guest_memory.c","mxb_pe_guest_image.c","mxb_guest_crt.c")],
                         *[str(common/file) for file in ("mx_time_compat.c","mx_guest_imports.c","mx_import_registry.c")],
                         "-o",str(libpath)],check=True)
@@ -165,7 +172,7 @@ def run(path):
             regs=[((seed+1)*(i+3)*0x1010101010101)&MASK for i in range(16)]
             regs[4]=STACK+STACK_BYTES-0x3f8
             flags=0x202 | (0x8d5 if seed%2 else 0)
-            state=(C.c_uint64*(264+len(init_refs)))(*regs,flags)
+            state=(C.c_uint64*(272+len(init_refs)))(*regs,flags)
             vectors=[((0x102030405060708*(i+1)*(seed+1))&MASK) for i in range(32)]
             for i,value in enumerate(vectors):state[192+i]=value
             vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
@@ -213,6 +220,7 @@ def run(path):
             plain_iterator=iterator+0x100
             cpu.mem_write(plain_iterator,bytes.fromhex("488d6424d8 ff5108"))
             cpu.mem_write(plain_iterator+8,bytes.fromhex("ff15 72000000 ff15 74000000 488d642428 c3"))
+            crt=ReadOnlyCRT(OwnedReadOnlyFile(owned_dll,open=False))
             handlers=[]
             app_type=0;exception_filter=vals[7]
             for dll in pe.DIRECTORY_ENTRY_IMPORT:
@@ -225,13 +233,13 @@ def run(path):
                             cpu.mem_write(symbol.address,struct.pack("<Q",iterator))
                         if name in ("_fmode","_commode"):
                             cpu.mem_write(symbol.address,struct.pack("<Q",0x760001000+(4 if name=="_commode" else 0)))
-                    if (dll.dll.lower(),name) in ((b"msvcr90.dll","strcpy"),(b"msvcr90.dll","strrchr"),(b"msvcr90.dll","_ismbblead"),(b"msvcr90.dll","__getmainargs"),(b"msvcr90.dll","_decode_pointer"),(b"msvcr90.dll","_onexit"),(b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
+                    if (dll.dll.lower()==b"msvcr90.dll" and name in ReadOnlyCRT.SUPPORTED) or (dll.dll.lower(),name) in ((b"msvcr90.dll","strcpy"),(b"msvcr90.dll","strrchr"),(b"msvcr90.dll","_ismbblead"),(b"msvcr90.dll","__getmainargs"),(b"msvcr90.dll","_decode_pointer"),(b"msvcr90.dll","_onexit"),(b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
                         pc=service_page+16*len(services)
                         services[pc]=name;cpu.mem_write(pc,b"\xc3")
                         cpu.mem_write(symbol.address,struct.pack("<Q",pc))
-            visited=[];called=[]
+            visited=0;called=[]
             def service(uc,pc,size,context):
-                nonlocal app_type,exception_filter
+                nonlocal app_type,exception_filter,visited
                 if pc in (plain_iterator,plain_iterator+5,plain_iterator+8,plain_iterator+14,plain_iterator+20,plain_iterator+25):
                     if pc==plain_iterator+20:called.append('_initterm')
                     if pc==plain_iterator:
@@ -251,10 +259,13 @@ def run(path):
                     raise ValueError("Original initializer failed")
                 if iterator<=pc<iterator+20:return
                 if pc not in services:
-                    visited.append(pc)
+                    visited+=1
                     return
                 name=services[pc];called.append(name);dest=uc.reg_read(x.UC_X86_REG_RCX)
-                if name=="__set_app_type":app_type=dest
+                if name in ReadOnlyCRT.SUPPORTED:
+                    value=crt.dispatch(uc,name,dest,uc.reg_read(x.UC_X86_REG_RDX),uc.reg_read(x.UC_X86_REG_R8),uc.reg_read(x.UC_X86_REG_R9))
+                    uc.reg_write(x.UC_X86_REG_RAX,value&MASK)
+                elif name=="__set_app_type":app_type=dest
                 elif name=="_encode_pointer":
                     key=struct.unpack("<Q",uc.mem_read(COOKIE,8))[0]
                     v=dest^key
@@ -306,9 +317,9 @@ def run(path):
                     result={"GetCurrentThreadId":tid,"GetCurrentProcessId":pid,"GetTickCount":mono//1000000 & 0xffffffff}
                     uc.reg_write(x.UC_X86_REG_RAX,result[name])
             cpu.hook_add(UC_HOOK_CODE,service)
-            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=2500)
+            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=6000000)
             expected=[cpu.reg_read(reg) for reg in UC_REG]+[
-                cpu.reg_read(x.UC_X86_REG_EFLAGS),cpu.reg_read(x.UC_X86_REG_RIP),len(visited),len(called),
+                cpu.reg_read(x.UC_X86_REG_EFLAGS),cpu.reg_read(x.UC_X86_REG_RIP),visited,len(called),
                 *struct.unpack("<QQ",cpu.mem_read(COOKIE,16)),
                 *struct.unpack("<Q",cpu.mem_read(BASE+0xe4ada8,8)),*struct.unpack("<I",cpu.mem_read(BASE+0xe4ada0,4)),app_type,*struct.unpack("<I",cpu.mem_read(BASE+0x3d801c,4)),
                 *struct.unpack("<QQ",cpu.mem_read(BASE+0xe4adb0,16)),*struct.unpack("<II",cpu.mem_read(0x760001000,8)),exception_filter,handlers[0],
@@ -324,12 +335,15 @@ def run(path):
                 expected.append(int.from_bytes(cpu.mem_read(game_layout[key],size),'little'))
             expected.extend(struct.unpack('<33Q',bytes(cpu.mem_read(0x1403968a0,262))+bytes(2)))
             expected.extend(int.from_bytes(cpu.mem_read(a,n),'little') for a,n in init_refs)
+            if crt.calls!={'fopen':1,'fseek':2,'ftell':1,'fread':251,'fclose':1} or crt.file.open or crt.bytes_returned!=len(owned_dll):
+                raise ValueError('Original owned file sequence changed')
+            expected.extend((crt.file.cursor,crt.bytes_returned,int(crt.file.open),*[crt.calls[k] for k in ('fopen','fseek','ftell','fread','fclose')]))
             if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,STACK_BYTES)):
                 differing=[i for i,(actual,wanted) in enumerate(zip(state,expected)) if actual!=wanted]
                 stack_diff=sum(a!=b for a,b in zip(stack,cpu.mem_read(STACK,STACK_BYTES)))
                 raise ValueError(f"Original/native process state mismatch case {seed}; fields={differing}; stack bytes={stack_diff}")
             if seed==7 and state[20]!=DEFAULT+1:raise ValueError("Collision path missed")
-    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1184 object/global bytes, five game globals and 262 filename bytes and {len(init_refs)} game-init globals; all GPRs, 16 XMM registers, flags and stack matched")
+    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1184 object/global bytes, five game globals and 262 filename bytes and {len(init_refs)} game-init globals; all GPRs, 16 XMM registers, flags and stack matched; 251 original file reads, Steam call unexecuted")
 
 
 if __name__=="__main__":

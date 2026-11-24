@@ -52,3 +52,14 @@ def prepare_data(pe,destination):
         "static const uint64_t mxb_init_data_addresses[]={"+",".join(f"UINT64_C({a})" for a,_ in refs)+"};\n"+
         "static const unsigned mxb_init_data_sizes[]={"+",".join(str(n) for _,n in refs)+"};\n")
     print(f"Private data image: {len(segments)} non-executable ranges, {sum(s for _,s,_,_ in segments)} mapped bytes")
+
+def prepare_file(path,destination):
+    # Private caller supplies the original archive member. Never synthesize a
+    # DLL, patch its checksum, or invoke any code from it.
+    if path.is_symlink() or not path.is_file() or path.stat().st_size!=250656:
+        raise ValueError("Original owned Steam DLL missing or wrong size")
+    raw=path.read_bytes()
+    lines=['#include "mxb_guest_crt.h"',f"static const uint8_t owned_file[{len(raw)}]={{"]
+    lines.extend(",".join(map(str,raw[i:i+32]))+"," for i in range(0,len(raw),32))
+    lines.extend(["};",'int mxb_private_file_bind(MXBGuestState*s){return mxb_guest_file_bind(s,"steam_api64.dll",owned_file,sizeof(owned_file));}'])
+    (destination/"mxb_private_file.c").write_text("\n".join(lines)+"\n")
