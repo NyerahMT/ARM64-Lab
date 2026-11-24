@@ -117,3 +117,42 @@ jobs:
             readelf -h "/tmp/${name}-aarch64.o" | grep -q AArch64
           done
           echo "Source-only ARM64/Win64 graphics tests passed. No original game code or assets were used." >> "$GITHUB_STEP_SUMMARY"
+
+  # Compile the actual SwiftUI/MetalKit XcodeGen project and linked native
+  # timer translation. This is a signed-out synthetic viewport build,
+  # NOT execution of the commercial MX Bikes game.
+  ios-viewport-unsigned-simulator-build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mxbikes-ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ensure project generator is available
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+      - name: Generate actual iOS viewport Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Build unsigned iOS Simulator app including native post-Steam timer C
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MXBViewportPrototype.xcodeproj \
+            -scheme MXBViewportPrototype \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/mxb-ios-simulator-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/mxb-ios-build.log" 2>&1 || {
+              tail -n 160 "$RUNNER_TEMP/mxb-ios-build.log"
+              exit 1
+            }
+          echo "Unsigned iOS Simulator viewport project compiled including original post-Steam native C translator." >> "$GITHUB_STEP_SUMMARY"
+          echo "Original-game engine is not connected; no real frame or signed IPA." >> "$GITHUB_STEP_SUMMARY"
