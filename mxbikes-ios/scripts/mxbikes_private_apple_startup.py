@@ -168,6 +168,26 @@ def prepare_startup(executable: Path, destination: Path):
     next_code,_,_=decode_cfg(next_windows,base+0x2d2b6a,base+0x2bbd90)
     next_constructor=next_code.replace("lifted_begin","next_constructor_begin").replace("lifted_resume","next_constructor_resume")
     final_prefix=region("final_prefix",((0x2bbd90,0x2bbdcc),),0x2bbd90,base+0x2bbdcc)
+    # Resolve the C++ virtual target from the exact original constructor's
+    # RIP-relative vtable load and the final helper's memory CALL operand.
+    vtable=next(decoder.disasm(pe.read_rva(0x2e84dc,7),0x2e84dc))
+    virtual=next(decoder.disasm(pe.read_rva(0x2bbdcc,3),0x2bbdcc))
+    vm=vtable.operands[1].mem;cm=virtual.operands[0].mem
+    if (vtable.mnemonic!="lea" or vtable.reg_name(vm.base)!="rip" or vm.index
+            or virtual.mnemonic!="call" or virtual.operands[0].type!=X86_OP_MEM
+            or virtual.reg_name(cm.base)!="rax" or cm.index or cm.disp!=8):
+        raise ValueError("Unexpected original virtual call identity")
+    slot=vtable.address+vtable.size+vm.disp+cm.disp
+    target=int.from_bytes(pe.read_rva(slot,8),"little")
+    if not base<=target<base+(1<<32):raise ValueError("Original virtual target outside image")
+    # The original table cell is read-only in the generated private app.
+    map_value(slot,pe.read_rva(slot,8))
+    print("Private original virtual constructor target RVA:",hex(target-base))
+    virtual_windows=discover_pe(pe,base,base+0x2bbdcc,base+0x2bbdcf,
+                               register_calls={base+0x2bbdcc:target},max_nodes=256)
+    virtual_code,_,_=decode_cfg(virtual_windows,base+0x2bbdcc,base+0x2bbdcf,
+                               register_calls={base+0x2bbdcc:target})
+    virtual_body=virtual_code.replace("lifted_begin","virtual_body_begin").replace("lifted_resume","virtual_body_resume")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -367,6 +387,9 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=final_prefix_begin();
     if(final_prefix_resume(&p->cpu,&c,32)!=0 || c.pc!=FINAL_PREFIX_END || p->cpu.fault)return 0;
     p->pc=c.pc;p->instructions+=c.steps;
+    c=virtual_body_begin();
+    if(virtual_body_resume(&p->cpu,&c,512)!=0 || c.pc!=VIRTUAL_RETURN || p->cpu.fault)return 0;
+    p->pc=c.pc;p->instructions+=c.steps;
     return 1;
 }
 """
@@ -384,10 +407,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc)
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf)
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
