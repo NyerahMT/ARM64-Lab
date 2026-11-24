@@ -1,5 +1,12 @@
 #include "mxb_gl_surface.h"
 #include <stddef.h>
+/* The Metal shader reads exactly ten consecutive float32 lanes per vertex.
+ * Native float4 alignment differs from this packed C/Swift buffer layout. */
+_Static_assert(sizeof(float)==4,"MXBGL vertex lanes must be float32");
+_Static_assert(sizeof(MXBGLVertex)==40,"MXBGL vertex stride must be 40 bytes");
+_Static_assert(offsetof(MXBGLVertex,position)==0,"position ABI mismatch");
+_Static_assert(offsetof(MXBGLVertex,color)==16,"color ABI mismatch");
+_Static_assert(offsetof(MXBGLVertex,uv)==32,"UV ABI mismatch");
 /* AArch64 freestanding compilation; the app resolves libc allocation. */
 extern void *calloc(size_t,size_t);
 extern void free(void *);

@@ -38,7 +38,9 @@ final class GPUBridge: NSObject, MTKViewDelegate {
     }
 
     func configure(_ view: MTKView) {
-        guard let device = view.device,
+        // Keep Swift buffer stride synchronized with C and the MSL scalar lanes.
+        guard MemoryLayout<MXBGLVertex>.stride == 40,
+              let device = view.device,
               let library = device.makeDefaultLibrary(),
               let vertex = library.makeFunction(name: "mxb_vertex"),
               let fragment = library.makeFunction(name: "mxb_fragment") else { return }
