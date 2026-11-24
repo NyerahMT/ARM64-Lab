@@ -5,7 +5,10 @@ typedef struct {
     MXBGuestState cpu;
     uint8_t stack[4096];
     uint8_t initial_globals[16];
-    uint64_t import_values[5];
+    uint64_t import_values[6];
+    uint64_t crt_lock;
+    uint32_t crt_phase;
+    uint64_t thread_environment[8];
     uint64_t pc;
     unsigned instructions, services;
 } MXBOwnedStartup;

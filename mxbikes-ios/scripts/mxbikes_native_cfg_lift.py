@@ -74,7 +74,7 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None):
+def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None):
     imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
     frontiers={stop,*alternate_stops}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
@@ -88,6 +88,9 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
         return idx,width
     def addr(ins,op):
         m=op.mem
+        if (gs_base is not None and ins.reg_name(m.segment)=="gs" and not m.index
+                and not m.base and m.disp==0x30 and ins.mnemonic=="mov" and op.size==8):
+            return u(gs_base+m.disp)
         if m.segment or m.index or not m.base:raise ValueError("Unsupported memory addressing")
         base=ins.reg_name(m.base)
         if base=="rip":
@@ -135,6 +138,10 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt=write(ins,op[0],value)
         elif mn=="lea" and len(op)==2 and op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM:
             stmt=write(ins,op[0],addr(ins,op[1]))
+        elif mn=="and" and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size==4 and op[1].type==CS_OP_IMM:
+            address=addr(ins,op[0])
+            stmt=("{uint64_t v=load(s,%s,4);if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
+                  "store(s,%s,logic_flags(s,v&%s,32),4);}")%(address,address,u(op[1].imm))
         elif mn in ("xor","sub","add","and","or") and len(op)==2 and op[0].type==CS_OP_REG:
             _,width=reg(ins,op[0]);a=read(ins,op[0]);b=read(ins,op[1])
             v=("%s_flags(s,%s,%s,%du)"%(mn,a,b,width) if mn in ("xor","sub","add")
