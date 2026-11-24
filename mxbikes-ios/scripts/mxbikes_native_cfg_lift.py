@@ -147,6 +147,15 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             v=("%s_flags(s,%s,%s,%du)"%(mn,a,b,width) if mn in ("xor","sub","add")
                else "logic_flags(s,%s%s%s,%du)"%(a,"&" if mn=="and" else "|",b,width))
             stmt=write(ins,op[0],v)
+        elif mn in ("neg","dec") and len(op)==1 and op[0].type==CS_OP_REG and op[0].size in (4,8):
+            width=op[0].size*8
+            source=read(ins,op[0])
+            if mn=="neg":stmt=write(ins,op[0],f"sub_flags(s,0,{source},{width}u)")
+            else:
+                stmt="{uint64_t carry=s->flags&1u;"+write(ins,op[0],f"sub_flags(s,{source},1,{width}u)")+"s->flags=(s->flags&~UINT64_C(1))|carry;}"
+        elif mn=="sbb" and len(op)==2 and op[0].type==op[1].type==CS_OP_REG and op[0].reg==op[1].reg and op[0].size in (4,8):
+            # x - x - CF has the same result and arithmetic flags as 0 - CF.
+            stmt=write(ins,op[0],f"sub_flags(s,0,s->flags&1u,{op[0].size*8}u)")
         elif mn=="cmp" and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size==2 and op[1].type==CS_OP_REG and ins.reg_name(op[1].reg)=="ax":
             stmt="(void)sub_flags(s,%s,s->r[0],16u);"%read(ins,op[0])
         elif mn=="setne" and len(op)==1 and op[0].type==CS_OP_REG and ins.reg_name(op[0].reg)=="al":

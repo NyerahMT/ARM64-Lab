@@ -118,8 +118,14 @@ the compiled original startup code automatically.
    initializes exit-pointer globals and file modes, and runs two local helpers.
    The second registers its guest exception filter. Exception delivery and
    binary compatibility with Windows pointer tokens remain unverified.
-   The next initializer table has three non-null callbacks. Connect those
-   to the same process, preserving the existing CRT lock and globals.
+   The following void initializer table now returns from its first callback,
+   registers its exit handler, and supplies one virtual process argument and
+   an empty environment using the process CRT adapter. The second callback
+   enters the original constructor and writes its initial 24-byte object header.
+   The current stop is its first subobject constructor, RVA `0x3042B0`.
+   The default path takes 191 original instructions and 13 completed services.
+   Eight original x64 comparisons cover the complete stack, argument vectors,
+   registered handler, and object header at that boundary.
 2. Connect native units from more original control-flow regions to a common
    image-backed process state and route actual original imports to verified
    native adapters; don't silently treat unresolved imports as success.

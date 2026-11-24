@@ -119,12 +119,39 @@ def prepare_startup(executable: Path, destination: Path):
     filter_entry=unit(pe.read_rva(0x2ab714,11),0x2ab714,0x2ab71f,"filter_entry")
     filter_exit=region("filter_exit",((0x2ab725,0x2ab72c),),0x2ab725,0x75000100e)
     after_walk=region("after_walk",((0x2ab0bb,0x2ab0ec),),0x2ab0bb,base+0x2ab0ec,(0x2ab0bf,0x2ab0fb))
+    plain_table=0x321a60
+    plain_call=next(decoder.disasm(pe.read_rva(0x2ab0ec,5),0x2ab0ec))
+    if plain_call.mnemonic!="call" or plain_call.operands[0].imm!=0x2ab942:
+        raise ValueError("Unexpected void initializer call")
+    plain_slot=check_import(0x2ab942,"jmp","_initterm")
+    decode_slot=check_import(0x2ab744,"call","_decode_pointer")
+    onexit_slot=check_import(0x2ab758,"call","_onexit")
+    plain_targets=struct.unpack("<4Q",pe.read_rva(plain_table,32))
+    if plain_targets!=(0,base+0x2aafc4,base+0x320770,base+0x320790):
+        raise ValueError("Unexpected void initializer table")
+    for rva in (plain_slot,decode_slot,onexit_slot,*range(plain_table,plain_table+32,8)):
+        map_value(rva,pe.read_rva(rva,8))
+    plain_entry=region("plain_entry",((0x2aafc4,0x2aafd4),(0x2ab7e4,0x2ab7ed),(0x2ab734,0x2ab744)),
+                       0x2aafc4,base+0x2ab744)
+    decoded=region("decoded",((0x2ab74a,0x2ab758),),0x2ab74a,base+0x2ab758,(0x2ab760,))
+    registered=region("registered",((0x2ab75e,0x2ab760),(0x2ab7de,0x2ab7e4)),0x2ab75e,base+0x2ab7ed)
+    args_slot=check_import(0x2ab00a,"call","__getmainargs")
+    map_value(args_slot,pe.read_rva(args_slot,8))
+    for addr,size in ((0x3d85b0,8),(0x3d8030,8),(0x3d9b10,24),(0x3d8020,16),(0x3d8018,4)):
+        if not zero_fill(base+addr,size):raise ValueError("Unexpected startup global initializer")
+    map_value(0x3d85b0,bytes(8))
+    args_entry=region("args_entry",((0x2ab7ed,0x2ab7fb),),0x2ab7ed,base+0x2aafd4)
+    args_setup=region("args_setup",((0x2aafd4,0x2ab00a),),0x2aafd4,base+0x2ab00a)
+    args_return=region("args_return",((0x2ab010,0x2ab01a),(0x2ab024,0x2ab029)),0x2ab010,0x750001108,(0x2ab01a,))
+    constructor=region("constructor",((0x320770,0x320780),(0x2d2a70,0x2d2aaf)),0x320770,base+0x3042b0)
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
     runner=r"""
 #include "mxb_owned_startup.h"
 #include "mx_crt_services.h"
+#include "mx_crt_process_services.h"
+#include <string.h>
 int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     if(!p || p->pc!=ENTRY_PC)return 0;
     IAT_CHECKS
@@ -237,6 +264,73 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=after_walk_begin();
     if(after_walk_resume(&p->cpu,&c,16)!=0 || c.pc!=PLAIN_TABLE_PC)return 0;
     p->pc=c.pc;p->instructions+=c.steps;p->services++;
+    if(load(&p->cpu,VOID_SLOT,8)!=VOID_VALUE || p->cpu.r[MXB_RCX]!=VOID_BEGIN ||
+       p->cpu.r[MXB_RDX]!=VOID_BEGIN+32 || load(&p->cpu,VOID_BEGIN,8) ||
+       load(&p->cpu,VOID_BEGIN+8,8)!=VOID_FIRST || p->cpu.fault)return 0;
+    sp=p->cpu.r[MXB_RSP];
+    if((sp&15u) || sp<56 || !mxb_guest_check(&p->cpu.memory,sp-56,56,MXB_MEM_WRITE))return 0;
+    store(&p->cpu,sp-8,PLAIN_TABLE_PC+5,8);
+    store(&p->cpu,sp-56,VOID_CONT,8);p->cpu.r[MXB_RSP]=sp-56;
+    c=plain_entry_begin();
+    if(plain_entry_resume(&p->cpu,&c,32)!=0 || c.pc!=DECODE_CALL)return 0;
+    p->instructions+=2u+c.steps;
+    if(load(&p->cpu,DECODE_SLOT,8)!=DECODE_VALUE || p->cpu.fault)return 0;
+    store(&p->cpu,p->cpu.r[MXB_RSP]-8,DECODE_CALL+6,8);
+    p->cpu.r[MXB_RAX]=mx_crt_decode_pointer(&crt,p->cpu.r[MXB_RCX]);
+    c=decoded_begin();
+    if(decoded_resume(&p->cpu,&c,16)!=0 || c.pc!=ONEXIT_CALL)return 0;
+    p->instructions+=1u+c.steps;p->services++;
+    if(load(&p->cpu,ONEXIT_SLOT,8)!=ONEXIT_VALUE || p->cpu.fault)return 0;
+    store(&p->cpu,p->cpu.r[MXB_RSP]-8,ONEXIT_CALL+6,8);
+    p->cpu.r[MXB_RAX]=mx_crt_service_onexit(&crt,p->cpu.r[MXB_RCX]);
+    if(crt.onexit_count!=1 || p->cpu.fault)return 0;
+    p->first_exit_handler=crt.onexit[0];
+    c=registered_begin();
+    if(registered_resume(&p->cpu,&c,16)!=0 || c.pc!=REGISTER_RETURN)return 0;
+    p->instructions+=1u+c.steps;p->services++;p->pc=c.pc;
+    c=args_entry_begin();
+    if(args_entry_resume(&p->cpu,&c,32)!=0)return 0;
+    p->instructions+=c.steps;
+    c=args_setup_begin();
+    if(args_setup_resume(&p->cpu,&c,32)!=0 || c.pc!=ARGS_CALL)return 0;
+    p->instructions+=c.steps;
+    sp=p->cpu.r[MXB_RSP];
+    if((sp&15u) || load(&p->cpu,ARGS_SLOT,8)!=ARGS_VALUE ||
+       load(&p->cpu,sp+32,8)!=ARGS_INFO || p->cpu.fault)return 0;
+    /* Supply the single virtual process name and an empty environment. */
+    const uint64_t argv_cells[3]={ARGS_VA+24,0,0};
+    memcpy(p->argument_block,argv_cells,sizeof(argv_cells));
+    memcpy(p->argument_block+24,"mxbikes.exe",sizeof("mxbikes.exe"));
+    if(!mxb_guest_map(&p->cpu.memory,ARGS_VA,p->argument_block,sizeof(p->argument_block),1))return 0;
+    mx_cfg_region arg_regions[4]={{ARGS_VA,p->argument_block,sizeof(p->argument_block)}};
+    const unsigned sizes[3]={4,8,8};
+    for(unsigned i=0;i<3;i++){
+        uint64_t out=p->cpu.r[i==0?MXB_RCX:i==1?MXB_RDX:MXB_R8];
+        int found=0;
+        for(unsigned j=0;j<p->cpu.memory.count;j++){
+            const MXBGuestRegion *r=&p->cpu.memory.regions[j];
+            if((r->permissions&3)!=3 || out<r->base || out-r->base>r->length ||
+               sizes[i]>r->length-(out-r->base))continue;
+            arg_regions[i+1]=(mx_cfg_region){out,r->bytes+(out-r->base),sizes[i]};
+            found=1;break;
+        }
+        if(!found)return 0;
+    }
+    mx_cfg_memory arg_mem={arg_regions,4};
+    mx_crt_process process_args={0};
+    if(mx_crt_process_bind_args(&process_args,&arg_mem,1,ARGS_VA,ARGS_VA+16)!=1 ||
+       mx_crt_process_getmainargs(&process_args,p->cpu.r[MXB_RCX],p->cpu.r[MXB_RDX],
+          p->cpu.r[MXB_R8],(uint32_t)p->cpu.r[MXB_R9],&p->cpu.r[MXB_RAX])!=1)return 0;
+    store(&p->cpu,sp-8,ARGS_CALL+6,8);
+    c=args_return_begin();
+    if(p->cpu.fault || args_return_resume(&p->cpu,&c,16)!=0 || c.pc!=VOID_CONT)return 0;
+    p->instructions+=1u+c.steps;p->services++;
+    if(load(&p->cpu,VOID_BEGIN+16,8)!=SECOND_PC || p->cpu.fault)return 0;
+    sp=p->cpu.r[MXB_RSP]-8;
+    store(&p->cpu,sp,VOID_CONT+6,8);p->cpu.r[MXB_RSP]=sp;
+    c=constructor_begin();
+    if(p->cpu.fault || constructor_resume(&p->cpu,&c,32)!=0 || c.pc!=SUBOBJECT_PC)return 0;
+    p->pc=c.pc;p->instructions+=c.steps;
     return 1;
 }
 """
@@ -248,9 +342,16 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     fields.update(ENC_SLOT=base+encode_slot,ENC_VALUE=struct.unpack("<Q",pe.read_rva(encode_slot,8))[0],ENC_RETURN=base+0x2ab2b4,
                   FILTER_SLOT=base+filter_slot,FILTER_VALUE=struct.unpack("<Q",pe.read_rva(filter_slot,8))[0],
                   FILTER_ENTRY=base+0x2ab714,FILTER_RETURN=base+0x2ab725,MODES_VA=modes,PLAIN_TABLE_PC=base+0x2ab0ec)
+    fields.update(VOID_SLOT=base+plain_slot,VOID_BEGIN=base+plain_table,VOID_FIRST=plain_targets[1],
+                  VOID_CONT=0x750001108,DECODE_CALL=base+0x2ab744,DECODE_SLOT=base+decode_slot,
+                  ONEXIT_CALL=base+0x2ab758,ONEXIT_SLOT=base+onexit_slot,REGISTER_RETURN=base+0x2ab7ed)
+    for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
+        fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
+    fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x3042b0)
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
@@ -263,6 +364,9 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         f"if(!mxb_guest_map(&memory,{u(lock)},(uint8_t *)&p->crt_lock,8,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(state_addr)},(uint8_t *)&p->crt_phase,4,3))return 0;",
         *mappings,*data_maps,
+        *[f"if(!mxb_guest_map(&memory,{u(base+addr)},(uint8_t *){ptr},{size},3))return 0;"
+          for addr,ptr,size in ((0x3d8018,"&p->argument_count",4),(0x3d8020,"p->argument_globals",24),
+                                (0x3d9b10,"p->object_header",24))],
         f"if(!mxb_guest_map(&memory,{u(base+0xe4adb0)},(uint8_t *)p->exit_bounds,16,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(app_flag)},(uint8_t *)&p->managed_app,4,3))return 0;",
         f"return mxb_owned_startup(p,&memory,{u(base+entry)});",
