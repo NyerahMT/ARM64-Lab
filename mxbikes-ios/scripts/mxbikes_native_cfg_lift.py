@@ -107,14 +107,29 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             return u(a)
         if base not in REGS:raise ValueError("Invalid base register")
         return "(s->r[%d]+%s)"%(REGS.index(base),u(m.disp))
+    # Legacy 8/16-bit register aliases preserve the other bits of the GPR.
+    partial={}
+    for i,name in enumerate(("ax","cx","dx","bx","sp","bp","si","di",*(f"r{i}w" for i in range(8,16)))):
+        partial[name]=(i,16,0)
+    for i,name in enumerate(("al","cl","dl","bl","spl","bpl","sil","dil",*(f"r{i}b" for i in range(8,16)))):
+        partial[name]=(i,8,0)
+    for i,name in enumerate(("ah","ch","dh","bh")):partial[name]=(i,8,8)
     def read(ins,op):
-        if op.type==CS_OP_REG and ins.reg_name(op.reg)=="al":return "(s->r[0]&255u)"
+        if op.type==CS_OP_REG and ins.reg_name(op.reg) in partial:
+            i,width,shift=partial[ins.reg_name(op.reg)]
+            if op.size*8!=width:raise ValueError("Partial register width mismatch")
+            return f"((s->r[{i}]>>{shift}u)&{u((1<<width)-1)})"
         if op.type==CS_OP_REG:
             i,w=reg(ins,op);return "(s->r[%d]&%s)"%(i,u((1<<w)-1))
         if op.type==CS_OP_IMM:return u(op.imm)
         if op.type==CS_OP_MEM and op.size in (1,2,4,8):return "load(s,%s,%du)"%(addr(ins,op),op.size)
         raise ValueError("Unsupported source operand")
     def write(ins,op,v):
+        if op.type==CS_OP_REG and ins.reg_name(op.reg) in partial:
+            i,width,shift=partial[ins.reg_name(op.reg)]
+            if op.size*8!=width:raise ValueError("Partial register width mismatch")
+            mask=(1<<width)-1
+            return f"s->r[{i}]=(s->r[{i}]&{u(~(mask<<shift))})|((({v})&{u(mask)})<<{shift}u);"
         if op.type==CS_OP_REG:
             i,w=reg(ins,op);return "s->r[%d]=(%s)&%s;"%(i,v,u((1<<w)-1))
         if op.type==CS_OP_MEM and op.size in (1,2,4,8):return "store(s,%s,%s,%du);"%(addr(ins,op),v,op.size)
@@ -200,10 +215,11 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt="(void)sub_flags(s,%s,s->r[0],16u);"%read(ins,op[0])
         elif mn=="setne" and len(op)==1 and op[0].type==CS_OP_REG and ins.reg_name(op[0].reg)=="al":
             stmt="s->r[0]=(s->r[0]&~UINT64_C(255))|((s->flags&0x40u)==0);"
-        elif mn in ("cmp","test") and len(op)==2 and op[0].size in (4,8):
+        elif mn in ("cmp","test") and len(op)==2 and op[0].size in (1,2,4,8):
             width=op[0].size*8;a=read(ins,op[0]);b=read(ins,op[1])
-            stmt=("(void)sub_flags(s,%s,%s,%du);"%(a,b,width) if mn=="cmp"
-                  else "(void)logic_flags(s,%s&%s,%du);"%(a,b,width))
+            if mn=="cmp":stmt="(void)sub_flags(s,%s,%s,%du);"%(a,b,width)
+            elif width in (8,16):stmt="(void)logic_flags(s,(%s&%s)&%s,%du);"%(a,b,u((1<<width)-1),width)
+            else:stmt="(void)logic_flags(s,%s&%s,%du);"%(a,b,width)
         elif mn=="push" and len(op)==1 and op[0].type==CS_OP_REG and op[0].size==8:
             stmt="{uint64_t value=%s;s->r[4]-=8u;store(s,s->r[4],value,8u);}"%read(ins,op[0])
         elif mn=="pop" and len(op)==1 and op[0].type==CS_OP_REG and op[0].size==8 and reg(ins,op[0])[0]!=4:
@@ -247,7 +263,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt="{unsigned c=(s->flags&1)!=0,p=(s->flags&4)!=0,z=(s->flags&0x40)!=0,sign=(s->flags&0x80)!=0,o=(s->flags&0x800)!=0;(void)c;(void)p;(void)z;(void)sign;(void)o;next=(%s)?%s:%s;}"%(CONDS[mn],u(op[0].imm),u(nxt))
             next_pc="next"
         elif mn=="nop":pass  # multi-byte NOP addressing operands are not dereferenced
-        else:raise ValueError("Unsupported CFG instruction "+mn+" at "+hex(pc))
+        else:raise ValueError("Unsupported CFG instruction "+mn+" "+ins.op_str+" at "+hex(pc))
         nodes[pc]=(stmt+"if(s->fault)return 90;pc="+next_pc+";break;",nxt)
         pending.extend(edges)
     # Import slots are explicit host-approved semantic boundaries. No native
