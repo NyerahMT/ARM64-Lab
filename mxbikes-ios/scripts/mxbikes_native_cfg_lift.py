@@ -122,14 +122,22 @@ def decode_cfg(windows,entry,stop):
         nodes[pc]=(stmt+"if(s->fault)return 90;pc="+next_pc+";break;",nxt)
         pending.extend(edges)
     cases=["case "+u(pc)+":{"+stmt+"}" for pc,(stmt,_) in sorted(nodes.items())]
-    c="""static int lifted(State*s,uint64_t*trace,unsigned*steps){
- uint64_t pc=ENTRY;
- *trace=UINT64_C(0xcbf29ce484222325);*steps=0;
+    c="""typedef struct {uint64_t pc,trace;unsigned steps;} Cursor;
+static Cursor lifted_begin(void){
+ Cursor c={ENTRY,UINT64_C(0xcbf29ce484222325),0};return c;
+}
+/* Pause only at original instruction boundaries. Caller-owned CPU and cursor
+ * remain live across budgeted invocations; never reset register or stack state. */
+static int lifted_resume(State*s,Cursor*c,unsigned quota){
+ uint64_t pc=c->pc;
  while(pc!=STOP){
-  if(*steps>=8192u)return 91;
-  (*steps)++;*trace=(*trace^pc)*UINT64_C(0x100000001b3);
+  if(c->steps>=8192u)return 91;
+  if(!quota){c->pc=pc;return 93;}
+  quota--;c->steps++;c->trace=(c->trace^pc)*UINT64_C(0x100000001b3);
+  c->pc=pc;
   uint64_t next=0;(void)next;
   switch(pc){CASES default:return 92;}
+  c->pc=pc;
  }
  return 0;
 }
@@ -198,25 +206,49 @@ def run(path=None,original_loop=False):
     for seed in range(1,9):
         regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path)
         lengths.append(len(trace));covered.update(trace)
-        parts.append("{State s={0};uint64_t trace=0;unsigned steps=0;")
+        parts.append("{State s={0};Cursor cursor=lifted_begin();unsigned slices=0;")
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
         parts.append("s.flags=%s;"%u(flags))
         for i,p in enumerate(pages):
             parts.append("for(unsigned j=0;j<PAGE;j++)s.mem[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
-        parts.append("int rc=lifted(&s,&trace,&steps);if(rc)return rc;")
-        parts.append("if(trace!=%s||steps!=%du)return 80;"%(u(th),len(trace)))
+        # Vary the pause interval, including very short boundaries inside calls.
+        quota=1+seed*19
+        parts.append("int rc;do{rc=lifted_resume(&s,&cursor,%du);slices++;if(slices>8193u)return 94;}while(rc==93);if(rc)return rc;"%quota)
+        parts.append("if(cursor.pc!=%s||cursor.trace!=%s||cursor.steps!=%du)return 80;"%(u(stop),u(th),len(trace)))
+        parts.append("if(slices!=%du)return 81;"%((len(trace)+quota-1)//quota))
         for i,v in enumerate(out):parts.append("if(s.r[%d]!=%s)return %d;"%(i,u(v),10+i))
         parts.append("if((s.flags&%s)!=%s)return 40;"%(u(CMP_FLAGS),u(of&CMP_FLAGS)))
         for i,h in enumerate(hashes):parts.append("if(hash_page(s.mem[%d])!=%s)return %d;"%(i,u(h),50+i))
         parts.append("}")
     parts.append("return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif")
+    if not path:
+        # Bad decode targets must never compile into a purported native success.
+        base=0x10000000
+        rejected=[
+            ([(base,bytes.fromhex("0f0b"))],base+2), # UD2
+            ([(base,bytes.fromhex("eb7f"))],base+2), # unapproved jump
+            ([(base,bytes.fromhex("ffe0"))],base+2), # indirect jmp
+        ]
+        for bad,frontier in rejected:
+            try:decode_cfg(bad,base,frontier)
+            except ValueError:pass
+            else:raise ValueError("Unsupported instruction accepted")
+        # An actual infinite guest loop must yield, then stop at the hard
+        # cumulative instruction ceiling rather than spin forever.
+        bad_code,_,_=decode_cfg([(base,bytes.fromhex("ebfe"))],base,base+2)
+        negative=["#define NP 1u\n#define BASES {"+u(STACK)+"}\n",RUNTIME,EXTRA,bad_code,
+                  "int smoke(void){State s={0};Cursor c=lifted_begin();",
+                  "if(lifted_resume(&s,&c,17u)!=93||c.steps!=17u)return 1;",
+                  "if(lifted_resume(&s,&c,8192u)!=91||c.steps!=8192u)return 2;return 0;}",
+                  "#ifdef HOST\nint main(void){return smoke();}\n#endif"]
+        compile_native("\n".join(negative))
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
     compile_native("\n".join(parts))
     print(json.dumps({"mode":"private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
-        "pc_trace_hash_and_length_matched":True,"registers":16,
+        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
         "original_game_booted":False},indent=2))
 
