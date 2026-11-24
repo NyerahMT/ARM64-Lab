@@ -3,7 +3,7 @@
 ## Scope
 
 Portable, bounded x64 guest memory and native ARM64 translation infrastructure.
-Original executable bytes are accessed only in the private owned-input
+Original executable bytes are accessed locally or in the private owned-input
 workflow. No authentication result, Windows DLL implementation, game boot,
 original frame, main menu, or rideable bike is claimed. No commercial binary or
 generated original-code module is committed to the public source tree.
@@ -63,20 +63,60 @@ Dependencies: Capstone, Unicorn, pyelftools, host C compiler, clang/lld.
 
 [Public native module and unsigned simulator/device app builds passed](https://github.com/NyerahMT/ARM64-Lab/actions/runs/45339045277).
 [Public cross-unit synthetic differential passed](https://github.com/NyerahMT/ARM64-Lab/actions/runs/45339373237).
-The iOS app calls the same generated synthetic CPU/CRT/guest-memory module
-through the C bridge. A subsequent simulator launch gate uses an explicit
-`--native-selftest` flag and checks a result marker from the installed app;
-do not call that gate a pass until its actual run is inspected.
+The installed simulator app passed the source-only native self-test after the
+runner started the simulator during compilation and required a fresh marker.
+[Public simulator execution](https://github.com/NyerahMT/ARM64-Lab/actions/runs/45341343748)
+
+## Owned iOS startup checkpoint
+
+The private build accepts the SHA-256-pinned original from Files, maps its
+seven sections, and begins at its actual PE entry, RVA `0x2AB31C`. The
+generated ARM64 code enters the original first CRT initializer, calls five
+host-backed time and identity services, returns through the original entry
+wrapper, and tail-jumps to RVA `0x2AB02C`. The app retains the mapped image,
+guest registers and 4 KiB stack at this boundary. The default original
+cookie path takes 40 original instructions. The host services use the
+platform's realtime clock, monotonic clock, process ID and thread ID.
+[Private installed-simulator pass and unsigned device build](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45343653469)
+
+A separate directory diagnostic in the same mapped image runs the original
+caller and complete helper with a virtual Windows executable path. Eight
+x64/native cases exercised all 53 original instructions and both CRT imports,
+including no separator, drive-relative paths, multiple colons and a high-bit
+byte. All eight returned to their caller. The directory diagnostic is
+invoked separately from the entry checkpoint. In a separate original heap
+initialization test the game called a local leaf, allocated 9,600 bytes,
+stored the guest pointer in its global, and cleared the allocation across
+three pages. Eight x64/native cases matched.
+
+Run from `mxbikes-ios` with the matching executable outside the checkout.
+
+```sh
+python scripts/mxbikes_owned_startup_differential.py --owned-exe "$MXB_EXE"
+python scripts/mxbikes_native_cfg_lift.py --owned-exe "$MXB_EXE" --original-filename
+python scripts/mxbikes_native_cfg_lift.py --owned-exe "$MXB_EXE" --original-crt heap-init
+python scripts/mxbikes_private_apple_directory.py --owned-exe "$MXB_EXE"
+xcodegen generate --spec project.yml
+```
+
+The first test compares eight original x64 runs against the host-compiled
+startup using identical time/identity observations, including a cookie
+collision. It checks all 16 general registers, flags, PC, stack bytes,
+both cookie globals and call/instruction counts. The Apple build command
+writes private generated C in the ignored `runtime/private` directory.
+The public build can load the original PE; the private build additionally
+links its original startup and directory routines.
 
 ## Remaining critical path
 
-1. Expand supported instruction forms and use the generic lifter for larger
-   verified original functions, especially asset/path handling.
+1. Resume the retained process at the second CRT routine, RVA `0x2AB02C`.
+   Its first imported call is `KERNEL32!GetStartupInfoA` at RVA `0x2AB043`.
+   Verify the guest startup structure and stack against the original x64 path.
 2. Connect native units from more original control-flow regions to a common
    image-backed process state and route actual original imports to verified
    native adapters; don't silently treat unresolved imports as success.
-3. Add bounded guest heap/allocator and actual owned-file I/O with verified
-   Win64 ABI. Integrate the existing native GL bridge with that state.
+3. Connect native file I/O and the existing GL bridge to the process state.
+   Preserve the tested Win64 stack, heap, and file semantics.
 4. Establish legitimate entitlement/platform access and execute authentic
    game startup through the first original OpenGL frame and main menu.
 
