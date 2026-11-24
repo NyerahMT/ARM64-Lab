@@ -6,18 +6,18 @@ indirect calls, guest code writes, or arbitrary host pointers. A private owned
 binary is never copied to public outputs.
 """
 from __future__ import annotations
-import argparse, json, random, sys
+import argparse, hashlib, json, sys
 from pathlib import Path
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_OP_REG, CS_OP_IMM, CS_OP_MEM
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE
 from unicorn import x86_const as x
 from mxbikes_native_slice_lift import (
     MASK,PAGE,STACK,RSP,REGS,REG_INDEX,UC_REG,CMP_FLAGS,RUNTIME,u,
-    initial,hash_page,compile_native,owned_input,
+    initial,hash_page,compile_native,owned_input,SHA,
 )
 
 MAX_STATIC=512
-MAX_DYNAMIC=2048
+MAX_DYNAMIC=8192
 TRACE_INIT=0xcbf29ce484222325
 TRACE_PRIME=0x100000001b3
 
@@ -117,7 +117,7 @@ def decode_cfg(windows,entry,stop):
             edges=[nxt,op[0].imm]
             stmt="{unsigned c=(s->flags&1)!=0,p=(s->flags&4)!=0,z=(s->flags&0x40)!=0,sign=(s->flags&0x80)!=0,o=(s->flags&0x800)!=0;(void)c;(void)p;(void)z;(void)sign;(void)o;next=(%s)?%s:%s;}"%(CONDS[mn],u(op[0].imm),u(nxt))
             next_pc="next"
-        elif mn=="nop" and not op:pass
+        elif mn=="nop":pass  # multi-byte NOP addressing operands are not dereferenced
         else:raise ValueError("Unsupported CFG instruction "+mn+" at "+hex(pc))
         nodes[pc]=(stmt+"if(s->fault)return 90;pc="+next_pc+";break;",nxt)
         pending.extend(edges)
@@ -126,7 +126,7 @@ def decode_cfg(windows,entry,stop):
  uint64_t pc=ENTRY;
  *trace=UINT64_C(0xcbf29ce484222325);*steps=0;
  while(pc!=STOP){
-  if(*steps>=2048u)return 91;
+  if(*steps>=8192u)return 91;
   (*steps)++;*trace=(*trace^pc)*UINT64_C(0x100000001b3);
   uint64_t next=0;(void)next;
   switch(pc){CASES default:return 92;}
@@ -168,10 +168,30 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic):
     for pc in trace:th=((th^pc)*TRACE_PRIME)&MASK
     return regs,flags,[cpu.reg_read(r) for r in UC_REG],cpu.reg_read(x.UC_X86_REG_EFLAGS),[hash_page(cpu.mem_read(p,PAGE)) for p in pages],th,trace
 
-def run(path=None):
-    windows,entry,stop=owned_input(path) if path else synthetic_input()
+def owned_loop_input(path):
+    from tools.pe_probe import PE
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
+    pe=PE(path);base=pe.u64(pe.opt+24)
+    if base!=0x140000000:raise ValueError("Unexpected image base")
+    # Original caller and two nested local calls, through the first complete
+    # nested memory initialization loop. No later transformation is lifted.
+    spans=((0x133f66,0x133f7b),(0x2a9ae0,0x2a9b0d),
+           (0x2838f0,0x28394a),(0x285980,0x2859f3))
+    windows=[(base+a,pe.read_rva(a,b-a)) for a,b in spans]
+    # The code uses register-indirect reads/writes into these bounded pages.
+    # Seed them with synthetic data; no original table contents are exported.
+    extra=[base+rva for rva in (0x32e000,0x32f000,0x584000,0x585000)]
+    return windows,base+spans[0][0],base+spans[-1][1],extra
+
+def run(path=None,original_loop=False):
+    if original_loop:
+        if not path:raise ValueError("Original loop requires owned executable")
+        windows,entry,stop,extra=owned_loop_input(path)
+    else:
+        windows,entry,stop=owned_input(path) if path else synthetic_input()
+        extra=[]
     code,static_pages,nodes=decode_cfg(windows,entry,stop)
-    pages=sorted(set(static_pages+[STACK]))
+    pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
     parts=["#define NP %du\n#define BASES {%s}\n"%(len(pages),",".join(map(u,pages))),RUNTIME,EXTRA,code,"int smoke(void){"]
     lengths=[];covered=set()
@@ -190,8 +210,10 @@ def run(path=None):
         for i,h in enumerate(hashes):parts.append("if(hash_page(s.mem[%d])!=%s)return %d;"%(i,u(h),50+i))
         parts.append("}")
     parts.append("return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif")
+    if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
+        raise ValueError("Original loop coverage incomplete")
     compile_native("\n".join(parts))
-    print(json.dumps({"mode":"private_owned_original_cfg" if path else "public_synthetic_cfg",
+    print(json.dumps({"mode":"private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
         "pc_trace_hash_and_length_matched":True,"registers":16,
@@ -201,4 +223,5 @@ def run(path=None):
 if __name__=="__main__":
     p=argparse.ArgumentParser();g=p.add_mutually_exclusive_group(required=True)
     g.add_argument("--source-only",action="store_true");g.add_argument("--owned-exe",type=Path)
-    run(p.parse_args().owned_exe)
+    p.add_argument('--original-loop',action='store_true')
+    args=p.parse_args();run(args.owned_exe,args.original_loop)
