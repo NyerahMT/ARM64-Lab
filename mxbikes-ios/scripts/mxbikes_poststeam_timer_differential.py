@@ -195,7 +195,36 @@ def test_host_and_aarch64(expected):
             raise RuntimeError("AArch64 compiled timer state check did not return")
         return result
 
+def verify_handoff_contract():
+    """Reject stale original RVA / native source / iOS integration mappings."""
+    contract=json.loads((ROOT/"contracts"/"poststeam-timer-v1.json").read_text())
+    ref=contract["reference"]
+    translated=contract["translation"]
+    ios=contract["ios"]
+    if (contract["schema"]!=1 or contract["original_exe_sha256"]!=SHA
+        or int(ref["input_rva"],16)!=BEGIN
+        or int(ref["continuation_rva"],16)!=END
+        or int(ref["guest_memory_writes"][0]["image_rva"],16)!=GUEST_GLOBAL
+        or ref["original_instruction_count"]!=3
+        or translated["entry_symbol"]!="mxb_poststeam_timer_apply"):
+        raise RuntimeError("Stale x64-to-AArch64 original timer contract")
+    for path in (
+        translated["header"],translated["source"],
+        ios["xcodegen"],ios["bridging_header"],ios["app_source"],
+    ):
+        if not (ROOT/path).is_file():
+            raise RuntimeError("Missing native/iOS contract file: "+path)
+    xcodegen=(ROOT/ios["xcodegen"]).read_text()
+    bridge=(ROOT/ios["bridging_header"]).read_text()
+    swift=(ROOT/ios["app_source"]).read_text()
+    if (translated["source"] not in xcodegen
+        or "mxb_poststeam_timer_native.h" not in bridge
+        or "mxb_poststeam_timer_apply(&state)" not in swift):
+        raise RuntimeError("Native ARM64 translation is not integrated into iOS prototype")
+    return contract
+
 def run(executable=None,report=None):
+    verify_handoff_contract()
     if executable is not None:
         expected=original_x64_expected(executable)
         mode="original_x64_SHA_pinned_private_oracle"
