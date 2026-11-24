@@ -174,6 +174,20 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt=write(ins,op[0],value)
         elif mn=="lea" and len(op)==2 and op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM:
             stmt=write(ins,op[0],addr(ins,op[1]))
+        elif mn in ("rol","ror") and len(op)==2 and op[0].type==CS_OP_REG and op[0].size==8 and op[1].type==CS_OP_IMM:
+            count=op[1].imm&63
+            if count:
+                if mn=="rol":
+                    rotated=f"((v<<{count}u)|(v>>{64-count}u))"
+                    carry="(result&1u)"
+                    overflow="((result>>63)^carry)"
+                else:
+                    rotated=f"((v>>{count}u)|(v<<{64-count}u))"
+                    carry="(result>>63)"
+                    overflow="((result>>63)^((result>>62)&1u))"
+                stmt=("{uint64_t v="+read(ins,op[0])+",result="+rotated+",carry="+carry+";"
+                      +write(ins,op[0],"result")+"s->flags=(s->flags&~UINT64_C(1))|carry;"
+                      +(f"s->flags=(s->flags&~UINT64_C(0x800))|(({overflow})<<11);" if count==1 else "")+"}")
         elif mn in ("inc","dec") and len(op)==1 and op[0].type==CS_OP_MEM and op[0].size in (4,8):
             n=op[0].size;address=addr(ins,op[0]);operation="add" if mn=="inc" else "sub"
             stmt=(f"{{uint64_t ea={address};"
@@ -260,7 +274,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             next_pc=u(target);edges=[target]
             if in_code(nxt) or nxt in frontiers:edges.append(nxt)
             if target in imports:import_returns[target].add(nxt)
-        elif mn=="ret" and not op:
+        elif mn in ("ret","repz ret","rep ret") and not op:
             stmt="next=load(s,s->r[4],8u);s->r[4]+=8u;"
             next_pc="next";edges=[]
         elif mn=="jmp" and len(op)==1 and op[0].type==CS_OP_IMM:

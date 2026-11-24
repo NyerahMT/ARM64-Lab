@@ -6,11 +6,13 @@ def init_static_refs(pe):
     base=pe.u64(pe.opt+24)
     d=Cs(CS_ARCH_X86,CS_MODE_64);d.detail=True
     refs=set()
-    for i in d.disasm(pe.read_rva(0x133e80,0x133efb-0x133e80),base+0x133e80):
-        if i.mnemonic=="lea":continue
-        for op in i.operands:
-            if op.type==X86_OP_MEM and i.reg_name(op.mem.base)=="rip":
-                refs.add((i.address+i.size+op.mem.disp,op.size))
+    for start,end in ((0x133e80,0x133efb),(0x133640,0x13366e),(0x133c9a,0x133cb5),
+                      (0x2aae60,0x2aae76),(0x130580,0x1305ae)):
+        for i in d.disasm(pe.read_rva(start,end-start),base+start):
+            if i.mnemonic=="lea":continue
+            for op in i.operands:
+                if op.type==X86_OP_MEM and i.reg_name(op.mem.base)=="rip":
+                    refs.add((i.address+i.size+op.mem.disp,op.size))
     return sorted(refs)
 
 def prepare_data(pe,destination):

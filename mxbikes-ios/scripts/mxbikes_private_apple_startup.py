@@ -272,6 +272,13 @@ def prepare_startup(executable: Path, destination: Path):
     cwd_prefix=unit(pe.read_rva(0x136769,3),0x136769,0x13676c,"cwd_prefix")
     game_handoff=unit(pe.read_rva(0x136772,0x136784-0x136772),0x136772,0x133e80,"game_handoff")
     init_body=unit(pe.read_rva(0x133e80,0x133efb-0x133e80),0x133e80,0x133640,"init_body")
+    # The empty command-line path takes the original short branch. Keep
+    # nonempty command-line and security-failure branches as explicit stops.
+    subinit=region("subinit",((0x133640,0x13366e),(0x133c9a,0x133cb5),(0x2aae60,0x2aae76)),
+                   0x133640,base+0x133efb,(0x13366e,0x2aae76,0x2aae7a))
+    platform_handoff=unit(pe.read_rva(0x133efb,0x133f08-0x133efb),0x133efb,0x130580,"platform_handoff")
+    platform_prefix=unit(pe.read_rva(0x130580,0x1305ae-0x130580),0x130580,0x2aaebc,"platform_prefix")
+    check_import(0x2aaebc,"jmp","fopen")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -602,6 +609,18 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     continuation_status=init_body_resume(&p->cpu,&c,64);p->pc=c.pc;
     if(continuation_status||c.pc!=GAME_SUBINIT_PC||p->cpu.fault)return 0;
     p->instructions+=c.steps;
+    c=subinit_begin();
+    continuation_status=subinit_resume(&p->cpu,&c,64);p->pc=c.pc;
+    if(continuation_status||c.pc!=GAME_SUBINIT_RETURN||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
+    c=platform_handoff_begin();
+    continuation_status=platform_handoff_resume(&p->cpu,&c,16);p->pc=c.pc;
+    if(continuation_status||c.pc!=PLATFORM_INIT_PC||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
+    c=platform_prefix_begin();
+    continuation_status=platform_prefix_resume(&p->cpu,&c,16);p->pc=c.pc;
+    if(continuation_status||c.pc!=FOPEN_THUNK_PC||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
     return 1;
 }
 """
@@ -620,10 +639,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
                   ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780,CMDLINE_PC=base+0x2ab131,CMD_PTR_VA=cmd_ptr,WINMAIN_PC=base+0x136710,IMAGE_BASE=base,ASCII_CALL=base+0x2ab1ce,ASCII_RETURN=base+0x2ab1d4,ASCII_SLOT=base+ascii_slot,ASCII_VALUE=int.from_bytes(pe.read_rva(ascii_slot,8),'little'))
-    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80,GAME_SUBINIT_PC=base+0x133640)
+    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80,GAME_SUBINIT_PC=base+0x133640,GAME_SUBINIT_RETURN=base+0x133efb,PLATFORM_INIT_PC=base+0x130580,FOPEN_THUNK_PC=base+0x2aaebc)
     runner=re.sub(r'\b(?:'+ '|'.join(map(re.escape,fields)) + r')\b',lambda m:u(fields[m[0]]),runner)
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+init_body+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+init_body+subinit+platform_handoff+platform_prefix+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
