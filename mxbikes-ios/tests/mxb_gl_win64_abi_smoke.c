@@ -1,7 +1,13 @@
 #include "mxb_gl_win64_abi.h"
-#include <math.h>
 #include <stdint.h>
+#ifdef MXB_FREESTANDING_TEST
+/* The cross-architecture test links its own bounded test-only libc shim. */
+#define fabsf __builtin_fabsf
+extern void *memcpy(void *,const void *,size_t);
+#else
+#include <math.h>
 #include <string.h>
+#endif
 
 #define HEAP UINT64_C(0x650000000)
 #define STACK UINT64_C(0x720000000)

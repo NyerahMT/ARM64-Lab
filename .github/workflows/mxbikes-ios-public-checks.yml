@@ -112,6 +112,11 @@ jobs:
           set -euo pipefail
           python tests/mxb_gl_win64_unicorn_import_test.py
           python tests/mxb_gl_win64_indexed_guest_test.py
+      - name: Execute full Win64 graphics ABI fixture as native AArch64 ELF
+        run: |
+          set -euo pipefail
+          python tests/mxb_gl_native_arm64_test.py
+          echo "Native AArch64 renderer and Win64 ABI fixture executed under Unicorn; no original game code or assets." >> "$GITHUB_STEP_SUMMARY"
       - name: Cross-compile native renderer and guest adapter for ARM64
         run: |
           set -euo pipefail
