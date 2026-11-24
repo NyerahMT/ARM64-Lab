@@ -63,5 +63,15 @@
     "synthetic_steam_research_is_not_license_verification": true,
     "next_untranslated_call_rva": "0x133f76",
     "original_renderer_has_not_executed": true
+  },
+  "evidence": {
+    "original_exe_verification": "sha256_pinned_private_original_binary",
+    "original_x64_vs_native_aarch64_differential_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45302204365",
+    "original_x64_reference_cases": 5,
+    "original_x64_instruction_count": 3,
+    "host_and_native_aarch64_guest_state_match": true,
+    "unsigned_iphone_device_and_simulator_build_run": "https://github.com/NyerahMT/ARM64-Lab/actions/runs/45302192984",
+    "app_signed_or_run_on_device": false,
+    "native_game_engine_joined": false
   }
 }
