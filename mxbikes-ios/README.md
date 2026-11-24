@@ -1,11 +1,11 @@
 # MX Bikes iOS — main ARM64-Lab development workspace
 
-**Canonical source:** `NyerahMT/ARM64-Lab` `main`, `mxbikes-ios/`. All MX Bikes development continues here; the private `ReflexBuildInput` repo stores user-owned game files and is not our working source tree.
+**Canonical source:** `NyerahMT/ARM64-Lab` `main`, `mxbikes-ios/`. The current continuous native startup development is on `feat/mxb-offline-relaunch-experiment-20261122`; the private `ReflexBuildInput` repo stores user-owned game files and is not our working source tree.
 
 Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering project.
 **Not affiliated with or endorsed by PiBoSo, Valve or Apple.**
 
-## Status (October 27, 2026)
+## Status (November 24, 2026)
 
 - The SHA-pinned original MX Bikes executable has executed in a **private**
   Linux/x64-emulator and AArch64 testing environment through original CRT
@@ -18,6 +18,39 @@ Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering pr
 - This public snapshot includes the authored source, tests, documentation
   and iOS Metal renderer, **not** the commercial executable, DLLs,
   tracks, game packages, textures or original game release archives.
+
+### Continuous native startup checkpoint
+
+On the development branch, the private owned-input ARM64 differential now starts
+at the original executable entry, completes CRT initialization, enters the
+original WinMain, runs the actual filename and game initialization routines,
+and executes the original file-reading/checksum loop through the first Steam
+import CALL at guest VA `0x1401306ed`.
+
+- Native ARM64 differential: [8 cases passed](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45446609357).
+- Last case: 4,266,965 dynamic original instruction steps (mostly repeated
+  checksum-loop instructions), 288 modeled CRT/Win32 service calls, 251
+  actual reads of 250,656 owned DLL bytes.
+- Original x64 and native ARM64 agree on all general-purpose registers, 16 XMM
+  registers, flags, full guest stack, selected object/globals and file state.
+- Private data image: six non-executable ranges totaling 14,299,136 bytes,
+  with a 128 KiB guest stack. No original x64 instruction pages mapped in the
+  iOS native runtime.
+- The installed iOS simulator has separately passed the earlier continuous
+  1,254-instruction checkpoint at guest VA `0x1402aaebc`:
+  [private simulator run](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45446067917).
+- Full checksum iOS verification is tracked in
+  [private run 45446771447](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45446771447).
+
+The Steam call is not executed or simulated. Publisher-supported entitlement
+and platform integration remain unresolved. No original main menu or frame
+has been rendered. Dynamic instruction totals measure executed steps, not
+unique translated instructions or percentage of the game.
+
+Private build generation now requires the original `mxbikes.exe` and its
+matching original `steam_api64.dll` in the same private input directory.
+Generated original data and compiled game-specific artifacts must remain
+private. The DLL bytes are read as immutable data, never executed.
 
 ## Layout
 
