@@ -142,7 +142,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
         if len(found)!=1:raise ValueError("Unapproved direct target "+hex(pc))
         base,buf=found[0]
         ins=next(decoder.disasm(buf[pc-base:],pc,count=1),None)
-        if ins is None:raise ValueError("Decode failed")
+        if ins is None:raise ValueError("Decode failed at "+hex(pc))
         if any(a<pc<b or pc<a<pc+ins.size for a,(_,b) in nodes.items()):
             raise ValueError("Overlapping instruction boundaries")
         op=ins.operands;mn=ins.mnemonic;nxt=pc+ins.size

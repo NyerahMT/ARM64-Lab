@@ -222,7 +222,7 @@ def prepare_startup(executable: Path, destination: Path):
     # Compile every local parser branch. Pause at the original CRT call and
     # resume at its actual return PC using the same persistent cursor.
     scan_windows=[(base+a,pe.read_rva(a,b-a)) for a,b in
-                  ((0x2ab131,0x2ab18b),(0x2ab1b9,0x2ab1ce),(0x2ab1d4,0x2ab1ea))]
+                  ((0x2ab131,0x2ab18b),(0x2ab1b9,0x2ab1ce),(0x2ab1d4,0x2ab1ed))]
     scan_code,_,_=decode_cfg(scan_windows,base+0x2ab131,base+0x136710,
                             alternate_stops=(base+0x2ab1ce,),
                             additional_entries=(base+0x2ab1d4,))
