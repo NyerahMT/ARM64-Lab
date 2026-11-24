@@ -4,6 +4,7 @@
 #include "../../runtime/mxb_owned_directory.h"
 #include "../../runtime/mxb_owned_startup.h"
 #include "../../runtime/mxb_guest_crt.h"
+#include "../../runtime/mxb_config_file.h"
 #include "../../runtime/mxb_pe_guest_image.h"
 #include "../../runtime/mxb_native_exec.h"
 #include "../../runtime/mxb_native_dispatch.h"
