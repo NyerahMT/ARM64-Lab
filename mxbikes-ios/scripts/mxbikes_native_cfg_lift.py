@@ -86,6 +86,12 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
         idx,width=REG_INDEX[name]
         if op.size*8!=width:raise ValueError("Register width mismatch")
         return idx,width
+    def xmm(ins,op):
+        if op.type!=CS_OP_REG:raise ValueError("Expected XMM register")
+        name=ins.reg_name(op.reg)
+        if not name.startswith("xmm") or not name[3:].isdigit() or not 0<=int(name[3:])<16:
+            raise ValueError("Unsupported vector register "+name)
+        return int(name[3:])
     def addr(ins,op):
         m=op.mem
         if (gs_base is not None and ins.reg_name(m.segment)=="gs" and not m.index
@@ -126,7 +132,21 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             raise ValueError("Overlapping instruction boundaries")
         op=ins.operands;mn=ins.mnemonic;nxt=pc+ins.size
         edges=[nxt];next_pc=u(nxt);stmt=""
-        if mn in ("mov","movabs") and len(op)==2:
+        if mn=="xorps" and len(op)==2 and all(o.type==CS_OP_REG for o in op):
+            dst,src=xmm(ins,op[0]),xmm(ins,op[1])
+            stmt=f"s->xmm[{dst}][0]^=s->xmm[{src}][0];s->xmm[{dst}][1]^=s->xmm[{src}][1];"
+        elif mn=="movss" and len(op)==2:
+            if op[0].type==CS_OP_MEM and op[0].size==4 and op[1].type==CS_OP_REG:
+                src=xmm(ins,op[1]);stmt=write(ins,op[0],f"s->xmm[{src}][0]&UINT64_C(0xffffffff)")
+            elif op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM and op[1].size==4:
+                dst=xmm(ins,op[0]);address=addr(ins,op[1])
+                stmt=(f"{{uint64_t v=load(s,{address},4);if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
+                      f"s->xmm[{dst}][0]=v;s->xmm[{dst}][1]=0;}}")
+            elif op[0].type==op[1].type==CS_OP_REG:
+                dst,src=xmm(ins,op[0]),xmm(ins,op[1])
+                stmt=f"s->xmm[{dst}][0]=(s->xmm[{dst}][0]&UINT64_C(0xffffffff00000000))|(s->xmm[{src}][0]&UINT64_C(0xffffffff));"
+            else:raise ValueError("Unsupported scalar SSE move at "+hex(pc))
+        elif mn in ("mov","movabs") and len(op)==2:
             stmt=write(ins,op[0],read(ins,op[1]))
         elif mn in ("movsx","movsxd","movzx") and len(op)==2 and op[0].type==CS_OP_REG:
             _,width=reg(ins,op[0]);src_width=op[1].size*8
@@ -155,10 +175,12 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
                   "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
                   f"uint64_t v=load(s,ea,{n});v={mn}_flags(s,v,{operand},{n*8}u);"
                   f"store(s,ea,v,{n});}}")
-        elif mn=="and" and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size==4 and op[1].type==CS_OP_IMM:
-            address=addr(ins,op[0])
-            stmt=("{uint64_t v=load(s,%s,4);if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
-                  "store(s,%s,logic_flags(s,v&%s,32),4);}")%(address,address,u(op[1].imm))
+        elif mn in ("and","or") and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size==4 and op[1].type==CS_OP_IMM:
+            address=addr(ins,op[0]);operator="&" if mn=="and" else "|"
+            stmt=(f"{{uint64_t ea={address};"
+                  "if(!mxb_guest_check(&s->memory,ea,4,MXB_MEM_READ|MXB_MEM_WRITE))"
+                  "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
+                  f"uint64_t v=load(s,ea,4);store(s,ea,logic_flags(s,v{operator}{u(op[1].imm)},32),4);}}")
         elif mn in ("xor","sub","add","and","or") and len(op)==2 and op[0].type==CS_OP_REG:
             _,width=reg(ins,op[0]);a=read(ins,op[0]);b=read(ins,op[1])
             v=("%s_flags(s,%s,%s,%du)"%(mn,a,b,width) if mn in ("xor","sub","add")
