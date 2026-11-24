@@ -18,6 +18,9 @@ targets:
           - Info.plist
           - Bridge.h
       - path: runtime/mxb_gl_surface.c
+      - path: runtime/mxb_poststeam_timer_native.c
+      - path: runtime/mxb_poststeam_timer_native.h
+        buildPhase: headers
       - path: runtime/mxb_gl_win64_abi.c
       - path: runtime/mxb_gl_texture.c
       - path: runtime/mxb_gl_texture.h
