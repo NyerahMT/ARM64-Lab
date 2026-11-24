@@ -90,6 +90,17 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_crt_zero_memmove.py -v
           python -m unittest discover -s tests -p test_mxbikes_crt_followup_heap_memset.py -v
           python -m unittest discover -s tests -p test_mxbikes_crt_small_memcpy.py -v
+      - name: Differential-check original post-Steam timer semantics on host and AArch64
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_poststeam_timer_differential.py --source-only
+          echo "Public fixture: source-only timer semantics, NOT original x64 proof." >> "$GITHUB_STEP_SUMMARY"
+      - name: Build native post-Steam timer translator for iOS ARM64 Mach-O target
+        run: |
+          set -euo pipefail
+          clang --target=arm64-apple-ios17.0 -std=c11 -O2 -ffreestanding             -Wall -Wextra -Werror -Iruntime             -c runtime/mxb_poststeam_timer_native.c             -o /tmp/mxb_poststeam_timer_ios_arm64.o
+          file /tmp/mxb_poststeam_timer_ios_arm64.o | grep -E 'Mach-O.*arm64'
+          echo "iOS-target native object compiled; no signed IPA or device boot claimed." >> "$GITHUB_STEP_SUMMARY"
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
