@@ -131,3 +131,77 @@ network I/O until their precise original call arguments and usage
 have been independently inspected.
 
 Evidence: [private original-game getnameinfo test](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45117838100).
+
+
+## Extended original owned-game research frontier — 2026-11-23
+
+After the earlier Windows CRT, Winsock, and Steam research gates, new
+original-game private runs were pinned to individual commits and traced
+additional authentic original x64 blocks. Only the personally owned SHA-pinned
+binary, original Steam DLL, and original `core.ini` were read in private
+Actions; all public source, synthetic tests, and CI logs are metadata-only.
+
+### Original file/configuration behavior
+
+- Original `MSVCR90!fopen("core.ini","rb")`, original call RVA
+  `0x157AF4`. Original ZIP contains exactly one **root** `core.ini`,
+  179 bytes. Its exact original 179-byte payload was read by the original
+  x64 guest using a dedicated read-only CRT stream and separate guest handle.
+- Original `KERNEL32!CreateFileA("core.ini")` at `0x1578C2` requested
+  `GENERIC_READ | FILE_SHARE_READ | OPEN_EXISTING`; an independent
+  Win32 read-only guest handle was returned, with no host Windows API calls.
+- Original `KERNEL32!GetFileTime` at `0x1578DD` requested only the
+  last-write FILETIME output. Original archive ZIP metadata lists
+  `2026-06-08 03:02:04`, a timezone-naive ZIP timestamp. On the
+  isolated temporary copy we explicitly interpret that ZIP date as UTC,
+  convert it to the 100-ns Windows FILETIME representation, and supply
+  only the last-write field; this does not assert the original NTFS
+  creation, access, or exact timezone provenance.
+- Original `KERNEL32!CloseHandle` at `0x1578E6` closed only the
+  synthetic, independently created Win32 guest core.ini handle.
+
+### Original allocation and memory behavior
+
+- Existing exact CRT import validation was extended to all authentic E8
+  calls entering the **verified** original lazy `MSVCR90!malloc`
+  wrapper at RVA `0x2BD710`. Multiple original allocations, including
+  160, 176, 40, 179, 20, and 296 bytes, have passed with bounded,
+  guest-only pages and explicit allocation/size limits.
+- Six additional original-import-confirmed `memset` calls, totaling
+  **84,384 guest bytes** in repeated 24,928- and 3,200-byte requests,
+  passed guarded writable, non-executable original PE section checks.
+- One original zero-length `MSVCR90!memmove` at RVA `0x15C1AA`
+  returned its guest destination and did not read or write guest bytes.
+- The original 296-byte `memset` at RVA `0x15C1F2` was limited
+  to the exact last 296-byte guest malloc allocation.
+- Three original 4-byte `MSVCR90!memcpy` calls from RVA `0x1599DF`
+  copied only between readable, recorded guest malloc bytes and mapped
+  temporary guest-data memory, without exposing original source contents
+  in logs. A bounded 64-call budget and strict original import provenance
+  remain in place.
+
+### Latest real-game breakpoint
+
+**Next original unsupported service:** another `MSVCR90.dll!sprintf`
+encountered after three verified small `memcpy` calls. Its format string,
+arguments, and original return site are **not yet characterized**, so
+the default research runner intentionally rejects it. No generic,
+unbounded format-string interpreter is included.
+
+Verified private runs:
+- [Original 160-byte guest malloc and repeated allocations](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45289236402)
+- [Read original core.ini through Win64 CRT](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45290070740)
+- [Win32 core.ini CreateFileA](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45290544982)
+- [Last-write FILETIME](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45291263887)
+- [Win32 CloseHandle](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45291426285)
+- [Zero-length memmove and 296-byte allocation](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45291868458)
+- [Original 296-byte heap memset](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45292316083)
+- [Original 4-byte memcpy](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45293338711)
+- [Three original memcpy calls and next sprintf frontier](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45293902782)
+
+**Scope limitation remains unchanged**: no actual Steam subscription
+verification, native iOS game boot, original game OpenGL call, rendered frame,
+menu, or rideable bike. Original Windows x64 instructions run under Unicorn
+in the private diagnostic, with **counterfactual** Steam responses used to
+explore the subsequent original startup code. The compiled original-game
+binary is not being distributed.
