@@ -175,6 +175,58 @@ int main(void){
  mxb_gl_clear_frame(s);
  regs.rdx=65535;regs.r8=3;
  if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_RENDER_REJECTED)return 47;
+ /* Nested modelview and projection stacks, and 2D UI vertices via Win64 ABI. */
+ mxb_gl_reset(s);
+ regs.rcx=MXB_GL_MODELVIEW;
+ if(invoke(s,&mem,&regs,"glMatrixMode")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 48;
+ regs.xmm_low64[0]=bits_f(2);regs.xmm_low64[1]=bits_f(3);regs.xmm_low64[2]=bits_f(0);
+ if(invoke(s,&mem,&regs,"glTranslatef")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 49;
+ regs.xmm_low64[0]=bits_f(2);regs.xmm_low64[1]=bits_f(2);regs.xmm_low64[2]=bits_f(1);
+ if(invoke(s,&mem,&regs,"glScalef")!=MXB_GL_GUEST_OK)return 50;
+ regs.rcx=MXB_GL_PROJECTION;
+ if(invoke(s,&mem,&regs,"glMatrixMode")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_RENDER_REJECTED||
+    invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 51;
+ regs.rcx=MXB_GL_MODELVIEW;
+ if(invoke(s,&mem,&regs,"glMatrixMode")!=MXB_GL_GUEST_OK)return 52;
+ for(unsigned pass=0;pass<3u;pass++){
+  regs.rcx=MXB_GL_TRIANGLES;
+  if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK||
+     invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 53;
+  regs.xmm_low64[0]=bits_f(.25f);regs.xmm_low64[1]=bits_f(.75f);
+  if(invoke(s,&mem,&regs,"glTexCoord2f")!=MXB_GL_GUEST_OK)return 54;
+  float rgba4[4]={.1f,.2f,.3f,.4f};
+  memcpy(mem.heap+64,rgba4,sizeof(rgba4));regs.rcx=HEAP+64;
+  if(invoke(s,&mem,&regs,"glColor4fv")!=MXB_GL_GUEST_OK)return 55;
+  regs.xmm_low64[0]=bits_f(1);regs.xmm_low64[1]=bits_f(1);
+  if(invoke(s,&mem,&regs,"glVertex2f")!=MXB_GL_GUEST_OK)return 56;
+  float xy[2]={0,1};memcpy(mem.heap,xy,sizeof(xy));regs.rcx=HEAP;
+  if(invoke(s,&mem,&regs,"glVertex2fv")!=MXB_GL_GUEST_OK)return 57;
+  regs.xmm_low64[0]=bits_f(0);regs.xmm_low64[1]=bits_f(0);
+  if(invoke(s,&mem,&regs,"glVertex2f")!=MXB_GL_GUEST_OK||
+     invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK)return 58;
+  if(pass<2u&&invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_OK)return 59;
+ }
+ vertices=mxb_gl_vertices(s);
+ if(mxb_gl_vertex_count(s)!=9u||
+    !nearly(vertices[0].position[0],4)||!nearly(vertices[0].position[1],5)||
+    !nearly(vertices[3].position[0],3)||!nearly(vertices[3].position[1],4)||
+    !nearly(vertices[6].position[0],1)||!nearly(vertices[6].position[1],1)||
+    !nearly(vertices[1].position[2],0)||!nearly(vertices[1].uv[1],.75f)||
+    !nearly(vertices[1].color[3],.4f))return 60;
+ if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 61;
+ for(unsigned i=0;i<31u;i++)
+  if(invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 62;
+ if(invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 63;
+ mxb_gl_reset(s);
+ if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 64;
+ regs.rcx=HEAP+127;
+ if(invoke(s,&mem,&regs,"glVertex2fv")!=MXB_GL_GUEST_UNMAPPED_POINTER||
+    invoke(s,&mem,&regs,"glColor4fv")!=MXB_GL_GUEST_UNMAPPED_POINTER)return 65;
  mxb_gl_destroy(s);
  return 0;
 }
