@@ -119,7 +119,7 @@ static uint64_t common_flags(uint64_t v,unsigned width){
  return (parity?0u:4u)|(v?0u:0x40u)|(((v>>(width-1u))&1u)?0x80u:0u);
 }
 static uint64_t xor_flags(State*s,uint64_t a,uint64_t b,unsigned width){
- uint64_t mask=width==32u?UINT64_C(0xffffffff):UINT64_MAX;
+ uint64_t mask=UINT64_MAX>>(64u-width);
  uint64_t v=(a^b)&mask;
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);
  return v;

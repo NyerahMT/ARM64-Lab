@@ -57,6 +57,63 @@ static int scan_string(const MXBGuestMemory *memory,uint64_t start,uint8_t key,
  return 0;
 }
 
+int mxb_guest_file_bind(MXBGuestState*s,const char*name,const uint8_t*bytes,size_t size){
+ if(!s||s->file.bytes||!name||!bytes||!size||size>64u*1024u*1024u)return 0;
+ size_t i=0;
+ for(;i<sizeof(s->file.name);i++){
+  unsigned char v=(unsigned char)name[i];
+  if(!v)break;
+  if(v<32||v>126||v=='/'||v=='\\'||v==':')return 0;
+ }
+ if(!i||i==sizeof(s->file.name))return 0;
+ for(size_t j=0;j<=i;j++)s->file.name[j]=name[j];
+ s->file.bytes=bytes;s->file.length=size;
+ return 1;
+}
+static int guest_string_eq(MXBGuestState*s,uint64_t va,const char*str){
+ for(size_t i=0;i<64;i++){
+  uint8_t v;
+  if(i>UINT64_MAX-va||!mxb_guest_read(&s->memory,va+i,&v,1)||v!=(uint8_t)str[i])return 0;
+  if(!v)return 1;
+ }
+ return 0;
+}
+/* Bounded, read-only data stream. No execution or platform authentication. */
+static enum MXBGuestCRTStatus file_call(MXBGuestState*s,const char*name,uint64_t sp){
+ MXBGuestReadFile*f=&s->file;
+ uint64_t a=s->r[MXB_RCX],b=s->r[MXB_RDX],c=s->r[MXB_R8],d=s->r[MXB_R9],result=0;
+ if(!f->bytes)return MXB_CRT_BAD_ARGUMENT;
+ if(same(name,"fopen")){
+  if(f->open||!guest_string_eq(s,a,f->name)||!guest_string_eq(s,b,"rb"))
+   return MXB_CRT_BAD_ARGUMENT;
+  f->position=0;f->open=1;f->opens++;result=MXB_GUEST_FILE_HANDLE;
+ }else{
+  int read=same(name,"fread");
+  if(!f->open||(read?d:a)!=MXB_GUEST_FILE_HANDLE)return MXB_CRT_BAD_ARGUMENT;
+  if(same(name,"fseek")){
+   int64_t anchor=c==0?0:c==1?(int64_t)f->position:c==2?(int64_t)f->length:-1;
+   int64_t offset=(int64_t)(int32_t)(uint32_t)b;
+   int64_t pos=anchor+offset;
+   if(anchor<0||pos<0||(uint64_t)pos>f->length)result=UINT32_MAX;
+   else f->position=(uint64_t)pos;
+   f->seeks++;
+  }else if(same(name,"ftell")){
+   result=f->position;f->tells++;
+  }else if(read){
+   if((b&&c>MXB_MEM_MAX_TRANSFER/b)||f->position>f->length)return MXB_CRT_BAD_ARGUMENT;
+   uint64_t wanted=b*c,n=f->length-f->position;
+   if(n>wanted)n=wanted;
+   if(n>UINT64_MAX-a||(n&&a<sp+8&&sp<a+n)||n>64u*1024u*1024u-f->total_read)
+    return MXB_CRT_BAD_ARGUMENT;
+   if(n&&!mxb_guest_write(&s->memory,a,f->bytes+f->position,(size_t)n))
+    return MXB_CRT_BAD_MEMORY;
+   f->position+=n;f->total_read+=n;f->reads++;result=b?n/b:0;
+  }else if(same(name,"fclose")){f->open=0;f->closes++;}
+  else return MXB_CRT_UNSUPPORTED;
+ }
+ s->r[MXB_RAX]=result;s->r[MXB_RSP]=sp+8;s->completed_crt_calls++;
+ return MXB_CRT_OK;
+}
 enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
  const char*name,uint64_t expected_return){
  if(!s||s->fault)return MXB_CRT_BAD_ARGUMENT;
@@ -65,7 +122,8 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
  int fill=same(name,"memset"),copy=same(name,"memcpy"),move=same(name,"memmove");
  int allocate=same(name,"malloc"),release=same(name,"free");
  int string_copy=same(name,"strcpy"),find_last=same(name,"strrchr");
- if(!fill&&!copy&&!move&&!allocate&&!release&&!string_copy&&!find_last)return MXB_CRT_UNSUPPORTED;
+ int file=same(name,"fopen")||same(name,"fseek")||same(name,"ftell")||same(name,"fread")||same(name,"fclose");
+ if(!fill&&!copy&&!move&&!allocate&&!release&&!string_copy&&!find_last&&!file)return MXB_CRT_UNSUPPORTED;
  uint64_t sp=s->r[MXB_RSP],n=s->r[MXB_R8],dst=s->r[MXB_RCX],src=s->r[MXB_RDX];
  if(!sp||(sp&15u)!=8u||sp>UINT64_MAX-40u||!expected_return)
   return MXB_CRT_BAD_STACK;
@@ -74,6 +132,7 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
     !mxb_guest_check(&s->memory,sp+8,32,MXB_MEM_WRITE))return MXB_CRT_BAD_STACK;
  for(unsigned i=0;i<8;i++)actual|=(uint64_t)ret[i]<<(8u*i);
  if(actual!=expected_return)return MXB_CRT_BAD_STACK;
+ if(file)return file_call(s,name,sp);
  if(allocate || release){
   if(!s->heap.capacity)return MXB_CRT_BAD_MEMORY;
   if(allocate)s->r[MXB_RAX]=heap_alloc(&s->heap,dst);
@@ -171,5 +230,30 @@ int mxb_guest_crt_smoke(void){
  s.r[MXB_RCX]=32;
  if(mxb_guest_crt_call(&s,"MSVCR90.dll","malloc",resume)!=MXB_CRT_OK ||
     s.r[MXB_RAX]!=base+80)return 0;
+ /* Register actual immutable bytes, validate filename/mode and the complete
+  * guest destination. Reject a second open, invalid handle and unsafe path. */
+ static const uint8_t payload[]={1,2,3,4,5};
+ static const char filename[]="owned.dat",mode[]="rb";
+ if(!mxb_guest_file_bind(&s,filename,payload,sizeof(payload))||
+    mxb_guest_file_bind(&s,"../unsafe",payload,sizeof(payload))||
+    !mxb_guest_write(&s.memory,base,filename,sizeof(filename))||
+    !mxb_guest_write(&s.memory,base+16,mode,sizeof(mode)))return 0;
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=base;s.r[MXB_RDX]=base+16;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","fopen",resume)!=MXB_CRT_OK||
+    s.r[MXB_RAX]!=MXB_GUEST_FILE_HANDLE||!s.file.open)return 0;
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=MXB_GUEST_FILE_HANDLE;s.r[MXB_RDX]=0;s.r[MXB_R8]=2;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","fseek",resume)!=MXB_CRT_OK||s.file.position!=5)return 0;
+ s.r[MXB_RSP]=sp;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","ftell",resume)!=MXB_CRT_OK||s.r[MXB_RAX]!=5)return 0;
+ s.r[MXB_RSP]=sp;s.r[MXB_R8]=0;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","fseek",resume)!=MXB_CRT_OK||s.file.position)return 0;
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=base+63;s.r[MXB_RDX]=1;s.r[MXB_R8]=5;s.r[MXB_R9]=MXB_GUEST_FILE_HANDLE+1;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","fread",resume)!=MXB_CRT_BAD_ARGUMENT||s.file.position)return 0;
+ s.r[MXB_R9]=MXB_GUEST_FILE_HANDLE;s.r[MXB_RCX]=base+28;s.r[MXB_RDX]=2;s.r[MXB_R8]=3;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","fread",resume)!=MXB_CRT_OK||s.r[MXB_RAX]!=2||
+    a[28]!=1||a[31]!=4||b[0]!=5||s.file.position!=5||s.file.total_read!=5)return 0;
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=MXB_GUEST_FILE_HANDLE;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","fclose",resume)!=MXB_CRT_OK||s.file.open||
+    s.file.opens!=1||s.file.seeks!=2||s.file.tells!=1||s.file.reads!=1||s.file.closes!=1)return 0;
  return 1;
 }

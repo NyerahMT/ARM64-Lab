@@ -63,18 +63,19 @@ CONDS={
 }
 EXTRA=r"""
 static uint64_t add_flags(State*s,uint64_t a,uint64_t b,unsigned width){
- uint64_t mask=width==32u?UINT64_C(0xffffffff):UINT64_MAX;
+ uint64_t mask=UINT64_MAX>>(64u-width);
  a&=mask;b&=mask;uint64_t v=(a+b)&mask;
  s->flags=(s->flags&~UINT64_C(0x8d5))|common_flags(v,width)|
    (v<a?1u:0u)|((a^b^v)&0x10u)|(((~(a^b)&(a^v))>>(width-1u))&1u?0x800u:0u);
  return v;
 }
 static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
- v&=width==32u?UINT64_C(0xffffffff):UINT64_MAX;
+ v&=UINT64_MAX>>(64u-width);
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None,register_calls=None,additional_entries=()):
+def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None,register_calls=None,additional_entries=(),dynamic_limit=8192):
+    if not 1<=dynamic_limit<=8000000:raise ValueError('Invalid native dynamic budget')
     imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
     frontiers={stop,*alternate_stops}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
@@ -174,19 +175,34 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt=write(ins,op[0],value)
         elif mn=="lea" and len(op)==2 and op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM:
             stmt=write(ins,op[0],addr(ins,op[1]))
-        elif mn in ("rol","ror") and len(op)==2 and op[0].type==CS_OP_REG and op[0].size==8 and op[1].type==CS_OP_IMM:
-            count=op[1].imm&63
+        elif mn in ("rol","ror","shl","shr") and len(op)==2 and op[0].type==CS_OP_REG and op[0].size in (1,2,4,8) and op[1].type==CS_OP_IMM:
+            width=op[0].size*8
+            mask=u((1<<width)-1)
+            count=op[1].imm&(63 if width==64 else 31)
+            rotate=mn in ("rol","ror")
+            if rotate:count%=width
             if count:
+                if count>=width:raise ValueError("Unsupported shift count at "+hex(pc))
                 if mn=="rol":
-                    rotated=f"((v<<{count}u)|(v>>{64-count}u))"
+                    expr=f"((v<<{count}u)|(v>>{width-count}u))&{mask}"
                     carry="(result&1u)"
-                    overflow="((result>>63)^carry)"
+                    overflow=f"((result>>{width-1})^carry)"
+                elif mn=="ror":
+                    expr=f"((v>>{count}u)|(v<<{width-count}u))&{mask}"
+                    carry=f"(result>>{width-1})"
+                    overflow=f"((result>>{width-1})^((result>>{width-2})&1u))"
+                elif mn=="shl":
+                    expr=f"(v<<{count}u)&{mask}"
+                    carry=f"((v>>{width-count})&1u)"
+                    overflow=f"((result>>{width-1})^carry)"
                 else:
-                    rotated=f"((v>>{count}u)|(v<<{64-count}u))"
-                    carry="(result>>63)"
-                    overflow="((result>>63)^((result>>62)&1u))"
-                stmt=("{uint64_t v="+read(ins,op[0])+",result="+rotated+",carry="+carry+";"
-                      +write(ins,op[0],"result")+"s->flags=(s->flags&~UINT64_C(1))|carry;"
+                    expr=f"v>>{count}u"
+                    carry=f"((v>>{count-1})&1u)"
+                    overflow=f"(v>>{width-1})"
+                stmt=("{uint64_t v="+read(ins,op[0])+",result="+expr+",carry="+carry+";"
+                      +write(ins,op[0],"result")
+                      +("" if rotate else f"s->flags=(s->flags&~UINT64_C(0xc4))|common_flags(result,{width}u);")
+                      +"s->flags=(s->flags&~UINT64_C(1))|carry;"
                       +(f"s->flags=(s->flags&~UINT64_C(0x800))|(({overflow})<<11);" if count==1 else "")+"}")
         elif mn in ("inc","dec") and len(op)==1 and op[0].type==CS_OP_MEM and op[0].size in (4,8):
             n=op[0].size;address=addr(ins,op[0]);operation="add" if mn=="inc" else "sub"
@@ -211,7 +227,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
                   "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
                   f"uint64_t v=load(s,ea,4);store(s,ea,logic_flags(s,v{operator}{u(op[1].imm)},32),4);}}")
         elif mn in ("xor","sub","add","and","or") and len(op)==2 and op[0].type==CS_OP_REG:
-            _,width=reg(ins,op[0]);a=read(ins,op[0]);b=read(ins,op[1])
+            width=op[0].size*8;a=read(ins,op[0]);b=read(ins,op[1])
             v=("%s_flags(s,%s,%s,%du)"%(mn,a,b,width) if mn in ("xor","sub","add")
                else "logic_flags(s,%s%s%s,%du)"%(a,"&" if mn=="and" else "|",b,width))
             stmt=write(ins,op[0],v)
@@ -287,7 +303,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             if slot not in iat or iat[slot][0] not in imports:
                 raise ValueError("Unapproved IAT slot")
             target,continuation=iat[slot]
-            pages.add(slot&~(PAGE-1));import_returns[target].add(continuation)
+            pages.add(slot&~(PAGE-1));import_returns[target].update(continuation if isinstance(continuation,(tuple,list)) else (continuation,))
             slot_value=target if disk_imports is None else disk_imports[slot]
             stmt="next=load(s,%s,8u);if(s->fault||next!=%s)return 97;"%(u(slot),u(slot_value))
             if disk_imports is not None:stmt+="next=%s;"%u(target)
@@ -305,7 +321,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
     for target,name in imports.items():
         continuations=sorted(import_returns[target])
         if not continuations:continue
-        if name not in ("memset","memcpy","memmove","malloc","free","strcpy","strrchr"):raise ValueError("Unsupported native import")
+        if name not in ("memset","memcpy","memmove","malloc","free","strcpy","strrchr","fopen","fseek","ftell","fread","fclose"):raise ValueError("Unsupported native import")
         guard="||".join("next=="+u(a) for a in continuations)
         stmt=("next=load(s,s->r[4],8u);if(s->fault||!(%s))return 97;"
               'if(mxb_guest_crt_call(s,"MSVCR90.dll","%s",next)!=MXB_CRT_OK)return 98;'
@@ -321,7 +337,7 @@ static Cursor lifted_begin(void){
 static int lifted_resume(State*s,Cursor*c,unsigned quota){
  uint64_t pc=c->pc;
  while(pc!=STOP){
-  if(c->steps>=8192u)return MXB_NATIVE_BUDGET;
+  if(c->steps>=DYNAMIC_LIMIT)return MXB_NATIVE_BUDGET;
   if(!quota){c->pc=pc;return MXB_NATIVE_YIELD;}
   quota--;c->steps++;c->trace=(c->trace^pc)*UINT64_C(0x100000001b3);
   c->pc=pc;
@@ -331,7 +347,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
  }
  return 0;
 }
-""".replace("ENTRY",u(entry)).replace("STOP",u(stop)+"".join("&&pc!="+u(a) for a in alternate_stops)).replace("CASES","\n".join(cases))
+""".replace("ENTRY",u(entry)).replace("STOP",u(stop)+"".join("&&pc!="+u(a) for a in alternate_stops)).replace("CASES","\n".join(cases)).replace("DYNAMIC_LIMIT",str(dynamic_limit)+"u")
     return c,sorted(pages),set(nodes)
 
 def synthetic_input():

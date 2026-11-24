@@ -28,9 +28,16 @@ typedef struct {
  unsigned count;
 } MXBGuestHeap;
 typedef struct {
+ const uint8_t *bytes;
+ uint64_t length,position,total_read;
+ unsigned open,opens,seeks,tells,reads,closes;
+ char name[64];
+} MXBGuestReadFile;
+typedef struct {
  uint64_t r[16],flags;
  MXBGuestMemory memory;
  MXBGuestHeap heap;
+ MXBGuestReadFile file;
  unsigned fault;
  /* Persistent Win64 SSE registers, low and high 64-bit lanes. */
  uint64_t xmm[16][2];
