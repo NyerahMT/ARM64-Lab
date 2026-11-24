@@ -17,7 +17,7 @@
     "MOV [RSP+0x20],RSI",
     "PUSH RDI",
     "SUB RSP,0x130",
-    "MOV RAX,[original image cookie RVA 0x3938A0]",
+    "MOV RAX,[original image cookie RVA 0x3928A0]",
     "XOR RAX,RSP",
     "MOV [RSP+0x120],RAX",
     "MOV ESI,EDX",
