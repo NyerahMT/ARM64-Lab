@@ -17,7 +17,7 @@ BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x2ab2ae
+FRONTIER=BASE+0x2ab0ec
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -41,6 +41,14 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
     if(!mxb_pe_map(&p.cpu.memory,file,n,backing,layout.image_size,&layout) ||
        !mxb_guest_map(&p.cpu.memory,0x720000000ULL,p.stack,sizeof(p.stack),3) ||
        !mxb_guest_write(&p.cpu.memory,0x1403928a0ULL,vals+4,8))goto done;
+    uint64_t *fmode=(uint64_t *)((uint8_t *)backing+0x321500);
+    uint64_t *commode=(uint64_t *)((uint8_t *)backing+0x3214f8);
+    *fmode=0x760001000ULL;*commode=*fmode+4;
+    uint32_t inputs[2]={(uint32_t)vals[5],(uint32_t)vals[6]};
+    if(!mxb_guest_write(&p.cpu.memory,0x1403d85bcULL,inputs,4) ||
+       !mxb_guest_write(&p.cpu.memory,0x1403d85b8ULL,inputs+1,4))goto done;
+    p.exception_filter=vals[7];
+    p.file_modes[0]=0x11223344;p.file_modes[1]=0x55667788;
     for(unsigned i=0;i<16;i++)p.cpu.r[i]=regs[i];
     p.cpu.flags=regs[16];p.pc=layout.image_base+layout.entry_rva;
     const mx_clock_source clock={vals,mono,wall,NULL};
@@ -53,6 +61,8 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
        !mxb_guest_read(&p.cpu.memory,0x140e4ada0ULL,regs+23,4))goto done;
     regs[24]=p.app_type;
     if(!mxb_guest_read(&p.cpu.memory,0x1403d801cULL,regs+25,4))goto done;
+    if(!mxb_guest_read(&p.cpu.memory,0x140e4adb0ULL,regs+26,16))goto done;
+    regs[28]=p.file_modes[0];regs[29]=p.file_modes[1];regs[30]=p.exception_filter;
     for(unsigned i=0;i<sizeof(p.stack);i++)stack[i]=p.stack[i];
     ok=1;
 done:
@@ -97,8 +107,8 @@ def run(path):
             regs=[((seed+1)*(i+3)*0x1010101010101)&MASK for i in range(16)]
             regs[4]=STACK+0xc08
             flags=0x202 | (0x8d5 if seed%2 else 0)
-            state=(C.c_uint64*26)(*regs,flags)
-            vals=(C.c_uint64*5)(mono,wall,pid,tid,cookie)
+            state=(C.c_uint64*31)(*regs,flags)
+            vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
             stack=(C.c_uint8*4096)()
             if not replay(raw,len(raw),vals,state,stack):raise ValueError("Native entry failed")
             cpu=Uc(UC_ARCH_X86,UC_MODE_64)
@@ -110,6 +120,8 @@ def run(path):
             cpu.mem_write(teb+0x30,struct.pack("<Q",teb))
             cpu.reg_write(x.UC_X86_REG_GS_BASE,teb)
             cpu.mem_map(STACK,4096)
+            cpu.mem_write(BASE+0x3d85bc,struct.pack("<I",vals[5]))
+            cpu.mem_write(BASE+0x3d85b8,struct.pack("<I",vals[6]))
             cpu.mem_write(COOKIE,struct.pack("<Q",cookie))
             for reg,value in zip(UC_REG,regs):cpu.reg_write(reg,value)
             cpu.reg_write(x.UC_X86_REG_EFLAGS,flags)
@@ -131,30 +143,46 @@ def run(path):
             cpu.mem_map(iterator,4096)
             # Win64 shadow space, then a real x64 indirect call through slot 1.
             cpu.mem_write(iterator,bytes.fromhex("488d6424d8 ff5108"))
-            app_type=0
+            cpu.mem_write(iterator+8,bytes.fromhex("ff15 72000000 488d642428 c3"))
+            cpu.mem_map(0x760001000,4096)
+            cpu.mem_write(0x760001000,struct.pack("<II",0x11223344,0x55667788))
+            app_type=0;exception_filter=vals[7]
             for dll in pe.DIRECTORY_ENTRY_IMPORT:
-                if dll.dll.lower()!=b"msvcr90.dll":continue
                 for symbol in dll.imports:
-                    if symbol.name==b"_initterm_e":
-                        cpu.mem_write(symbol.address,struct.pack("<Q",iterator))
-                    if symbol.name==b"__set_app_type":
-                        pc=service_page+0x200
-                        services[pc]="__set_app_type";cpu.mem_write(pc,b"\xc3")
+                    name=(symbol.name or b"").decode("ascii")
+                    if dll.dll.lower()==b"msvcr90.dll":
+                        if name=="_initterm_e":
+                            cpu.mem_write(symbol.address,struct.pack("<Q",iterator))
+                        if name in ("_fmode","_commode"):
+                            cpu.mem_write(symbol.address,struct.pack("<Q",0x760001000+(4 if name=="_commode" else 0)))
+                    if (dll.dll.lower(),name) in ((b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
+                        pc=service_page+16*len(services)
+                        services[pc]=name;cpu.mem_write(pc,b"\xc3")
                         cpu.mem_write(symbol.address,struct.pack("<Q",pc))
             visited=[];called=[]
             def service(uc,pc,size,context):
-                nonlocal app_type
+                nonlocal app_type,exception_filter
                 if pc==iterator:
                     begin=uc.reg_read(x.UC_X86_REG_RCX);end=uc.reg_read(x.UC_X86_REG_RDX)
                     if end-begin!=24 or struct.unpack("<QQQ",uc.mem_read(begin,24))!=(0,BASE+0x2ab234,BASE+0x2ab714):
                         raise ValueError("Original callback table mismatch")
+                    cpu.mem_write(iterator+0x80,bytes(uc.mem_read(begin+16,8)))
+                    called.append("_initterm_e")
                     return
-                if pc==iterator+5:return
+                if pc in (iterator+8,iterator+14) and uc.reg_read(x.UC_X86_REG_EAX)!=0:
+                    raise ValueError("Original initializer failed")
+                if iterator<=pc<iterator+20:return
                 if pc not in services:
                     visited.append(pc)
                     return
                 name=services[pc];called.append(name);dest=uc.reg_read(x.UC_X86_REG_RCX)
                 if name=="__set_app_type":app_type=dest
+                elif name=="_encode_pointer":
+                    key=struct.unpack("<Q",uc.mem_read(COOKIE,8))[0]
+                    v=dest^key
+                    uc.reg_write(x.UC_X86_REG_RAX,((v<<17)|(v>>47))&MASK)
+                elif name=="SetUnhandledExceptionFilter":
+                    uc.reg_write(x.UC_X86_REG_RAX,exception_filter);exception_filter=dest
                 elif name=="GetStartupInfoA":uc.mem_write(dest,struct.pack("<I",104)+bytes(100))
                 elif name=="GetSystemTimeAsFileTime":uc.mem_write(dest,struct.pack("<Q",filetime))
                 elif name=="QueryPerformanceCounter":
@@ -163,18 +191,16 @@ def run(path):
                     result={"GetCurrentThreadId":tid,"GetCurrentProcessId":pid,"GetTickCount":mono//1000000 & 0xffffffff}
                     uc.reg_write(x.UC_X86_REG_RAX,result[name])
             cpu.hook_add(UC_HOOK_CODE,service)
-            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=140)
+            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=220)
             expected=[cpu.reg_read(reg) for reg in UC_REG]+[
                 cpu.reg_read(x.UC_X86_REG_EFLAGS),cpu.reg_read(x.UC_X86_REG_RIP),len(visited),len(called),
                 *struct.unpack("<QQ",cpu.mem_read(COOKIE,16)),
-                *struct.unpack("<Q",cpu.mem_read(BASE+0xe4ada8,8)),*struct.unpack("<I",cpu.mem_read(BASE+0xe4ada0,4)),app_type,*struct.unpack("<I",cpu.mem_read(BASE+0x3d801c,4))]
-            # The last flag writer on this path is OR, which leaves AF undefined.
-            expected[16] &= ~0x10
-            state[16] &= ~0x10
+                *struct.unpack("<Q",cpu.mem_read(BASE+0xe4ada8,8)),*struct.unpack("<I",cpu.mem_read(BASE+0xe4ada0,4)),app_type,*struct.unpack("<I",cpu.mem_read(BASE+0x3d801c,4)),
+                *struct.unpack("<QQ",cpu.mem_read(BASE+0xe4adb0,16)),*struct.unpack("<II",cpu.mem_read(0x760001000,8)),exception_filter]
             if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,4096)):
                 raise ValueError(f"Original/native process state mismatch in case {seed}")
             if seed==7 and state[20]!=DEFAULT+1:raise ValueError("Collision path missed")
-    print("PASS: 8 original-entry cases, 16 registers, defined flags, stack, lock, phase, cookie pair, service and instruction counts")
+    print("PASS: 8 original-entry cases, 16 registers, defined flags, stack, lock, phase, cookies, exit bounds, modes, filter, service and instruction counts")
 
 
 if __name__=="__main__":

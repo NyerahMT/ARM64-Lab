@@ -111,7 +111,15 @@ the compiled original startup code automatically.
 
 ## Remaining critical path
 
-1. Resume the retained process at the original call to `_initterm_e`, RVA `0x2AB0B6`. The compiled iOS app reached this call directly from entry in 62 original instructions. The adapter provided a 104-byte GUI startup structure and a single-thread guest environment. The original code acquired the free CRT lock, set the initialization phase, and selected the table at RVAs `0x321A88–0x321AA0`. It contains a null slot followed by callbacks at RVAs `0x2AB234` and `0x2AB714`. Connect their execution and preserve error returns. [Installed iOS check and x64 comparisons](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45347716389)
+1. The compiled startup now reaches the original `_initterm` call at RVA
+   `0x2AB0EC`. From the native entry it dispatches both `_initterm_e` callbacks
+   using a modeled MSVCR iterator, verifies their zero returns, and resumes
+   the original caller. The first callback establishes GUI application type,
+   initializes exit-pointer globals and file modes, and runs two local helpers.
+   The second registers its guest exception filter. Exception delivery and
+   binary compatibility with Windows pointer tokens remain unverified.
+   The next initializer table has three non-null callbacks. Connect those
+   to the same process, preserving the existing CRT lock and globals.
 2. Connect native units from more original control-flow regions to a common
    image-backed process state and route actual original imports to verified
    native adapters; don't silently treat unresolved imports as success.
