@@ -22,6 +22,7 @@ from mxbikes_native_slice_lift import (
 MEMORY_RUNTIME=r"""
 #include <stdint.h>
 #include "mxb_guest_memory.h"
+#include "mxb_guest_crt.h"
 typedef MXBGuestState State;
 static uint64_t load(State*s,uint64_t addr,unsigned size){
  uint8_t bytes[8];uint64_t v=0;
@@ -45,7 +46,7 @@ void *memcpy(void *dst,const void *src,unsigned long n){
 }
 #endif
 """
-RUNTIME_SOURCES=("mxb_guest_memory.c",)
+RUNTIME_SOURCES=("mxb_guest_memory.c","mxb_guest_crt.c")
 MAX_STATIC=512
 MAX_DYNAMIC=8192
 TRACE_INIT=0xcbf29ce484222325
@@ -231,7 +232,7 @@ def run(path=None,original_loop=False):
     code,static_pages,nodes=decode_cfg(windows,entry,stop)
     pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
-    parts=[MEMORY_RUNTIME,EXTRA,code,"int smoke(void){","if(!mxb_guest_memory_smoke())return 95;"]
+    parts=[MEMORY_RUNTIME,EXTRA,code,"int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke())return 95;"]
     lengths=[];covered=set()
     for seed in range(1,9):
         regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path)
