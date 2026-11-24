@@ -180,6 +180,16 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
                   "(void)sub_flags(s,s->r[0]&255u,value,8u);"
                   "s->r[7]+=(s->flags&0x400u)?UINT64_MAX:1u;s->r[1]--;"
                   "if(s->flags&0x40u)break;}}")
+        elif mn=="imul" and len(op)==3 and op[0].type==CS_OP_REG and op[0].size in (4,8) and op[2].type==CS_OP_IMM:
+            width=op[0].size*8
+            signed_type=f"int{width}_t"
+            a=read(ins,op[1]);b=read(ins,op[2])
+            stmt=("{__int128 product=(__int128)("+signed_type+")("+a+")*("+signed_type+")("+b+");"
+                  f"uint64_t result=(uint64_t)product&{u((1<<width)-1)};"
+                  f"unsigned overflow=product!=(__int128)({signed_type})result;"
+                  +write(ins,op[0],"result")+"s->flags=(s->flags&~UINT64_C(0x801))|(overflow?0x801u:0u);}")
+        elif mn=="cdqe" and not op:
+            stmt="s->r[0]=(uint64_t)(int64_t)(int32_t)s->r[0];"
         elif mn in ("mov","movabs") and len(op)==2:
             stmt=write(ins,op[0],read(ins,op[1]))
         elif mn in ("movsx","movsxd","movzx") and len(op)==2 and op[0].type==CS_OP_REG:
@@ -231,8 +241,8 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
                   f"v={operation}_flags(s,v,1,{n*8}u);"
                   "s->flags=(s->flags&~UINT64_C(1))|carry;"
                   f"store(s,ea,v,{n});}}")
-        elif mn in ("add","sub") and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size in (4,8) and op[1].type==CS_OP_IMM:
-            n=op[0].size;address=addr(ins,op[0]);operand=u(op[1].imm)
+        elif mn in ("add","sub") and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size in (4,8) and op[1].type in (CS_OP_IMM,CS_OP_REG):
+            n=op[0].size;address=addr(ins,op[0]);operand=read(ins,op[1])
             stmt=(f"{{uint64_t ea={address};"
                   f"if(!mxb_guest_check(&s->memory,ea,{n},MXB_MEM_READ|MXB_MEM_WRITE))"
                   "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
