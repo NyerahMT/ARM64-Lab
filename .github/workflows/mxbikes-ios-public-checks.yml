@@ -148,6 +148,11 @@ jobs:
             brew install xcodegen
           fi
           xcodegen --version
+      - name: Compile and run offscreen Metal shader readback probe when GPU is available
+        run: |
+          set -euo pipefail
+          swiftc tests/mxb_metal_offscreen_probe.swift -framework Metal -o "$RUNNER_TEMP/mxb-metal-readback"
+          "$RUNNER_TEMP/mxb-metal-readback" ios/MXBViewportPrototype/Shader.metal
       - name: Generate actual iOS viewport Xcode project
         run: xcodegen generate --spec project.yml
       - name: Build unsigned iOS Simulator app including native post-Steam timer C
