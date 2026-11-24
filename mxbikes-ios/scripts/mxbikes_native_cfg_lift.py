@@ -271,11 +271,11 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
     final_pc=cpu.reg_read(x.UC_X86_REG_RIP)
     if invalid or final_pc not in {stop,*alternate_stops}:raise ValueError("Reference did not reach frontier")
     if filename_case:
-        path=FILENAME_CASES[seed-1];last=max(path.rfind(b"/"),path.rfind(b"\\\\"))
+        path=FILENAME_CASES[seed-1];last=max(path.rfind(b"/"),path.rfind(bytes([92])))
         if last>=0:
             if final_pc!=stop or cpu.reg_read(x.UC_X86_REG_RAX)!=FILENAME_GLOBAL or cpu.reg_read(x.UC_X86_REG_RSP)!=RSP+0x40:
                 raise ValueError("Original filename helper return contract")
-            if bytes(cpu.mem_read(FILENAME_GLOBAL,last+2))!=path[:last+1]+b"\\x00":
+            if bytes(cpu.mem_read(FILENAME_GLOBAL,last+2))!=path[:last+1]+bytes([0]):
                 raise ValueError("Original directory truncation mismatch")
         elif final_pc not in alternate_stops:raise ValueError("Original no-separator frontier mismatch")
     if imports and import_events!=([crt_case[0]] if crt_case else ["memcpy","memset","memmove"]):raise ValueError("Reference import sequence")
@@ -350,7 +350,7 @@ def owned_crt_input(path,kind):
 
 FILENAME_GLOBAL=0x1403968a0
 FILENAME_CASES=(b"C:\\games\\mxbikes.exe",b"/tmp/mxbikes.exe",b"mixed\\dir/file.exe",
-                b"mxbikes.exe",b"C:\\",b"/",b"",b"high\\x80/dir/file.exe")
+                b"mxbikes.exe",b"C:"+bytes([92]),b"/",b"",b"high"+bytes([128])+b"/dir/file.exe")
 def owned_filename_input(path):
     from tools.pe_probe import PE
     if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
@@ -424,7 +424,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
     lengths=[];covered=set();case_parts=[];endpoints=[];prefix_length=len(parts)
     for seed in range(1,9):
         case_start=len(parts)
-        patches={RSP+0x38:struct.pack('<Q',stop),FILENAME_GLOBAL:FILENAME_CASES[seed-1]+b'\\x00'} if original_filename else {}
+        patches={RSP+0x38:struct.pack("<Q",stop),FILENAME_GLOBAL:FILENAME_CASES[seed-1]+bytes([0])} if original_filename else {}
         regs,flags,out,of,hashes,th,trace,endpoint=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions,alternate_stops,patches,original_filename)
         endpoints.append(endpoint)
         lengths.append(len(trace));covered.update(trace)
