@@ -40,7 +40,8 @@ struct MXBViewportPrototypeApp: App {
                 to: docs.appendingPathComponent("mxb-compiled-startup.txt"), options: .atomic)
         }
         if ProcessInfo.processInfo.arguments.contains("--native-selftest") {
-            let passed = mxb_native_probe_smoke() == 1 &&
+            let passed = mxb_config_file_smoke() == 1 &&
+                         mxb_native_probe_smoke() == 1 &&
                          mxb_poststeam_joined_synthetic_smoke() == 1 &&
                          nativePostSteamTimerSmoke()
             let marker = passed ? "PASS: synthetic generated native runtime" :
