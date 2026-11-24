@@ -25,20 +25,19 @@ private func nativePostSteamTimerSmoke() -> Bool {
 // Native renderer lab only; the original MX Bikes engine is not running.
 @main
 struct MXBViewportPrototypeApp: App {
+    private let session: NativeSession
+
     init() {
+        let launched = NativeSession()
+        session = launched
         // Explicit CI-only runtime marker: a successful simulator launch must
         // actually call the linked generated native module, not merely build.
-        if ProcessInfo.processInfo.arguments.contains("--owned-directory-selftest"),
+        if ProcessInfo.processInfo.arguments.contains("--compiled-startup-selftest"),
            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let marker = docs.appendingPathComponent("mxb-owned-result.txt")
-            do {
-                let image = try OwnedImage.read(docs.appendingPathComponent("mxbikes.exe"))
-                let passed = image.directory == "C:\\MX Bikes\\" && image.plan.section_count == 7 &&
-                    image.startupPC == 0x1402ab02c && image.startupServices == 5 && image.startupSteps == 40
-                try Data((passed ? "PASS" : "FAIL").utf8).write(to: marker, options: .atomic)
-            } catch {
-                try? Data("FAIL".utf8).write(to: marker, options: .atomic)
-            }
+            let passed = launched.result == 1 && launched.pc == 0x1402ab02c &&
+                         launched.services == 5 && launched.instructions == 40
+            try? Data((passed ? "PASS" : "FAIL").utf8).write(
+                to: docs.appendingPathComponent("mxb-compiled-startup.txt"), options: .atomic)
         }
         if ProcessInfo.processInfo.arguments.contains("--native-selftest") {
             let passed = mxb_native_probe_smoke() == 1 &&
@@ -57,25 +56,15 @@ struct MXBViewportPrototypeApp: App {
             ZStack(alignment: .bottom) {
                 NativeMetalSurface().ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Native Metal surface").font(.headline)
-                    OwnedImageView()
-                    Text("Original MX Bikes engine not connected").font(.caption)
-                    Text(mxb_poststeam_joined_synthetic_smoke() == 1
-                         ? "Native timer → helper entry: synthetic check passed"
-                         : "Native timer → helper entry: synthetic check failed")
-                        .font(.caption2)
-                    Text(mxb_native_probe_smoke() == 1
-                         ? "Generated native CPU → CRT → guest memory: synthetic check passed"
-                         : "Generated native CPU → CRT → guest memory: synthetic check failed")
-                        .font(.caption2)
-                    Text(nativePostSteamTimerSmoke()
-                         ? "Native post-Steam timer: synthetic state check passed"
-                         : "Native post-Steam timer: synthetic state check failed")
-                        .font(.caption2)
-                    Text(ProcessInfo.processInfo.arguments.contains("--renderer-probe-only")
-                         ? "SYNTHETIC GPU TEST — NOT MX BIKES"
-                         : "Awaiting authentic game graphics commands")
-                        .font(.caption2)
+                    Text("MX Bikes · Native development build").font(.headline)
+                    if session.result == 1 {
+                        Text("Startup reached " + String(format: "0x%llX", session.pc))
+                        Text("\(session.instructions) instructions · \(session.services) host calls")
+                    } else if session.result == -1 {
+                        Text("Renderer development build")
+                    } else {
+                        Text("Native startup failed")
+                    }
                 }
                 .foregroundStyle(.white)
                 .padding(14)

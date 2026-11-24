@@ -44,7 +44,9 @@ int mxb_owned_startup(MXBOwnedStartup *p,const MXBGuestMemory *image,uint64_t en
     mx_import_runtime runtime={&clock,write_guest,&p->cpu.memory,NULL,process_id,thread_id};
     return mxb_private_startup(p,&runtime) && !clock_failed;
 }
+#include "private/mxb_launch.inc"
 #else
+int mxb_native_launch(MXBOwnedStartup *p){(void)p;return -1;}
 int mxb_owned_startup(MXBOwnedStartup *p,const MXBGuestMemory *image,uint64_t entry){
     (void)p;(void)image;(void)entry;
     return -1;

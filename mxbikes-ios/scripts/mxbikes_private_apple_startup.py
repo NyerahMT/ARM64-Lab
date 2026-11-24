@@ -26,6 +26,7 @@ def prepare_startup(executable: Path, destination: Path):
     child,metadata=translate_crt_cfg(pe.read_rva(callee,179),callee,slots,base)
     if metadata["decoded_instructions"]!=39 or len(metadata["imports"])!=5:
         raise ValueError("Incomplete first initializer")
+    mappings=[]
     checks=[]
     for item in metadata["imports"]:
         site=int(item["rva"],16)
@@ -33,6 +34,9 @@ def prepare_startup(executable: Path, destination: Path):
         if call[:2]!=b"\xff\x15":raise ValueError("Expected original indirect CALL")
         slot=site+6+struct.unpack_from("<i",call,2)[0]
         value=struct.unpack("<Q",pe.read_rva(slot,8))[0]
+        index=len(checks)
+        mappings.append(f"p->import_values[{index}]={u(value)};")
+        mappings.append(f"if(!mxb_guest_map(&memory,{u(base+slot)},(uint8_t *)&p->import_values[{index}],8,MXB_MEM_READ))return 0;")
         checks.append(f"if(load(&p->cpu,{u(base+slot)},8)!={u(value)} || p->cpu.fault)return 0;")
     def unit(code,address,stop,name):
         body,_,_=decode_cfg([(base+address,code)],base+address,base+stop)
@@ -82,3 +86,17 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
     (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+child+runner)
+
+    values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
+    launcher=[
+        "int mxb_native_launch(MXBOwnedStartup *p){",
+        "if(!p || p->pc)return 0;",
+        "MXBGuestMemory memory={0};",
+        f"static const uint8_t initial[16]={{{values}}};",
+        "for(unsigned i=0;i<16;i++)p->initial_globals[i]=initial[i];",
+        f"if(!mxb_guest_map(&memory,{u(base+0x3928a0)},p->initial_globals,16,MXB_MEM_READ|MXB_MEM_WRITE))return 0;",
+        *mappings,
+        f"return mxb_owned_startup(p,&memory,{u(base+entry)});",
+        "}",
+    ]
+    (destination/"mxb_launch.inc").write_text("\n".join(launcher)+"\n")

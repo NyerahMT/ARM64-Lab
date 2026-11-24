@@ -69,17 +69,19 @@ runner started the simulator during compilation and required a fresh marker.
 
 ## Owned iOS startup checkpoint
 
-The private build accepts the SHA-256-pinned original from Files, maps its
-seven sections, and begins at its actual PE entry, RVA `0x2AB31C`. The
+The private build translates the SHA-256-pinned Windows binary ahead of time.
+The app starts its linked ARM64 entry routine directly. Five import values and
+16 bytes of initial globals are compiled into the startup module. The Windows
+executable is a build-time input only. Its original entry is RVA `0x2AB31C`. The
 generated ARM64 code enters the original first CRT initializer, calls five
 host-backed time and identity services, returns through the original entry
-wrapper, and tail-jumps to RVA `0x2AB02C`. The app retains the mapped image,
-guest registers and 4 KiB stack at this boundary. The default original
+wrapper, and tail-jumps to RVA `0x2AB02C`. The app retains startup globals,
+guest registers and a 4 KiB stack at this boundary. The default original
 cookie path takes 40 original instructions. The host services use the
 platform's realtime clock, monotonic clock, process ID and thread ID.
 [Private installed-simulator pass and unsigned device build](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45343653469)
 
-A separate directory diagnostic in the same mapped image runs the original
+A separate build-machine directory diagnostic against a mapped image runs the original
 caller and complete helper with a virtual Windows executable path. Eight
 x64/native cases exercised all 53 original instructions and both CRT imports,
 including no separator, drive-relative paths, multiple colons and a high-bit
@@ -104,8 +106,8 @@ startup using identical time/identity observations, including a cookie
 collision. It checks all 16 general registers, flags, PC, stack bytes,
 both cookie globals and call/instruction counts. The Apple build command
 writes private generated C in the ignored `runtime/private` directory.
-The public build can load the original PE; the private build additionally
-links its original startup and directory routines.
+The public build provides the renderer harness. The private build launches
+the compiled original startup code automatically.
 
 ## Remaining critical path
 
