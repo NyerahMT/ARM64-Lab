@@ -17,7 +17,7 @@ BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x2bbdcf
+FRONTIER=BASE+0x320790
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -162,7 +162,7 @@ def run(path):
             cpu.mem_write(0x760001000,struct.pack("<II",0x11223344,0x55667788))
             plain_iterator=iterator+0x100
             cpu.mem_write(plain_iterator,bytes.fromhex("488d6424d8 ff5108"))
-            cpu.mem_write(plain_iterator+8,bytes.fromhex("ff15 72000000"))
+            cpu.mem_write(plain_iterator+8,bytes.fromhex("ff15 72000000 ff15 74000000"))
             handlers=[]
             app_type=0;exception_filter=vals[7]
             for dll in pe.DIRECTORY_ENTRY_IMPORT:
@@ -181,12 +181,12 @@ def run(path):
             visited=[];called=[]
             def service(uc,pc,size,context):
                 nonlocal app_type,exception_filter
-                if pc in (plain_iterator,plain_iterator+5,plain_iterator+8):
+                if pc in (plain_iterator,plain_iterator+5,plain_iterator+8,plain_iterator+14):
                     if pc==plain_iterator:
                         begin=uc.reg_read(x.UC_X86_REG_RCX);end=uc.reg_read(x.UC_X86_REG_RDX)
                         if end-begin!=32 or struct.unpack("<4Q",uc.mem_read(begin,32))!=(0,BASE+0x2aafc4,BASE+0x320770,BASE+0x320790):
                             raise ValueError("Original void initializer table mismatch")
-                        cpu.mem_write(plain_iterator+0x80,bytes(uc.mem_read(begin+16,8)))
+                        cpu.mem_write(plain_iterator+0x80,bytes(uc.mem_read(begin+16,16)))
                     return
                 if pc==iterator:
                     begin=uc.reg_read(x.UC_X86_REG_RCX);end=uc.reg_read(x.UC_X86_REG_RDX)
