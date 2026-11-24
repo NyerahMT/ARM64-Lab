@@ -44,8 +44,15 @@ int mxb_pe_plan(const uint8_t*f,size_t size,MXBPEImage*out){
   if(!r->mapped_size||r->rva%sa||r->rva<p.header_mapped_size||
      r->rva>=p.image_size||r->mapped_size>p.image_size-r->rva||
      !r->permissions||((r->permissions&6u)==6u))return 0;
-  if(r->raw_size&&(r->raw_offset%fa||r->raw_size%fa||
-     r->raw_offset<p.header_size||!within(r->raw_offset,r->raw_size,size)))return 0;
+  if(r->raw_size&&(r->raw_offset%fa||r->raw_offset<p.header_size||
+     !within(r->raw_offset,r->raw_size,size)))return 0;
+  /* Some vendor-added terminal sections have an unaligned raw length.
+   * Accept only a bounded final raw tail with at most file-alignment
+   * padding; never round its payload up or copy bytes outside the range. */
+  if(r->raw_size%fa){
+   uint32_t end=r->raw_offset+r->raw_size;
+   if(end!=size&&align_up(end,fa)!=size)return 0;
+  }
   for(unsigned j=0;j<i;j++){
    const MXBPESection*q=&p.sections[j];
    if(r->rva<q->rva+q->mapped_size&&q->rva<r->rva+r->mapped_size)return 0;
@@ -110,6 +117,14 @@ int mxb_pe_guest_smoke(void){
  put(sections+36,0xe0000020,4);
  if(mxb_pe_plan(file,sizeof(file),&plan))return 0;
  put(sections+36,0x60000020,4);
+ /* A non-aligned nonterminal raw segment is invalid. A final vendor
+  * section can have a bounded unaligned payload; padding stays zero. */
+ put(sections+16,0x1ff,4);
+ if(mxb_pe_plan(file,sizeof(file),&plan))return 0;
+ put(sections+16,0x200,4);
+ put(sections+40+16,0x1ff,4);
+ if(!mxb_pe_plan(file,sizeof(file),&plan))return 0;
+ put(sections+40+16,0x200,4);
  if(mxb_pe_map(&m,file,sizeof(file),backing,sizeof(backing)-1,&plan)||m.count)return 0;
  if(!mxb_pe_map(&m,file,sizeof(file),backing,sizeof(backing),&plan)||
     plan.image_base!=base||plan.entry_rva!=0x1000||plan.section_count!=2||m.count!=3)return 0;
