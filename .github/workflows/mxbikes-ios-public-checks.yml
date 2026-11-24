@@ -156,3 +156,21 @@ jobs:
             }
           echo "Unsigned iOS Simulator viewport project compiled including original post-Steam native C translator." >> "$GITHUB_STEP_SUMMARY"
           echo "Original-game engine is not connected; no real frame or signed IPA." >> "$GITHUB_STEP_SUMMARY"
+      - name: Compile unsigned iPhone arm64 device-target application
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MXBViewportPrototype.xcodeproj \
+            -scheme MXBViewportPrototype \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/mxb-ios-device-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/mxb-iphone-build.log" 2>&1 || {
+              tail -n 160 "$RUNNER_TEMP/mxb-iphone-build.log"
+              exit 1
+            }
+          echo "Unsigned iPhone device-target app compiled with Swift/C post-Steam bridge." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Apple signature, physical iPhone test, original game engine or original game frame." >> "$GITHUB_STEP_SUMMARY"
+
