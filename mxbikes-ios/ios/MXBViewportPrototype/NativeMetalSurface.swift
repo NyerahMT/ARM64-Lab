@@ -23,6 +23,8 @@ struct NativeMetalSurface: UIViewRepresentable {
 final class GPUBridge: NSObject, MTKViewDelegate {
     private var queue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
+    private var probeTextureReady = false
+    private var probeGPUTexture: MTLTexture?
     private let guestGL = mxb_gl_create()
     private let textureBank = mxb_tex_create()
     private let isRendererProbe = ProcessInfo.processInfo.arguments.contains("--renderer-probe-only")
@@ -50,6 +52,7 @@ final class GPUBridge: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         pipeline = try? device.makeRenderPipelineState(descriptor: descriptor)
         queue = device.makeCommandQueue()
+        probeGPUTexture = nil
     }
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
@@ -65,11 +68,20 @@ final class GPUBridge: NSObject, MTKViewDelegate {
         // comes from synthetic test commands, never the MX Bikes binary.
         // True indexed draw passes through guest-addressed positions, colors,
         // and indices. This fixture is SYNTHETIC, not actual game execution.
-        if isRendererProbe && (mxb_gl_indexed_fixture(guestGL) == 0 ||
-                               mxb_gl_texture_fixture(textureBank) == 0) {
-            encoder.endEncoding()
-            command.commit()
-            return
+        if isRendererProbe {
+            // The synthetic texture is immutable. Allocate its guest name once,
+            // not once per 60 Hz frame (the bounded bank has eight slots).
+            if !probeTextureReady {
+                mxb_tex_reset(textureBank)
+                probeTextureReady = mxb_gl_texture_fixture(textureBank) == 1
+            }
+            if !probeTextureReady || mxb_gl_indexed_fixture(guestGL) == 0 {
+                mxb_gl_clear_frame(guestGL)
+                encoder.endEncoding()
+                command.present(drawable)
+                command.commit()
+                return
+            }
         }
         let count = Int(mxb_gl_vertex_count(guestGL))
         if let pipeline, let device = view.device,
@@ -90,7 +102,9 @@ final class GPUBridge: NSObject, MTKViewDelegate {
                     pixelFormat: .rgba8Unorm, width: tw, height: th, mipmapped: false
                 )
                 desc.usage = [.shaderRead]
-                if let texture = device.makeTexture(descriptor: desc) {
+                if let cached = isRendererProbe ? probeGPUTexture : nil {
+                    encoder.setFragmentTexture(cached, index: 0)
+                } else if let texture = device.makeTexture(descriptor: desc) {
                     let region = MTLRegionMake2D(0, 0, tw, th)
                     if let texels {
                         texture.replace(region: region, mipmapLevel: 0,
@@ -103,6 +117,14 @@ final class GPUBridge: NSObject, MTKViewDelegate {
                         }
                     }
                     encoder.setFragmentTexture(texture, index: 0)
+                    if isRendererProbe { probeGPUTexture = texture }
+                } else {
+                    // Never issue a textured draw with an unbound texture.
+                    encoder.endEncoding()
+                    command.present(drawable)
+                    command.commit()
+                    mxb_gl_clear_frame(guestGL)
+                    return
                 }
 
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: count)
