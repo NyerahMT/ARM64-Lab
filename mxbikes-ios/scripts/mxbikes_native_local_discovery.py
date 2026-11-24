@@ -4,7 +4,7 @@ This is a build-time instruction boundary discovery tool, not a license or
 platform emulator. Its output stays in the private generated module. The
 existing native CFG decoder separately validates every instruction semantics.
 """
-from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_OP_IMM, CS_OP_REG
+from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_OP_IMM, CS_OP_REG, CS_OP_MEM
 from mxbikes_native_cfg_lift import CONDS, MAX_STATIC
 
 def discover(read_code, entry, stop, *, register_calls=None, max_nodes=MAX_STATIC):
@@ -31,7 +31,7 @@ def discover(read_code, entry, stop, *, register_calls=None, max_nodes=MAX_STATI
             if len(operands)!=1:raise ValueError("Invalid local control flow at "+hex(pc))
             op=operands[0]
             if op.type==CS_OP_IMM:target=op.imm
-            elif mnemonic=="call" and op.type==CS_OP_REG and pc in approved:
+            elif mnemonic=="call" and op.type in (CS_OP_REG,CS_OP_MEM) and pc in approved:
                 target=approved[pc]
             else:raise ValueError("Unresolved local control flow at "+hex(pc))
             pending.append(target)
