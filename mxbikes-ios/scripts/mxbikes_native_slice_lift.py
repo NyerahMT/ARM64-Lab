@@ -191,21 +191,26 @@ def fixture(windows,entry,stop,pages,statements,count):
     parts.append("return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif")
     return "\n".join(parts)
 
-def compile_native(src):
+def compile_native(src, runtime_sources=()):
     with tempfile.TemporaryDirectory(prefix="mxb-slice-lift-") as td:
         p=Path(td); c=p/"slice.c";c.write_text(src)
-        flags=["-O2","-std=c11","-Wall","-Wextra","-Werror","-Wno-unused-function"]
+        flags=["-O2","-std=c11","-Wall","-Wextra","-Werror","-Wno-unused-function","-I"+str(ROOT/"runtime")]
+        sources=[str(ROOT/"runtime"/name) for name in runtime_sources]
         host=p/"host";arm=p/"arm.elf";ios=p/"ios.o"
-        subprocess.run(["cc",*flags,"-DHOST",str(c),"-o",str(host)],check=True)
+        subprocess.run(["cc",*flags,"-DHOST",str(c),*sources,"-o",str(host)],check=True)
         subprocess.run([str(host)],check=True)
         subprocess.run(["clang","--target=aarch64-unknown-linux-gnu","-fuse-ld=lld",
             "-nostdlib","-static","-ffreestanding","-fno-builtin","-fno-stack-protector",
             *flags,"-Wl,-e,smoke","-Wl,-z,max-page-size=4096","-Wl,--build-id=none",
-            str(c),"-o",str(arm)],check=True)
+            str(c),*sources,"-o",str(arm)],check=True)
         execute_arm64_elf(arm,instruction_budget=6000000,timeout_us=15000000)
         subprocess.run(["clang","--target=arm64-apple-ios17.0","-ffreestanding",
                         *flags,"-c",str(c),"-o",str(ios)],check=True)
         if ios.read_bytes()[:4]!=b"\xcf\xfa\xed\xfe":raise ValueError("Not a Mach-O object")
+        for i,source in enumerate(sources):
+            obj=p/("runtime-%d.o"%i)
+            subprocess.run(["clang","--target=arm64-apple-ios17.0","-ffreestanding",*flags,"-c",source,"-o",str(obj)],check=True)
+            if obj.read_bytes()[:4]!=b"\xcf\xfa\xed\xfe":raise ValueError("Runtime is not Mach-O")
 
 def source_input():
     # Purpose-built synthetic caller + helper; not original game bytes.

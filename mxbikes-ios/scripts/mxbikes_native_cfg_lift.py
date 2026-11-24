@@ -16,6 +16,36 @@ from mxbikes_native_slice_lift import (
     initial,hash_page,compile_native,owned_input,SHA,
 )
 
+# Use the production-style persistent guest memory instead of a private array
+# embedded in each generated fixture. Flag operations remain shared with the
+# previously verified slice lifter.
+MEMORY_RUNTIME=r"""
+#include <stdint.h>
+#include "mxb_guest_memory.h"
+typedef MXBGuestState State;
+static uint64_t load(State*s,uint64_t addr,unsigned size){
+ uint8_t bytes[8];uint64_t v=0;
+ if(!mxb_guest_read(&s->memory,addr,bytes,size)){s->fault=1;return 0;}
+ for(unsigned i=0;i<size;i++)v|=(uint64_t)bytes[i]<<(8u*i);
+ return v;
+}
+static void store(State*s,uint64_t addr,uint64_t v,unsigned size){
+ uint8_t bytes[8];
+ for(unsigned i=0;i<size;i++)bytes[i]=(uint8_t)(v>>(8u*i));
+ if(!mxb_guest_write(&s->memory,addr,bytes,size))s->fault=1;
+}
+"""
+MEMORY_RUNTIME+="#define PAGE 4096u\n"+RUNTIME[RUNTIME.index("static uint64_t common_flags"):]
+MEMORY_RUNTIME+=r"""
+#ifndef HOST
+void *memcpy(void *dst,const void *src,unsigned long n){
+ volatile unsigned char*d=dst;const volatile unsigned char*s=src;
+ for(unsigned long i=0;i<n;i++)d[i]=s[i];
+ return dst;
+}
+#endif
+"""
+RUNTIME_SOURCES=("mxb_guest_memory.c",)
 MAX_STATIC=512
 MAX_DYNAMIC=8192
 TRACE_INIT=0xcbf29ce484222325
@@ -201,16 +231,17 @@ def run(path=None,original_loop=False):
     code,static_pages,nodes=decode_cfg(windows,entry,stop)
     pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
-    parts=["#define NP %du\n#define BASES {%s}\n"%(len(pages),",".join(map(u,pages))),RUNTIME,EXTRA,code,"int smoke(void){"]
+    parts=[MEMORY_RUNTIME,EXTRA,code,"int smoke(void){","if(!mxb_guest_memory_smoke())return 95;"]
     lengths=[];covered=set()
     for seed in range(1,9):
         regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path)
         lengths.append(len(trace));covered.update(trace)
-        parts.append("{State s={0};Cursor cursor=lifted_begin();unsigned slices=0;")
+        parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
         parts.append("s.flags=%s;"%u(flags))
         for i,p in enumerate(pages):
-            parts.append("for(unsigned j=0;j<PAGE;j++)s.mem[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
+            parts.append("for(unsigned j=0;j<4096u;j++)backing[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
+            parts.append("if(!mxb_guest_map(&s.memory,%s,backing[%d],4096u,3u))return 96;"%(u(p),i))
         # Vary the pause interval, including very short boundaries inside calls.
         quota=1+seed*19
         parts.append("int rc;do{rc=lifted_resume(&s,&cursor,%du);slices++;if(slices>8193u)return 94;}while(rc==93);if(rc)return rc;"%quota)
@@ -218,7 +249,7 @@ def run(path=None,original_loop=False):
         parts.append("if(slices!=%du)return 81;"%((len(trace)+quota-1)//quota))
         for i,v in enumerate(out):parts.append("if(s.r[%d]!=%s)return %d;"%(i,u(v),10+i))
         parts.append("if((s.flags&%s)!=%s)return 40;"%(u(CMP_FLAGS),u(of&CMP_FLAGS)))
-        for i,h in enumerate(hashes):parts.append("if(hash_page(s.mem[%d])!=%s)return %d;"%(i,u(h),50+i))
+        for i,h in enumerate(hashes):parts.append("if(hash_page(backing[%d])!=%s)return %d;"%(i,u(h),50+i))
         parts.append("}")
     parts.append("return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif")
     if not path:
@@ -236,20 +267,20 @@ def run(path=None,original_loop=False):
         # An actual infinite guest loop must yield, then stop at the hard
         # cumulative instruction ceiling rather than spin forever.
         bad_code,_,_=decode_cfg([(base,bytes.fromhex("ebfe"))],base,base+2)
-        negative=["#define NP 1u\n#define BASES {"+u(STACK)+"}\n",RUNTIME,EXTRA,bad_code,
+        negative=[MEMORY_RUNTIME,EXTRA,bad_code,
                   "int smoke(void){State s={0};Cursor c=lifted_begin();",
                   "if(lifted_resume(&s,&c,17u)!=93||c.steps!=17u)return 1;",
                   "if(lifted_resume(&s,&c,8192u)!=91||c.steps!=8192u){return 2;}",
                   "return 0;}",
                   "#ifdef HOST\nint main(void){return smoke();}\n#endif"]
-        compile_native("\n".join(negative))
+        compile_native("\n".join(negative),RUNTIME_SOURCES)
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
-    compile_native("\n".join(parts))
+    compile_native("\n".join(parts),RUNTIME_SOURCES)
     print(json.dumps({"mode":"private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
-        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"registers":16,
+        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
         "original_game_booted":False},indent=2))
 

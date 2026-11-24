@@ -17,6 +17,9 @@ targets:
         excludes:
           - Info.plist
           - Bridge.h
+      - path: runtime/mxb_guest_memory.c
+      - path: runtime/mxb_guest_memory.h
+        buildPhase: headers
       - path: runtime/mxb_gl_surface.c
       - path: runtime/mxb_poststeam_timer_native.c
       - path: runtime/mxb_poststeam_helper_entry_native.c
