@@ -137,16 +137,28 @@ def prepare_startup(executable: Path, destination: Path):
     registered=region("registered",((0x2ab75e,0x2ab760),(0x2ab7de,0x2ab7e4)),0x2ab75e,base+0x2ab7ed)
     args_slot=check_import(0x2ab00a,"call","__getmainargs")
     map_value(args_slot,pe.read_rva(args_slot,8))
-    for addr,size in ((0x3d85b0,8),(0x3d8030,8),(0x3d9b10,24),(0x3de328,0x248),(0x3d8020,16),(0x3d8018,4)):
+    for addr,size in ((0x3d85b0,8),(0x3d8030,8),(0x3d9b10,24),(0x3de328,0x400),(0x3d8020,16),(0x3d8018,4)):
         if not zero_fill(base+addr,size):raise ValueError("Unexpected startup global initializer")
     map_value(0x3d85b0,bytes(8))
     args_entry=region("args_entry",((0x2ab7ed,0x2ab7fb),),0x2ab7ed,base+0x2aafd4)
     args_setup=region("args_setup",((0x2aafd4,0x2ab00a),),0x2aafd4,base+0x2ab00a)
     args_return=region("args_return",((0x2ab010,0x2ab01a),(0x2ab024,0x2ab029)),0x2ab010,0x750001108,(0x2ab01a,))
+    # The next original constructor returns to its original parent call site.
+    # Decode the parent CALL rather than assuming an arbitrary guest return.
+    parent_calls=[ins for ins in decoder.disasm(pe.read_rva(0x2d2a70,0x66),0x2d2a70)
+                  if ins.mnemonic=="call" and ins.operands[0].type==2
+                  and ins.operands[0].imm==0x2e84c0]
+    if len(parent_calls)!=1 or parent_calls[0].address+parent_calls[0].size!=0x2d2ad6:
+        raise ValueError("Unexpected fourth constructor return")
+    # The leaf without unwind metadata has a bounded decoding window. Only
+    # reachable instructions are lifted; unknown forms still reject generation.
     constructor=region("constructor",((0x320770,0x320780),(0x2d2a70,0x2d2ad6),
         (0x3042b0,0x3042df),(0x309e20,0x309e4d),(0x30a490,0x30a4ab),
         (0x2dd590,0x2dd5ee),(0x30b144,0x30b1ab),(0x2abbd0,0x2abbd4),(0x2fcf40,0x2fcf8a)),
         0x320770,base+0x2e84c0,register_calls={base+0x30b17c:base+0x2abbd0})
+    fourth=region("fourth",((0x2e84c0,0x2e8542),(0x30a490,0x30a4ab),
+        (0x2dbe70,0x2dbed0),(0x30b144,0x30b1ab),(0x2abbd0,0x2abbd4)),
+        0x2e84c0,base+0x2d2ad6,register_calls={base+0x30b17c:base+0x2abbd0})
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -334,6 +346,9 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=constructor_begin();
     if(p->cpu.fault || constructor_resume(&p->cpu,&c,256)!=0 || c.pc!=SUBOBJECT_PC)return 0;
     p->pc=c.pc;p->instructions+=c.steps;
+    c=fourth_begin();
+    if(fourth_resume(&p->cpu,&c,256)!=0 || c.pc!=FOURTH_RETURN || p->cpu.fault)return 0;
+    p->pc=c.pc;p->instructions+=c.steps;
     return 1;
 }
 """
@@ -351,10 +366,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0)
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6)
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
@@ -369,7 +384,7 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         *mappings,*data_maps,
         *[f"if(!mxb_guest_map(&memory,{u(base+addr)},(uint8_t *){ptr},{size},3))return 0;"
           for addr,ptr,size in ((0x3d8018,"&p->argument_count",4),(0x3d8020,"p->argument_globals",24),
-                                (0x3d9b10,"p->object_header",24),(0x3de328,"p->subobjects",0x248))],
+                                (0x3d9b10,"p->object_header",24),(0x3de328,"p->subobjects",0x400))],
         f"if(!mxb_guest_map(&memory,{u(base+0xe4adb0)},(uint8_t *)p->exit_bounds,16,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(app_flag)},(uint8_t *)&p->managed_app,4,3))return 0;",
         f"return mxb_owned_startup(p,&memory,{u(base+entry)});",
