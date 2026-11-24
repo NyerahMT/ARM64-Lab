@@ -7,6 +7,7 @@ from pathlib import Path
 from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u, owned_filename_input, FILENAME_GLOBAL
 from mxbikes_main_joined_callee_native import inspect_original
 from mxbikes_native_local_discovery import discover_pe
+from mxbikes_private_apple_data import prepare_data
 from mxbikes_first_callee_emu import import_slots
 from tools.crt_cfg_lift import translate_crt_cfg
 from tools.entry_wrapper import decode_entry_wrapper
@@ -17,6 +18,7 @@ def prepare_startup(executable: Path, destination: Path):
     if hashlib.sha256(executable.read_bytes()).hexdigest()!=SHA:
         raise ValueError("Wrong owned executable")
     pe=PE(executable)
+    prepare_data(pe,destination)
     base=pe.u64(pe.opt+24)
     entry=pe.u32(pe.opt+16)
     wrapper=pe.read_rva(entry,18)
@@ -269,6 +271,7 @@ def prepare_startup(executable: Path, destination: Path):
     filename_body=filename_code.replace("lifted_begin","filename_body_begin").replace("lifted_resume","filename_body_resume")
     cwd_prefix=unit(pe.read_rva(0x136769,3),0x136769,0x13676c,"cwd_prefix")
     game_handoff=unit(pe.read_rva(0x136772,0x136784-0x136772),0x136772,0x133e80,"game_handoff")
+    init_body=unit(pe.read_rva(0x133e80,0x133efb-0x133e80),0x133e80,0x133640,"init_body")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -319,7 +322,7 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
        !mxb_guest_check(&p->cpu.memory,dst,sizeof(info),MXB_MEM_WRITE))return 0;
     store(&p->cpu,sp-8,STARTUP_RESUME,8);
     if(p->cpu.fault || !mxb_guest_write(&p->cpu.memory,dst,info,sizeof(info)))return 0;
-    p->thread_environment[1]=UINT64_C(0x720001000);
+    p->thread_environment[1]=UINT64_C(0x720000000)+MXB_STARTUP_STACK_SIZE;
     p->thread_environment[6]=TEB_VA;
     if(!mxb_guest_map(&p->cpu.memory,TEB_VA,(uint8_t *)p->thread_environment,
                       sizeof(p->thread_environment),MXB_MEM_READ))return 0;
@@ -595,6 +598,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     continuation_status=game_handoff_resume(&p->cpu,&c,16);p->pc=c.pc;
     if(continuation_status||c.pc!=GAME_INIT_PC||p->cpu.fault)return 0;
     p->instructions+=c.steps;
+    c=init_body_begin();
+    continuation_status=init_body_resume(&p->cpu,&c,64);p->pc=c.pc;
+    if(continuation_status||c.pc!=GAME_SUBINIT_PC||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
     return 1;
 }
 """
@@ -613,14 +620,15 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
                   ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780,CMDLINE_PC=base+0x2ab131,CMD_PTR_VA=cmd_ptr,WINMAIN_PC=base+0x136710,IMAGE_BASE=base,ASCII_CALL=base+0x2ab1ce,ASCII_RETURN=base+0x2ab1d4,ASCII_SLOT=base+ascii_slot,ASCII_VALUE=int.from_bytes(pe.read_rva(ascii_slot,8),'little'))
-    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80)
+    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80,GAME_SUBINIT_PC=base+0x133640)
     runner=re.sub(r'\b(?:'+ '|'.join(map(re.escape,fields)) + r')\b',lambda m:u(fields[m[0]]),runner)
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+init_body+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
         "#include <string.h>",
+        "extern int mxb_private_data_init(MXBOwnedStartup *,MXBGuestMemory *);",
         "int mxb_native_launch(MXBOwnedStartup *p){",
         "if(!p || p->pc)return 0;",
         "MXBGuestMemory memory={0};",
@@ -636,6 +644,7 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
                                 (0x3d9b10,"p->object_header",24),(0x3de328,"p->subobjects",0x4a0))],
         f"if(!mxb_guest_map(&memory,{u(base+0xe4adb0)},(uint8_t *)p->exit_bounds,16,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(app_flag)},(uint8_t *)&p->managed_app,4,3))return 0;",
+        "if(!mxb_private_data_init(p,&memory))return 0;",
         f"return mxb_owned_startup(p,&memory,{u(base+entry)});",
         "}",
     ]

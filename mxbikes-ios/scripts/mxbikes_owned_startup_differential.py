@@ -13,13 +13,15 @@ from mxbikes_native_slice_lift import ROOT
 from mxbikes_private_apple_directory import prepare
 from mxbikes_private_apple_startup import prepare_startup
 from mxbikes_main_joined_callee_native import inspect_original
+from mxbikes_private_apple_data import init_static_refs
 from tools.pe_probe import PE
 
 BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x133e80
+FRONTIER=BASE+0x133640
+STACK_BYTES=128*1024
 MODULE_PATH=br'C:\MXBikes\mxbikes.exe'
 DIRECTORY=MODULE_PATH[:MODULE_PATH.rfind(bytes([92]))+1]
 
@@ -30,6 +32,31 @@ BRIDGE=r"""
 #include "mxb_owned_startup.h"
 #include "mxb_pe_guest_image.h"
 #include "mxb_game_startup_layout.h"
+#include "mxb_init_data_layout.h"
+#include <string.h>
+extern int mxb_private_data_init(MXBOwnedStartup *,MXBGuestMemory *);
+int verify_data(const uint8_t *file,size_t n){
+    MXBPEImage layout; MXBOwnedStartup p={0}; MXBGuestMemory m={0};
+    if(!mxb_guest_memory_smoke()||!mxb_pe_plan(file,n,&layout))return 0;
+    uint8_t *b=malloc(layout.image_size);if(!b)return 0;
+    int ok=0;
+    if(!mxb_pe_map(&p.cpu.memory,file,n,b,layout.image_size,&layout)||!mxb_private_data_init(&p,&m))goto done;
+    uint8_t buf[4096];
+    for(unsigned i=0;i<=layout.section_count;i++){
+        uint32_t rva=i?layout.sections[i-1].rva:0;
+        uint32_t size=i?layout.sections[i-1].mapped_size:layout.header_mapped_size;
+        unsigned perm=i?layout.sections[i-1].permissions:1;
+        uint64_t va=layout.image_base+rva;
+        if((perm&4)||!(perm&1)){if(mxb_guest_check(&m,va,1,1))goto done;continue;}
+        if(!mxb_guest_check(&m,va,size,perm)||mxb_guest_check(&m,va,1,4))goto done;
+        for(uint32_t j=0;j<size;j+=sizeof(buf)){
+            unsigned count=size-j<sizeof(buf)?size-j:sizeof(buf);
+            if(!mxb_guest_read(&m,va+j,buf,count)||memcmp(buf,b+rva+j,count))goto done;
+        }
+    }
+    ok=1;
+done:free(p.image_backing);free(b);return ok;
+}
 #include "mx_import_registry.h"
 extern int mxb_private_startup(MXBOwnedStartup *,const mx_import_runtime *);
 static uint64_t mono(void *x){return ((uint64_t *)x)[0];}
@@ -87,6 +114,7 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
     const unsigned sizes[]={8,8,4,8,4};
     for(unsigned i=0;i<5;i++)if(!mxb_guest_read(&p.cpu.memory,game_globals[i],regs+226+i,sizes[i]))goto done;
     if(!mxb_guest_read(&p.cpu.memory,MXB_GAME_FILENAME,regs+231,262))goto done;
+    for(unsigned i=0;i<MXB_INIT_DATA_COUNT;i++)if(!mxb_guest_read(&p.cpu.memory,mxb_init_data_addresses[i],regs+264+i,mxb_init_data_sizes[i]))goto done;
     for(unsigned i=0;i<sizeof(p.stack);i++)stack[i]=p.stack[i];
     ok=1;
 done:
@@ -101,6 +129,7 @@ def run(path):
     pe=pefile.PE(data=raw)
     mapped=pe.get_memory_mapped_image()
     game_layout,_,_=inspect_original(PE(path))
+    init_refs=init_static_refs(PE(path))
     with tempfile.TemporaryDirectory() as tmp:
         d=Path(tmp)
         prepare(path,d)
@@ -110,11 +139,15 @@ def run(path):
         common=ROOT.parent/"runtime"
         libpath=d/"entry.so"
         subprocess.run(["cc","-O2","-std=c11","-shared","-fPIC","-I"+str(runtime),"-I"+str(common),
-                        str(d/"bridge.c"),str(d/"mxb_private_startup.c"),
+                        str(d/"bridge.c"),str(d/"mxb_private_startup.c"),str(d/"mxb_private_image_data.c"),
                         *[str(runtime/file) for file in ("mxb_guest_memory.c","mxb_pe_guest_image.c","mxb_guest_crt.c")],
                         *[str(common/file) for file in ("mx_time_compat.c","mx_guest_imports.c","mx_import_registry.c")],
                         "-o",str(libpath)],check=True)
-        replay=C.CDLL(str(libpath)).replay
+        lib=C.CDLL(str(libpath))
+        lib.verify_data.argtypes=[C.c_void_p,C.c_size_t]
+        if not lib.verify_data(raw,len(raw)):raise ValueError('Private data mapping mismatch')
+        print('PASS: native non-executable data image matches original PE sections')
+        replay=lib.replay
         replay.argtypes=[C.c_void_p,C.c_size_t,C.POINTER(C.c_uint64),C.POINTER(C.c_uint64),C.c_void_p]
         for seed in range(8):
             mono=123456789000000+seed
@@ -130,23 +163,23 @@ def run(path):
                 wall=(filetime-116444736000000000)*100
             cookie=DEFAULT if seed%2 or seed==0 else seed+0x1020304
             regs=[((seed+1)*(i+3)*0x1010101010101)&MASK for i in range(16)]
-            regs[4]=STACK+0xc08
+            regs[4]=STACK+STACK_BYTES-0x3f8
             flags=0x202 | (0x8d5 if seed%2 else 0)
-            state=(C.c_uint64*264)(*regs,flags)
+            state=(C.c_uint64*(264+len(init_refs)))(*regs,flags)
             vectors=[((0x102030405060708*(i+1)*(seed+1))&MASK) for i in range(32)]
             for i,value in enumerate(vectors):state[192+i]=value
             vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
-            stack=(C.c_uint8*4096)()
+            stack=(C.c_uint8*STACK_BYTES)()
             if not replay(raw,len(raw),vals,state,stack):raise ValueError(f"Native entry failed at {hex(state[17])}; steps={state[18]}, services={state[19]}, fault={state[16]}, guest rsp={hex(state[4])}")
             cpu=Uc(UC_ARCH_X86,UC_MODE_64)
             cpu.mem_map(BASE,pe.OPTIONAL_HEADER.SizeOfImage)
             cpu.mem_write(BASE,mapped)
             teb=0x760000000
             cpu.mem_map(teb,4096)
-            cpu.mem_write(teb+8,struct.pack("<Q",STACK+4096))
+            cpu.mem_write(teb+8,struct.pack("<Q",STACK+STACK_BYTES))
             cpu.mem_write(teb+0x30,struct.pack("<Q",teb))
             cpu.reg_write(x.UC_X86_REG_GS_BASE,teb)
-            cpu.mem_map(STACK,4096)
+            cpu.mem_map(STACK,STACK_BYTES)
             cpu.mem_write(BASE+0x3d85bc,struct.pack("<I",vals[5]))
             cpu.mem_write(BASE+0x3d85b8,struct.pack("<I",vals[6]))
             cpu.mem_write(BASE+0x3de328,bytes((i+vals[6])&255 for i in range(0x4a0)))
@@ -290,12 +323,13 @@ def run(path):
             for key,size in (("arg0_va",8),("arg1_va",8),("show_va",4),("callee_global0",8),("callee_global1",4)):
                 expected.append(int.from_bytes(cpu.mem_read(game_layout[key],size),'little'))
             expected.extend(struct.unpack('<33Q',bytes(cpu.mem_read(0x1403968a0,262))+bytes(2)))
-            if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,4096)):
+            expected.extend(int.from_bytes(cpu.mem_read(a,n),'little') for a,n in init_refs)
+            if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,STACK_BYTES)):
                 differing=[i for i,(actual,wanted) in enumerate(zip(state,expected)) if actual!=wanted]
-                stack_diff=sum(a!=b for a,b in zip(stack,cpu.mem_read(STACK,4096)))
+                stack_diff=sum(a!=b for a,b in zip(stack,cpu.mem_read(STACK,STACK_BYTES)))
                 raise ValueError(f"Original/native process state mismatch case {seed}; fields={differing}; stack bytes={stack_diff}")
             if seed==7 and state[20]!=DEFAULT+1:raise ValueError("Collision path missed")
-    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1184 object/global bytes, five game globals and 262 filename bytes; all GPRs, 16 XMM registers, flags and stack matched")
+    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1184 object/global bytes, five game globals and 262 filename bytes and {len(init_refs)} game-init globals; all GPRs, 16 XMM registers, flags and stack matched")
 
 
 if __name__=="__main__":
