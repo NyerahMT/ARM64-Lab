@@ -6,7 +6,10 @@ typedef struct {
     uint8_t stack[4096];
     uint8_t initial_globals[16];
     uint64_t import_values[6];
-    uint64_t callback_metadata[32];
+    uint64_t callback_metadata[48];
+    uint64_t winmain_globals[5];
+    uint8_t filename_buffer[262];
+    char current_directory[260];
     uint32_t managed_app, app_type;
     uint32_t file_modes[2];
     uint64_t exit_bounds[2], exception_filter, first_exit_handler, other_exit_handlers[2];

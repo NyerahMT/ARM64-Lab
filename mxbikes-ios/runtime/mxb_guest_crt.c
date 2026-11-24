@@ -79,6 +79,7 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
   if(allocate)s->r[MXB_RAX]=heap_alloc(&s->heap,dst);
   else if(!heap_release(&s->heap,dst))return MXB_CRT_BAD_ARGUMENT;
   s->r[MXB_RSP]=sp+8u;
+  s->completed_crt_calls++;
   return MXB_CRT_OK;
  }
  if(string_copy || find_last){
@@ -87,7 +88,8 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
    return MXB_CRT_BAD_MEMORY;
   if(find_last){
    s->r[MXB_RAX]=match;s->r[MXB_RSP]=sp+8u;
-   return MXB_CRT_OK;
+   s->completed_crt_calls++;
+  return MXB_CRT_OK;
   }
   n=length;copy=1;
  }
@@ -100,7 +102,8 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
              mxb_guest_move(&s->memory,dst,src,(size_t)n);
  if(!ok)return MXB_CRT_BAD_MEMORY;
  s->r[MXB_RAX]=dst;s->r[MXB_RSP]=sp+8u;
- return MXB_CRT_OK;
+ s->completed_crt_calls++;
+  return MXB_CRT_OK;
 }
 int mxb_guest_crt_smoke(void){
  MXBGuestState s={0};uint8_t stack[64]={0},a[32],b[32];

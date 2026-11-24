@@ -12,12 +12,16 @@ from mxbikes_native_cfg_lift import UC_REG, STACK
 from mxbikes_native_slice_lift import ROOT
 from mxbikes_private_apple_directory import prepare
 from mxbikes_private_apple_startup import prepare_startup
+from mxbikes_main_joined_callee_native import inspect_original
+from tools.pe_probe import PE
 
 BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x136710
+FRONTIER=BASE+0x133e80
+MODULE_PATH=br'C:\MXBikes\mxbikes.exe'
+DIRECTORY=MODULE_PATH[:MODULE_PATH.rfind(bytes([92]))+1]
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -25,6 +29,7 @@ BRIDGE=r"""
 #include <stdlib.h>
 #include "mxb_owned_startup.h"
 #include "mxb_pe_guest_image.h"
+#include "mxb_game_startup_layout.h"
 #include "mx_import_registry.h"
 extern int mxb_private_startup(MXBOwnedStartup *,const mx_import_runtime *);
 static uint64_t mono(void *x){return ((uint64_t *)x)[0];}
@@ -78,6 +83,10 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
        !mxb_guest_read(&p.cpu.memory,0x1403de328ULL,regs+44,0x4a0))goto done;
     for(unsigned i=0;i<16;i++){regs[192+2*i]=p.cpu.xmm[i][0];regs[193+2*i]=p.cpu.xmm[i][1];}
     regs[224]=p.other_exit_handlers[0];regs[225]=p.other_exit_handlers[1];
+    const uint64_t game_globals[]={MXB_GAME_GLOBAL_0,MXB_GAME_GLOBAL_1,MXB_GAME_GLOBAL_2,MXB_GAME_GLOBAL_3,MXB_GAME_GLOBAL_4};
+    const unsigned sizes[]={8,8,4,8,4};
+    for(unsigned i=0;i<5;i++)if(!mxb_guest_read(&p.cpu.memory,game_globals[i],regs+226+i,sizes[i]))goto done;
+    if(!mxb_guest_read(&p.cpu.memory,MXB_GAME_FILENAME,regs+231,262))goto done;
     for(unsigned i=0;i<sizeof(p.stack);i++)stack[i]=p.stack[i];
     ok=1;
 done:
@@ -91,6 +100,7 @@ def run(path):
     raw=path.read_bytes()
     pe=pefile.PE(data=raw)
     mapped=pe.get_memory_mapped_image()
+    game_layout,_,_=inspect_original(PE(path))
     with tempfile.TemporaryDirectory() as tmp:
         d=Path(tmp)
         prepare(path,d)
@@ -101,7 +111,7 @@ def run(path):
         libpath=d/"entry.so"
         subprocess.run(["cc","-O2","-std=c11","-shared","-fPIC","-I"+str(runtime),"-I"+str(common),
                         str(d/"bridge.c"),str(d/"mxb_private_startup.c"),
-                        *[str(runtime/file) for file in ("mxb_guest_memory.c","mxb_pe_guest_image.c")],
+                        *[str(runtime/file) for file in ("mxb_guest_memory.c","mxb_pe_guest_image.c","mxb_guest_crt.c")],
                         *[str(common/file) for file in ("mx_time_compat.c","mx_guest_imports.c","mx_import_registry.c")],
                         "-o",str(libpath)],check=True)
         replay=C.CDLL(str(libpath)).replay
@@ -122,7 +132,7 @@ def run(path):
             regs=[((seed+1)*(i+3)*0x1010101010101)&MASK for i in range(16)]
             regs[4]=STACK+0xc08
             flags=0x202 | (0x8d5 if seed%2 else 0)
-            state=(C.c_uint64*226)(*regs,flags)
+            state=(C.c_uint64*264)(*regs,flags)
             vectors=[((0x102030405060708*(i+1)*(seed+1))&MASK) for i in range(32)]
             for i,value in enumerate(vectors):state[192+i]=value
             vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
@@ -149,7 +159,7 @@ def run(path):
             service_page=0x750000000
             cpu.mem_map(service_page,4096)
             services={}
-            names={"GetStartupInfoA","GetSystemTimeAsFileTime","GetCurrentThreadId","GetCurrentProcessId","GetTickCount","QueryPerformanceCounter"}
+            names={"GetStartupInfoA","GetSystemTimeAsFileTime","GetCurrentThreadId","GetCurrentProcessId","GetTickCount","QueryPerformanceCounter","GetModuleFileNameA","SetCurrentDirectoryA"}
             for dll in pe.DIRECTORY_ENTRY_IMPORT:
                 if dll.dll.lower()!=b"kernel32.dll":continue
                 for symbol in dll.imports:
@@ -182,7 +192,7 @@ def run(path):
                             cpu.mem_write(symbol.address,struct.pack("<Q",iterator))
                         if name in ("_fmode","_commode"):
                             cpu.mem_write(symbol.address,struct.pack("<Q",0x760001000+(4 if name=="_commode" else 0)))
-                    if (dll.dll.lower(),name) in ((b"msvcr90.dll","_ismbblead"),(b"msvcr90.dll","__getmainargs"),(b"msvcr90.dll","_decode_pointer"),(b"msvcr90.dll","_onexit"),(b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
+                    if (dll.dll.lower(),name) in ((b"msvcr90.dll","strcpy"),(b"msvcr90.dll","strrchr"),(b"msvcr90.dll","_ismbblead"),(b"msvcr90.dll","__getmainargs"),(b"msvcr90.dll","_decode_pointer"),(b"msvcr90.dll","_onexit"),(b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
                         pc=service_page+16*len(services)
                         services[pc]=name;cpu.mem_write(pc,b"\xc3")
                         cpu.mem_write(symbol.address,struct.pack("<Q",pc))
@@ -224,6 +234,27 @@ def run(path):
                     uc.mem_write(uc.reg_read(x.UC_X86_REG_RDX),struct.pack("<Q",block))
                     uc.mem_write(uc.reg_read(x.UC_X86_REG_R8),struct.pack("<Q",block+16))
                     uc.reg_write(x.UC_X86_REG_RAX,0)
+                elif name=="GetModuleFileNameA":
+                    out=uc.reg_read(x.UC_X86_REG_RDX)
+                    if dest or uc.reg_read(x.UC_X86_REG_R8)!=260:raise ValueError("Unexpected module filename request")
+                    uc.mem_write(out,MODULE_PATH+b"\0");uc.reg_write(x.UC_X86_REG_RAX,len(MODULE_PATH))
+                elif name=="SetCurrentDirectoryA":
+                    if dest!=0x1403968a0 or bytes(uc.mem_read(dest,len(DIRECTORY)+1))!=DIRECTORY+b"\0":
+                        raise ValueError("Original virtual directory mismatch")
+                    uc.reg_write(x.UC_X86_REG_RAX,1)
+                elif name in ("strcpy","strrchr"):
+                    src=uc.reg_read(x.UC_X86_REG_RDX);start=src if name=="strcpy" else dest
+                    payload=bytearray()
+                    for offset in range(260):
+                        byte=uc.mem_read(start+offset,1)
+                        payload.extend(byte)
+                        if byte==b"\0":break
+                    else:raise ValueError("Unterminated original filename")
+                    if name=="strcpy":
+                        uc.mem_write(dest,bytes(payload));result=dest
+                    else:
+                        offset=payload.rfind(bytes([src&255]));result=dest+offset if offset>=0 else 0
+                    uc.reg_write(x.UC_X86_REG_RAX,result)
                 elif name=="_ismbblead":
                     if dest>127:raise ValueError("Non-ASCII command line outside modeled C locale")
                     uc.reg_write(x.UC_X86_REG_RAX,0)
@@ -254,15 +285,17 @@ def run(path):
             for i in range(16):
                 vector=cpu.reg_read(getattr(x,f"UC_X86_REG_XMM{i}"));expected.extend((vector&MASK,vector>>64))
             if len(handlers)!=3:raise ValueError('Incomplete original exit-handler registration')
-            if expected[1]!=BASE or expected[2]!=0 or expected[8]!=0x760002023 or expected[9]!=10 or expected[17]!=FRONTIER:
-                raise ValueError('Original WinMain argument contract changed')
+            if expected[17]!=FRONTIER:raise ValueError('Original game initialization call not reached')
             expected.extend(handlers[1:])
+            for key,size in (("arg0_va",8),("arg1_va",8),("show_va",4),("callee_global0",8),("callee_global1",4)):
+                expected.append(int.from_bytes(cpu.mem_read(game_layout[key],size),'little'))
+            expected.extend(struct.unpack('<33Q',bytes(cpu.mem_read(0x1403968a0,262))+bytes(2)))
             if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,4096)):
                 differing=[i for i,(actual,wanted) in enumerate(zip(state,expected)) if actual!=wanted]
                 stack_diff=sum(a!=b for a,b in zip(stack,cpu.mem_read(STACK,4096)))
                 raise ValueError(f"Original/native process state mismatch case {seed}; fields={differing}; stack bytes={stack_diff}")
             if seed==7 and state[20]!=DEFAULT+1:raise ValueError("Collision path missed")
-    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1184 object/global bytes; all GPRs, 16 XMM registers, flags and stack matched")
+    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1184 object/global bytes, five game globals and 262 filename bytes; all GPRs, 16 XMM registers, flags and stack matched")
 
 
 if __name__=="__main__":

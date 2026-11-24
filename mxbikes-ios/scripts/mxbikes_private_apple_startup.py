@@ -4,7 +4,8 @@ import re
 import struct
 from pathlib import Path
 
-from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u
+from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u, owned_filename_input, FILENAME_GLOBAL
+from mxbikes_main_joined_callee_native import inspect_original
 from mxbikes_native_local_discovery import discover_pe
 from mxbikes_first_callee_emu import import_slots
 from tools.crt_cfg_lift import translate_crt_cfg
@@ -92,7 +93,7 @@ def prepare_startup(executable: Path, destination: Path):
     data_maps=[]
     def map_value(rva,data):
         index=len(data_maps)
-        if index>=32 or not 1<=len(data)<=8:raise ValueError('Startup metadata capacity')
+        if index>=48 or not 1<=len(data)<=8:raise ValueError('Startup metadata capacity')
         value=int.from_bytes(data,"little")
         data_maps.append(f"p->callback_metadata[{index}]={u(value)}; "
                          f"if(!mxb_guest_map(&memory,{u(base+rva)},(uint8_t *)&p->callback_metadata[{index}],{len(data)},1))return 0;")
@@ -227,6 +228,47 @@ def prepare_startup(executable: Path, destination: Path):
                             alternate_stops=(base+0x2ab1ce,),
                             additional_entries=(base+0x2ab1d4,))
     scan=scan_code.replace("lifted_begin","scan_begin").replace("lifted_resume","scan_resume")
+    # Join the already verified original empty-command-line path to the same
+    # entry CPU, stack and original BSS, rather than a separately seeded probe.
+    main_layout,_,callee_code=inspect_original(pe)
+    main_globals=[(main_layout[k],n) for k,n in
+                  (("arg0_va",8),("arg1_va",8),("show_va",4),("callee_global0",8),("callee_global1",4))]
+    def writable_initial(address,size):
+        rva=address-base
+        for _,virtual,start,raw,_,flags in pe.sections:
+            if start<=rva and rva+size<=start+max(virtual,raw) and flags&0x80000000:
+                n=min(size,max(0,start+raw-rva))
+                return (pe.read_rva(rva,n) if n else b"")+bytes(size-n)
+        raise ValueError("Game global outside writable original section: "+hex(rva))
+    game_maps=[]
+    for i,(address,size) in enumerate(main_globals):
+        value=int.from_bytes(writable_initial(address,size),"little")
+        game_maps.append(f"p->winmain_globals[{i}]={u(value)};")
+        game_maps.append(f"if(!mxb_guest_map(&memory,{u(address)},(uint8_t *)&p->winmain_globals[{i}],{size},3))return 0;")
+    filename_initial=writable_initial(FILENAME_GLOBAL,262)
+    game_maps.append("static const uint8_t filename_initial[262]={"+",".join(map(str,filename_initial))+"};")
+    game_maps.append("memcpy(p->filename_buffer,filename_initial,262);")
+    game_maps.append(f"if(!mxb_guest_map(&memory,{u(FILENAME_GLOBAL)},p->filename_buffer,262,3))return 0;")
+    # The private differential bridge uses the exact same original addresses.
+    (destination/"mxb_game_startup_layout.h").write_text("\n".join(
+        f"#define MXB_GAME_GLOBAL_{i} {u(address)}" for i,(address,_) in enumerate(main_globals))+"\n"+
+        f"#define MXB_GAME_FILENAME {u(FILENAME_GLOBAL)}\n")
+    main_windows=[(base+0x136710,pe.read_rva(0x136710,0x136756-0x136710)),
+                  (base+0x136120,callee_code),(base+0x136207,pe.read_rva(0x136207,3))]
+    main_code,_,_=decode_cfg(main_windows,base+0x136710,base+0x136756,
+                            alternate_stops=(main_layout["fallthrough"],))
+    main_body=main_code.replace("lifted_begin","main_body_begin").replace("lifted_resume","main_body_resume")
+    module_slot=check_import(0x136756,"call","GetModuleFileNameA","kernel32.dll")
+    cwd_slot=check_import(0x13676c,"call","SetCurrentDirectoryA","kernel32.dll")
+    for rva in (module_slot,cwd_slot):map_value(rva,pe.read_rva(rva,8))
+    filename_windows,filename_entry,filename_stop,_,filename_imports,filename_iat=owned_filename_input(executable)
+    disk_slots={address:int.from_bytes(pe.read_rva(address-base,8),"little") for address in filename_iat}
+    for address in sorted(filename_iat):map_value(address-base,pe.read_rva(address-base,8))
+    filename_code,_,_=decode_cfg(filename_windows,filename_entry,filename_stop,
+                                 filename_imports,filename_iat,disk_imports=disk_slots)
+    filename_body=filename_code.replace("lifted_begin","filename_body_begin").replace("lifted_resume","filename_body_resume")
+    cwd_prefix=unit(pe.read_rva(0x136769,3),0x136769,0x13676c,"cwd_prefix")
+    game_handoff=unit(pe.read_rva(0x136772,0x136784-0x136772),0x136772,0x133e80,"game_handoff")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -488,9 +530,9 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         if(rc||p->cpu.fault)return 0;
         if(c.pc==WINMAIN_PC){
             p->instructions+=c.steps;
-            return p->cpu.r[MXB_RCX]==IMAGE_BASE &&
-                   p->cpu.r[MXB_RDX]==0 && p->cpu.r[MXB_R8]==ARGS_VA+35 &&
-                   p->cpu.r[MXB_R9]==10;
+            if(p->cpu.r[MXB_RCX]!=IMAGE_BASE||p->cpu.r[MXB_RDX]!=0||
+               p->cpu.r[MXB_R8]!=ARGS_VA+35||p->cpu.r[MXB_R9]!=10)return 0;
+            break;
         }
         if(c.pc!=ASCII_CALL||load(&p->cpu,ASCII_SLOT,8)!=ASCII_VALUE||
            p->cpu.fault||p->cpu.r[MXB_RCX]>127)return 0;
@@ -505,7 +547,55 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         p->instructions++;p->services++;
         c.pc=ASCII_RETURN;
     }
-    return 0;
+    if(p->pc!=WINMAIN_PC)return 0;
+    c=main_body_begin();
+    continuation_status=main_body_resume(&p->cpu,&c,128);p->pc=c.pc;
+    if(continuation_status||c.pc!=MODULE_CALL||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
+    /* A virtual install path, not an executable launched on iOS. */
+    static const char module_path[]="C:\\MXBikes\\mxbikes.exe";
+    static const char directory[]="C:\\MXBikes\\";
+    sp=p->cpu.r[MXB_RSP];
+    uint64_t out=p->cpu.r[MXB_RDX];
+    if(load(&p->cpu,MODULE_SLOT,8)!=MODULE_VALUE||p->cpu.fault||
+       p->cpu.r[MXB_RCX]!=0||p->cpu.r[MXB_R8]!=260||out!=sp+0x140||
+       (sp&15u)||sp<8||!mxb_guest_check(&p->cpu.memory,sp-8,40,MXB_MEM_WRITE)||
+       !mxb_guest_check(&p->cpu.memory,out,260,MXB_MEM_WRITE))return 0;
+    store(&p->cpu,sp-8,MODULE_RETURN,8);
+    if(p->cpu.fault||!mxb_guest_write(&p->cpu.memory,out,module_path,sizeof(module_path)))return 0;
+    p->cpu.r[MXB_RAX]=sizeof(module_path)-1u;
+    p->instructions++;p->services++;
+    uint64_t before=p->cpu.completed_crt_calls;
+    c=filename_body_begin();
+    continuation_status=filename_body_resume(&p->cpu,&c,1024);p->pc=c.pc;
+    if(continuation_status||c.pc!=FILENAME_RETURN||p->cpu.fault||
+       p->cpu.r[MXB_RAX]!=FILENAME_VA)return 0;
+    uint64_t calls=p->cpu.completed_crt_calls-before;
+    if(calls!=1u||calls>c.steps)return 0;
+    p->instructions+=c.steps-(unsigned)calls;p->services+=(unsigned)calls;
+    c=cwd_prefix_begin();
+    continuation_status=cwd_prefix_resume(&p->cpu,&c,4);p->pc=c.pc;
+    if(continuation_status||c.pc!=CWD_CALL||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
+    char result[sizeof(directory)];
+    if(load(&p->cpu,CWD_SLOT,8)!=CWD_VALUE||p->cpu.fault||
+       p->cpu.r[MXB_RCX]!=FILENAME_VA||
+       !mxb_guest_read(&p->cpu.memory,FILENAME_VA,result,sizeof(result))||
+       memcmp(result,directory,sizeof(result)))return 0;
+    sp=p->cpu.r[MXB_RSP];
+    if((sp&15u)||sp<8||!mxb_guest_check(&p->cpu.memory,sp-8,40,MXB_MEM_WRITE))return 0;
+    /* This directory is the declared virtual install root. No host chdir
+     * or entitlement result is performed; future VFS opens use this root. */
+    memcpy(p->current_directory,result,sizeof(result));
+    store(&p->cpu,sp-8,CWD_RETURN,8);
+    if(p->cpu.fault)return 0;
+    p->cpu.r[MXB_RAX]=1;
+    p->instructions++;p->services++;
+    c=game_handoff_begin();
+    continuation_status=game_handoff_resume(&p->cpu,&c,16);p->pc=c.pc;
+    if(continuation_status||c.pc!=GAME_INIT_PC||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
+    return 1;
 }
 """
     fields={"STARTUP_INFO_PC":base+startup_info_site,"STARTUP_RESUME":base+resume,"CRT_LOCK_VA":lock,"INIT_TABLE_PC":base+0x2ab0b6,"TEB_VA":teb,"LOCK_PC":base+0x2ab05b,"ENTRY_PC":base+entry,"CHILD_PC":base+callee,"RETURN_PC":base+entry+9,
@@ -523,12 +613,14 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
                   ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780,CMDLINE_PC=base+0x2ab131,CMD_PTR_VA=cmd_ptr,WINMAIN_PC=base+0x136710,IMAGE_BASE=base,ASCII_CALL=base+0x2ab1ce,ASCII_RETURN=base+0x2ab1d4,ASCII_SLOT=base+ascii_slot,ASCII_VALUE=int.from_bytes(pe.read_rva(ascii_slot,8),'little'))
+    fields.update(MODULE_CALL=base+0x136756,MODULE_RETURN=base+0x13675c,MODULE_SLOT=base+module_slot,MODULE_VALUE=int.from_bytes(pe.read_rva(module_slot,8),'little'),FILENAME_RETURN=base+0x136769,FILENAME_VA=FILENAME_GLOBAL,CWD_CALL=base+0x13676c,CWD_RETURN=base+0x136772,CWD_SLOT=base+cwd_slot,CWD_VALUE=int.from_bytes(pe.read_rva(cwd_slot,8),'little'),GAME_INIT_PC=base+0x133e80)
     runner=re.sub(r'\b(?:'+ '|'.join(map(re.escape,fields)) + r')\b',lambda m:u(fields[m[0]]),runner)
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+main_body+filename_body+cwd_prefix+game_handoff+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
+        "#include <string.h>",
         "int mxb_native_launch(MXBOwnedStartup *p){",
         "if(!p || p->pc)return 0;",
         "MXBGuestMemory memory={0};",
@@ -538,7 +630,7 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         f"if(!mxb_guest_map(&memory,{u(lock)},(uint8_t *)&p->crt_lock,8,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(state_addr)},(uint8_t *)&p->crt_phase,4,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(tls_addr)},(uint8_t *)&p->tls_callback,8,3))return 0;",
-        *mappings,*data_maps,
+        *mappings,*data_maps,*game_maps,
         *[f"if(!mxb_guest_map(&memory,{u(base+addr)},(uint8_t *){ptr},{size},3))return 0;"
           for addr,ptr,size in ((0x3d8018,"&p->argument_count",4),(0x3d8020,"p->argument_globals",24),
                                 (0x3d9b10,"p->object_header",24),(0x3de328,"p->subobjects",0x4a0))],
