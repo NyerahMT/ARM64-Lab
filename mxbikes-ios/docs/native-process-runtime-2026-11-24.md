@@ -139,3 +139,27 @@ the compiled original startup code automatically.
 The original-game player-visible milestones remain **0/4**. Dynamic loop
 iterations, mapped image bytes, public synthetic fixtures and Apple build
 success are not equivalent to percentage of original engine translated.
+
+## Continuous native startup extension (November 24, 2026)
+
+Verified checkpoint from source commit `449a3b6227981f96fdf6f3a6148211fc4b873d4d`:
+- 524 original dynamic guest instructions and 13 modeled host services through the
+  fourth constructor and three further leaf calls; original x64 and compiled
+  native ARM64 matched eight cases, GPRs, flags, stack and 1,184 object/global bytes.
+- [Native AArch64 hardware differential](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45434329601).
+- [Installed iOS Simulator launch and unsigned iPhone build](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45434336153).
+
+Verified later checkpoint from source commit `f4b17efb460bf1e59c5d14a468adf62e2f293669`:
+- 589 original dynamic instructions in the same continuous process path, still
+  13 host services. The automatic bounded local CFG discovery reached the next
+  constructor, including SSE zeroing and scalar stores, and its caller's final
+  initialization helper. Stops at the original indirect virtual-call instruction.
+- Eight independent original-x64/native ARM64 cases match all 16 GPRs,
+  all 16 complete 128-bit XMM registers, flags, stack and 1,184 object/global bytes.
+- [Native AArch64 hardware differential and four discovery regressions](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45434998371).
+- Candidate continuation `93127b9343bd8bbe0a51beb468658211cc02853d` resolves the original
+  read-only vtable entry and requires the genuine virtual function return.
+  It is not a verified checkpoint until private differential and iOS tests pass.
+
+These are original startup instructions, not a rendered menu. Steam authorization,
+remaining native translation, host services and original rendering are still unresolved.
