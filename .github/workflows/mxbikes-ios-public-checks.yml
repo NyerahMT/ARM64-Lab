@@ -97,6 +97,7 @@ jobs:
           python scripts/mxbikes_poststeam_joined_differential.py --source-only
           python scripts/mxbikes_native_slice_lift.py --source-only
           python scripts/mxbikes_native_cfg_lift.py --source-only
+          python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture
           echo "Public fixture: source-only timer semantics, NOT original x64 proof." >> "$GITHUB_STEP_SUMMARY"
       - name: Build native post-Steam timer translator for iOS ARM64 Mach-O target
         run: |

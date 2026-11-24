@@ -6,7 +6,7 @@ indirect calls, guest code writes, or arbitrary host pointers. A private owned
 binary is never copied to public outputs.
 """
 from __future__ import annotations
-import argparse, hashlib, json, sys
+import argparse, hashlib, json, struct, sys
 from pathlib import Path
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_OP_REG, CS_OP_IMM, CS_OP_MEM
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE
@@ -71,7 +71,8 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop):
+def decode_cfg(windows,entry,stop,imports=None):
+    imports=imports or {}; import_returns={a:set() for a in imports}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
     nodes={}; pages=set(); pending=[entry]; ranges=[(a,a+len(b)) for a,b in windows]
     def in_code(pc):return any(a<=pc<b for a,b in ranges)
@@ -106,7 +107,7 @@ def decode_cfg(windows,entry,stop):
         raise ValueError("Unsupported destination operand")
     while pending:
         pc=pending.pop()
-        if pc==stop or pc in nodes:continue
+        if pc==stop or pc in nodes or pc in imports:continue
         if len(nodes)>=MAX_STATIC:raise ValueError("Static budget exhausted")
         found=[(base,buf) for base,buf in windows if base<=pc<base+len(buf)]
         if len(found)!=1:raise ValueError("Unapproved direct target "+hex(pc))
@@ -139,6 +140,7 @@ def decode_cfg(windows,entry,stop):
             stmt="s->r[4]-=8u;store(s,s->r[4],%s,8u);"%u(nxt)
             next_pc=u(target);edges=[target]
             if in_code(nxt) or nxt==stop:edges.append(nxt)
+            if target in imports:import_returns[target].add(nxt)
         elif mn=="ret" and not op:
             stmt="next=load(s,s->r[4],8u);s->r[4]+=8u;"
             next_pc="next";edges=[]
@@ -152,6 +154,17 @@ def decode_cfg(windows,entry,stop):
         else:raise ValueError("Unsupported CFG instruction "+mn+" at "+hex(pc))
         nodes[pc]=(stmt+"if(s->fault)return 90;pc="+next_pc+";break;",nxt)
         pending.extend(edges)
+    # Import slots are explicit host-approved semantic boundaries. No native
+    # function pointer can be obtained from a guest register.
+    for target,name in imports.items():
+        continuations=sorted(import_returns[target])
+        if not continuations:continue
+        if name not in ("memset","memcpy","memmove"):raise ValueError("Unsupported native import")
+        guard="||".join("next=="+u(a) for a in continuations)
+        stmt=("next=load(s,s->r[4],8u);if(s->fault||!(%s))return 97;"
+              'if(mxb_guest_crt_call(s,"MSVCR90.dll","%s",next)!=MXB_CRT_OK)return 98;'
+              "pc=next;break;")%(guard,name)
+        nodes[target]=(stmt,target+1)
     cases=["case "+u(pc)+":{"+stmt+"}" for pc,(stmt,_) in sorted(nodes.items())]
     c="""typedef struct {uint64_t pc,trace;unsigned steps;} Cursor;
 static Cursor lifted_begin(void){
@@ -184,7 +197,8 @@ def synthetic_input():
     b=bytes.fromhex("53 89cb 01d8 83eb01 75f9 5b c3")
     return [(base,a),(base+0x100,b)],base,base+len(a)
 
-def reference(windows,entry,stop,pages,nodes,seed,synthetic):
+def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None):
+    imports=imports or {}
     regs,flags,data=initial(seed,pages)
     if synthetic:regs[1]=[0,1,2,3,5,8,0xffffffff,0x80000000][seed-1]
     cpu=Uc(UC_ARCH_X86,UC_MODE_64);mapped=set()
@@ -196,13 +210,27 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic):
     for p in pages:cpu.mem_map(p,PAGE);cpu.mem_write(p,data[p])
     for r,v in zip(UC_REG,regs):cpu.reg_write(r,v)
     cpu.reg_write(x.UC_X86_REG_EFLAGS,flags)
-    trace=[]; invalid=[]
+    trace=[]; invalid=[]; import_events=[]
     def hook(uc,pc,size,ctx):
         if pc not in nodes:invalid.append(pc);uc.emu_stop();return
         trace.append(pc)
+        if pc in imports:
+            # Independent Python reference for the synthetic CRT service.
+            # The actual x64 RET instruction still executes in Unicorn.
+            sp=uc.reg_read(x.UC_X86_REG_RSP)
+            if sp%16!=8:raise ValueError("Reference Win64 ABI alignment")
+            dst=uc.reg_read(x.UC_X86_REG_RCX);src=uc.reg_read(x.UC_X86_REG_RDX)
+            n=uc.reg_read(x.UC_X86_REG_R8)
+            if n>4096:raise ValueError("Reference CRT fixture size")
+            name=imports[pc]
+            if name=="memcpy" and n and abs(dst-src)<n:raise ValueError("Reference overlapping memcpy")
+            data=bytes([src&255])*n if name=="memset" else bytes(uc.mem_read(src,n))
+            uc.mem_write(dst,data);uc.reg_write(x.UC_X86_REG_RAX,dst)
+            import_events.append(name)
     cpu.hook_add(UC_HOOK_CODE,hook)
     cpu.emu_start(entry,stop,count=MAX_DYNAMIC,timeout=2_000_000)
     if invalid or cpu.reg_read(x.UC_X86_REG_RIP)!=stop:raise ValueError("Reference did not reach frontier")
+    if imports and import_events!=["memcpy","memset","memmove"]:raise ValueError("Reference import sequence")
     th=TRACE_INIT
     for pc in trace:th=((th^pc)*TRACE_PRIME)&MASK
     return regs,flags,[cpu.reg_read(r) for r in UC_REG],cpu.reg_read(x.UC_X86_REG_EFLAGS),[hash_page(cpu.mem_read(p,PAGE)) for p in pages],th,trace
@@ -222,20 +250,56 @@ def owned_loop_input(path):
     extra=[base+rva for rva in (0x32e000,0x32f000,0x584000,0x585000)]
     return windows,base+spans[0][0],base+spans[-1][1],extra
 
-def run(path=None,original_loop=False):
-    if original_loop:
+def imports_input():
+    base=0x10000000;heap=0x730000000
+    targets={base+0x100:"memcpy",base+0x110:"memset",base+0x120:"memmove"}
+    code=bytearray(bytes.fromhex("4883ec20"))
+    for target,dst,src,n in (
+        (base+0x100,heap+128,heap+16,40),
+        (base+0x110,heap+4092,0xa7,8),
+        (base+0x120,heap+132,heap+128,32),
+    ):
+        code+=b"\x48\xb9"+struct.pack("<Q",dst)
+        code+=b"\x48\xba"+struct.pack("<Q",src)
+        code+=b"\x41\xb8"+struct.pack("<I",n)
+        code+=b"\xe8"+struct.pack("<i",target-(base+len(code)+5))
+    code+=bytes.fromhex("4883c420")
+    # Real x64 RET stubs. Synthetic CRT reference is independently modeled
+    # in the Unicorn hook; no proprietary machine code is involved.
+    windows=[(base,bytes(code))]+[(a,b"\xc3") for a in targets]
+    return windows,base,base+len(code),[heap,heap+PAGE],targets
+
+def owned_return_input(path):
+    from tools.pe_probe import PE
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
+    pe=PE(path);base=pe.u64(pe.opt+24)
+    if base!=0x140000000:raise ValueError("Unexpected image base")
+    # Standalone actual local caller and complete leaf callee. This is
+    # independently seeded, NOT a continuation across an unported function.
+    spans=((0x28394a,0x283951),(0x2838e0,0x2838e7))
+    return [(base+a,pe.read_rva(a,b-a)) for a,b in spans],base+0x28394a,base+0x283951
+
+def run(path=None,original_loop=False,imports_fixture=False,original_return=False):
+    imports={}
+    if imports_fixture:
+        if path or original_loop or original_return:raise ValueError("Synthetic imports only")
+        windows,entry,stop,extra,imports=imports_input()
+    elif original_return:
+        if not path or original_loop:raise ValueError("Original return requires owned executable")
+        windows,entry,stop=owned_return_input(path);extra=[]
+    elif original_loop:
         if not path:raise ValueError("Original loop requires owned executable")
         windows,entry,stop,extra=owned_loop_input(path)
     else:
         windows,entry,stop=owned_input(path) if path else synthetic_input()
         extra=[]
-    code,static_pages,nodes=decode_cfg(windows,entry,stop)
+    code,static_pages,nodes=decode_cfg(windows,entry,stop,imports)
     pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
     parts=[MEMORY_RUNTIME,EXTRA,code,"int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke())return 95;"]
     lengths=[];covered=set()
     for seed in range(1,9):
-        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path)
+        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports)
         lengths.append(len(trace));covered.update(trace)
         parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
@@ -253,7 +317,7 @@ def run(path=None,original_loop=False):
         for i,h in enumerate(hashes):parts.append("if(hash_page(backing[%d])!=%s)return %d;"%(i,u(h),50+i))
         parts.append("}")
     parts.append("return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif")
-    if not path:
+    if not path and not imports_fixture:
         # Bad decode targets must never compile into a purported native success.
         base=0x10000000
         rejected=[
@@ -278,8 +342,8 @@ def run(path=None,original_loop=False):
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
     compile_native("\n".join(parts),RUNTIME_SOURCES)
-    print(json.dumps({"mode":"private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
-        "static_instructions":len(nodes),"covered_unique":len(covered),
+    print(json.dumps({"mode":"public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
+        "static_instructions":len(nodes)-len(imports),"synthetic_import_nodes":len(imports),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
         "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
@@ -289,4 +353,6 @@ if __name__=="__main__":
     p=argparse.ArgumentParser();g=p.add_mutually_exclusive_group(required=True)
     g.add_argument("--source-only",action="store_true");g.add_argument("--owned-exe",type=Path)
     p.add_argument('--original-loop',action='store_true')
-    args=p.parse_args();run(args.owned_exe,args.original_loop)
+    p.add_argument('--imports-fixture',action='store_true')
+    p.add_argument('--original-return',action='store_true')
+    args=p.parse_args();run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return)
