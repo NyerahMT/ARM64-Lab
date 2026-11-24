@@ -131,7 +131,7 @@ static uint64_t sub_flags(State*s,uint64_t a,uint64_t b,unsigned width){
    (a<b?1u:0u)|((a^b^v)&0x10u)|((((a^b)&(a^v))>>(width-1u))&1u?0x800u:0u);
  return v;
 }
-#ifndef HOST
+#ifdef MXB_FREESTANDING_TEST
 void *memset(void *dst,int byte,unsigned long n){
  volatile unsigned char*p=dst;
  for(unsigned long i=0;i<n;i++)p[i]=(unsigned char)byte;
@@ -200,7 +200,7 @@ def compile_native(src, runtime_sources=()):
         subprocess.run(["cc",*flags,"-DHOST",str(c),*sources,"-o",str(host)],check=True)
         subprocess.run([str(host)],check=True)
         subprocess.run(["clang","--target=aarch64-unknown-linux-gnu","-fuse-ld=lld",
-            "-nostdlib","-static","-ffreestanding","-fno-builtin","-fno-stack-protector",
+            "-nostdlib","-static","-ffreestanding","-fno-builtin","-fno-stack-protector","-DMXB_FREESTANDING_TEST",
             *flags,"-Wl,-e,smoke","-Wl,-z,max-page-size=4096","-Wl,--build-id=none",
             str(c),*sources,"-o",str(arm)],check=True)
         execute_arm64_elf(arm,instruction_budget=6000000,timeout_us=15000000)
