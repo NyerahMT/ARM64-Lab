@@ -97,6 +97,7 @@ jobs:
           python scripts/mxbikes_poststeam_joined_differential.py --source-only
           python scripts/mxbikes_native_slice_lift.py --source-only
           python scripts/mxbikes_native_cfg_lift.py --source-only
+          python scripts/mxbikes_native_memory_rmw_test.py
           python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture
           python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture --split-modules
           python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture --emit-module "$RUNNER_TEMP/mxb-native-probe.c"
