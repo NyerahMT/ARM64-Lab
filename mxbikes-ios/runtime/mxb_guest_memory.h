@@ -20,9 +20,17 @@ typedef struct {
  MXBGuestRegion regions[MXB_MEM_MAX_REGIONS];
  unsigned count;
 } MXBGuestMemory;
+/* Sorted live extents within one caller-owned, permanently mapped arena. */
+#define MXB_HEAP_SLOTS 64u
+typedef struct {
+ uint64_t base, capacity;
+ struct { uint64_t offset, length; } live[MXB_HEAP_SLOTS];
+ unsigned count;
+} MXBGuestHeap;
 typedef struct {
  uint64_t r[16],flags;
  MXBGuestMemory memory;
+ MXBGuestHeap heap;
  unsigned fault;
 } MXBGuestState;
 enum { MXB_RAX=0, MXB_RCX=1, MXB_RDX=2, MXB_RBX=3, MXB_RSP=4,

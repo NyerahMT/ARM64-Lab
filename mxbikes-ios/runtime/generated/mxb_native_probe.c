@@ -75,29 +75,42 @@ static Cursor lifted_begin(void){
  * remain live across budgeted invocations; never reset register or stack state. */
 static int lifted_resume(State*s,Cursor*c,unsigned quota){
  uint64_t pc=c->pc;
- while(pc!=UINT64_C(0x10000065)){
+ while(pc!=UINT64_C(0x10000097)){
   if(c->steps>=8192u)return MXB_NATIVE_BUDGET;
   if(!quota){c->pc=pc;return MXB_NATIVE_YIELD;}
   quota--;c->steps++;c->trace=(c->trace^pc)*UINT64_C(0x100000001b3);
   c->pc=pc;
   uint64_t next=0;(void)next;
   switch(pc){case UINT64_C(0x10000000):{s->r[4]=(sub_flags(s,(s->r[4]&UINT64_C(0xffffffffffffffff)),UINT64_C(0x20),64u))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000004);break;}
-case UINT64_C(0x10000004):{s->r[1]=(UINT64_C(0x730000080))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000000e);break;}
-case UINT64_C(0x1000000e):{s->r[2]=(UINT64_C(0x730000010))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000018);break;}
-case UINT64_C(0x10000018):{s->r[8]=(UINT64_C(0x28))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000001e);break;}
-case UINT64_C(0x1000001e):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000023),8u);if(s->fault)return 90;pc=UINT64_C(0x10000100);break;}
-case UINT64_C(0x10000023):{s->r[1]=(UINT64_C(0x730000ffc))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000002d);break;}
-case UINT64_C(0x1000002d):{s->r[2]=(UINT64_C(0xa7))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000037);break;}
-case UINT64_C(0x10000037):{s->r[8]=(UINT64_C(0x8))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000003d);break;}
-case UINT64_C(0x1000003d):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000042),8u);if(s->fault)return 90;pc=UINT64_C(0x10000110);break;}
-case UINT64_C(0x10000042):{s->r[1]=(UINT64_C(0x730000084))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000004c);break;}
-case UINT64_C(0x1000004c):{s->r[2]=(UINT64_C(0x730000080))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000056);break;}
-case UINT64_C(0x10000056):{s->r[8]=(UINT64_C(0x20))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000005c);break;}
-case UINT64_C(0x1000005c):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000061),8u);if(s->fault)return 90;pc=UINT64_C(0x10000120);break;}
-case UINT64_C(0x10000061):{s->r[4]=(add_flags(s,(s->r[4]&UINT64_C(0xffffffffffffffff)),UINT64_C(0x20),64u))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000065);break;}
-case UINT64_C(0x10000100):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000023)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","memcpy",next)!=MXB_CRT_OK)return 98;pc=next;break;}
-case UINT64_C(0x10000110):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000042)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","memset",next)!=MXB_CRT_OK)return 98;pc=next;break;}
-case UINT64_C(0x10000120):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000061)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","memmove",next)!=MXB_CRT_OK)return 98;pc=next;break;} default:return MXB_NATIVE_UNKNOWN_PC;}
+case UINT64_C(0x10000004):{s->r[1]=(UINT64_C(0x20))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000009);break;}
+case UINT64_C(0x10000009):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x1000000e),8u);if(s->fault)return 90;pc=UINT64_C(0x10000130);break;}
+case UINT64_C(0x1000000e):{s->r[1]=((s->r[0]&UINT64_C(0xffffffffffffffff)))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000011);break;}
+case UINT64_C(0x10000011):{s->r[2]=(UINT64_C(0x5a))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000016);break;}
+case UINT64_C(0x10000016):{s->r[8]=(UINT64_C(0x20))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000001c);break;}
+case UINT64_C(0x1000001c):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000021),8u);if(s->fault)return 90;pc=UINT64_C(0x10000110);break;}
+case UINT64_C(0x10000021):{s->r[1]=((s->r[0]&UINT64_C(0xffffffffffffffff)))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000024);break;}
+case UINT64_C(0x10000024):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000029),8u);if(s->fault)return 90;pc=UINT64_C(0x10000140);break;}
+case UINT64_C(0x10000029):{s->r[1]=(UINT64_C(0x10))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000002e);break;}
+case UINT64_C(0x1000002e):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000033),8u);if(s->fault)return 90;pc=UINT64_C(0x10000130);break;}
+case UINT64_C(0x10000033):{s->r[3]=((s->r[0]&UINT64_C(0xffffffffffffffff)))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000036);break;}
+case UINT64_C(0x10000036):{s->r[1]=(UINT64_C(0x730000080))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000040);break;}
+case UINT64_C(0x10000040):{s->r[2]=(UINT64_C(0x730000010))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000004a);break;}
+case UINT64_C(0x1000004a):{s->r[8]=(UINT64_C(0x28))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000050);break;}
+case UINT64_C(0x10000050):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000055),8u);if(s->fault)return 90;pc=UINT64_C(0x10000100);break;}
+case UINT64_C(0x10000055):{s->r[1]=(UINT64_C(0x730000ffc))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000005f);break;}
+case UINT64_C(0x1000005f):{s->r[2]=(UINT64_C(0xa7))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000069);break;}
+case UINT64_C(0x10000069):{s->r[8]=(UINT64_C(0x8))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000006f);break;}
+case UINT64_C(0x1000006f):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000074),8u);if(s->fault)return 90;pc=UINT64_C(0x10000110);break;}
+case UINT64_C(0x10000074):{s->r[1]=(UINT64_C(0x730000084))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000007e);break;}
+case UINT64_C(0x1000007e):{s->r[2]=(UINT64_C(0x730000080))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000088);break;}
+case UINT64_C(0x10000088):{s->r[8]=(UINT64_C(0x20))&UINT64_C(0xffffffff);if(s->fault)return 90;pc=UINT64_C(0x1000008e);break;}
+case UINT64_C(0x1000008e):{s->r[4]-=8u;store(s,s->r[4],UINT64_C(0x10000093),8u);if(s->fault)return 90;pc=UINT64_C(0x10000120);break;}
+case UINT64_C(0x10000093):{s->r[4]=(add_flags(s,(s->r[4]&UINT64_C(0xffffffffffffffff)),UINT64_C(0x20),64u))&UINT64_C(0xffffffffffffffff);if(s->fault)return 90;pc=UINT64_C(0x10000097);break;}
+case UINT64_C(0x10000100):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000055)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","memcpy",next)!=MXB_CRT_OK)return 98;pc=next;break;}
+case UINT64_C(0x10000110):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000021)||next==UINT64_C(0x10000074)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","memset",next)!=MXB_CRT_OK)return 98;pc=next;break;}
+case UINT64_C(0x10000120):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000093)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","memmove",next)!=MXB_CRT_OK)return 98;pc=next;break;}
+case UINT64_C(0x10000130):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x1000000e)||next==UINT64_C(0x10000033)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","malloc",next)!=MXB_CRT_OK)return 98;pc=next;break;}
+case UINT64_C(0x10000140):{next=load(s,s->r[4],8u);if(s->fault||!(next==UINT64_C(0x10000029)))return 97;if(mxb_guest_crt_call(s,"MSVCR90.dll","free",next)!=MXB_CRT_OK)return 98;pc=next;break;} default:return MXB_NATIVE_UNKNOWN_PC;}
   c->pc=pc;
  }
  return 0;

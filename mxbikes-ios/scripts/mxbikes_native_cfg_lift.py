@@ -51,6 +51,7 @@ void *memcpy(void *dst,const void *src,unsigned long n){
 RUNTIME_SOURCES=("mxb_guest_memory.c","mxb_guest_crt.c","mxb_pe_guest_image.c","mxb_native_dispatch.c")
 MAX_STATIC=512
 MAX_DYNAMIC=8192
+HEAP_ARENA = 0x740000000
 TRACE_INIT=0xcbf29ce484222325
 TRACE_PRIME=0x100000001b3
 
@@ -182,7 +183,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=()):
     for target,name in imports.items():
         continuations=sorted(import_returns[target])
         if not continuations:continue
-        if name not in ("memset","memcpy","memmove"):raise ValueError("Unsupported native import")
+        if name not in ("memset","memcpy","memmove","malloc","free"):raise ValueError("Unsupported native import")
         guard="||".join("next=="+u(a) for a in continuations)
         stmt=("next=load(s,s->r[4],8u);if(s->fault||!(%s))return 97;"
               'if(mxb_guest_crt_call(s,"MSVCR90.dll","%s",next)!=MXB_CRT_OK)return 98;'
@@ -225,7 +226,7 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
     regs,flags,data=initial(seed,pages)
     data.update(image_pages or {});page_permissions=page_permissions or {}
     if synthetic:regs[1]=[0,1,2,3,5,8,0xffffffff,0x80000000][seed-1]
-    if crt_case:
+    if crt_case and crt_case[0]!="heap-init":
         name,n=crt_case;heap=0x730000000
         regs[1]=heap+4094 if name=='memcpy' else heap+128
         regs[2]=heap+32 if name=='memcpy' else seed*19
@@ -259,12 +260,21 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
             sp=uc.reg_read(x.UC_X86_REG_RSP)
             if sp%16!=8:raise ValueError("Reference Win64 ABI alignment")
             dst=uc.reg_read(x.UC_X86_REG_RCX);src=uc.reg_read(x.UC_X86_REG_RDX)
-            n=uc.reg_read(x.UC_X86_REG_R8)
-            if n>16384:raise ValueError("Reference CRT fixture size")
             name=imports[pc]
-            if name=="memcpy" and n and abs(dst-src)<n:raise ValueError("Reference overlapping memcpy")
-            data=bytes([src&255])*n if name=="memset" else bytes(uc.mem_read(src,n))
-            uc.mem_write(dst,data);uc.reg_write(x.UC_X86_REG_RAX,dst)
+            if name=="malloc":
+                # Scripted independent contract for the public sequence. The
+                # second allocation fits the released first extent.
+                expected_size = 9600 if crt_case else (32 if not import_events else 16)
+                if dst != expected_size:raise ValueError("Unexpected allocation size")
+                uc.reg_write(x.UC_X86_REG_RAX,HEAP_ARENA)
+            elif name=="free":
+                if dst != HEAP_ARENA:raise ValueError("Unexpected free pointer")
+            else:
+                n=uc.reg_read(x.UC_X86_REG_R8)
+                if n>16384:raise ValueError("Reference CRT fixture size")
+                if name=="memcpy" and n and abs(dst-src)<n:raise ValueError("Reference overlapping memcpy")
+                payload=bytes([src&255])*n if name=="memset" else bytes(uc.mem_read(src,n))
+                uc.mem_write(dst,payload);uc.reg_write(x.UC_X86_REG_RAX,dst)
             import_events.append(name)
     cpu.hook_add(UC_HOOK_CODE,hook)
     cpu.emu_start(entry,stop,count=MAX_DYNAMIC,timeout=2_000_000)
@@ -278,7 +288,15 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
             if bytes(cpu.mem_read(FILENAME_GLOBAL,last+2))!=path[:last+1]+bytes([0]):
                 raise ValueError("Original directory truncation mismatch")
         elif final_pc not in alternate_stops:raise ValueError("Original no-separator frontier mismatch")
-    if imports and import_events!=([crt_case[0]] if crt_case else ["memcpy","memset","memmove"]):raise ValueError("Reference import sequence")
+    expected_imports = ["malloc","memset","free","malloc","memcpy","memset","memmove"]
+    if crt_case:
+        expected_imports = ["malloc","memset"] if crt_case[0]=="heap-init" else [crt_case[0]]
+    if imports and import_events!=expected_imports:raise ValueError("Reference import sequence")
+    if crt_case and crt_case[0]=="heap-init":
+        if bytes(cpu.mem_read(0x140585930,8))!=struct.pack("<Q",HEAP_ARENA):
+            raise ValueError("Original initialization did not retain the allocated pointer")
+        if bytes(cpu.mem_read(HEAP_ARENA,9600))!=bytes(9600):
+            raise ValueError("Original initialization failed to clear its allocation")
     th=TRACE_INIT
     for pc in trace:th=((th^pc)*TRACE_PRIME)&MASK
     return regs,flags,[cpu.reg_read(r) for r in UC_REG],cpu.reg_read(x.UC_X86_REG_EFLAGS),[hash_page(cpu.mem_read(p,PAGE)) for p in pages],th,trace,final_pc
@@ -302,6 +320,18 @@ def imports_input():
     base=0x10000000;heap=0x730000000
     targets={base+0x100:"memcpy",base+0x110:"memset",base+0x120:"memmove"}
     code=bytearray(bytes.fromhex("4883ec20"))
+    targets.update({base+0x130:"malloc",base+0x140:"free"})
+    def call(target):
+        code.extend(b"\xe8"+struct.pack("<i",target-(base+len(code)+5)))
+    code.extend(bytes.fromhex("b920000000"))  # mov ecx,32
+    call(base+0x130)
+    code.extend(bytes.fromhex("4889c1 ba5a000000 41b820000000"))  # memset(rax,0x5a,32)
+    call(base+0x110)
+    code.extend(bytes.fromhex("4889c1"))  # free(memset return)
+    call(base+0x140)
+    code.extend(bytes.fromhex("b910000000"))
+    call(base+0x130)
+    code.extend(bytes.fromhex("4889c3"))  # retain second pointer across calls
     for target,dst,src,n in (
         (base+0x100,heap+128,heap+16,40),
         (base+0x110,heap+4092,0xa7,8),
@@ -315,7 +345,7 @@ def imports_input():
     # Real x64 RET stubs. Synthetic CRT reference is independently modeled
     # in the Unicorn hook; no proprietary machine code is involved.
     windows=[(base,bytes(code))]+[(a,b"\xc3") for a in targets]
-    return windows,base,base+len(code),[heap,heap+PAGE],targets
+    return windows,base,base+len(code),[heap,heap+PAGE,HEAP_ARENA],targets
 
 def owned_return_input(path):
     from tools.pe_probe import PE
@@ -327,13 +357,7 @@ def owned_return_input(path):
     spans=((0x28394a,0x283951),(0x2838e0,0x2838e7))
     return [(base+a,pe.read_rva(a,b-a)) for a,b in spans],base+0x28394a,base+0x283951
 
-def owned_crt_input(path,kind):
-    from tools.pe_probe import PE
-    from mxbikes_first_callee_emu import import_slots
-    if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
-    pe=PE(path);base=pe.u64(pe.opt+24)
-    if base!=0x140000000:raise ValueError("Unexpected image base")
-    call_rva,n={"memcpy":(0x1599df,4),"memset":(0x15c1f2,296)}[kind]
+def owned_import_site(pe,base,slots,call_rva,kind,target):
     original_call=pe.read_rva(call_rva,5)
     if original_call[0]!=0xe8:raise ValueError("Expected original E8 CALL")
     ret=base+call_rva+5
@@ -341,11 +365,32 @@ def owned_crt_input(path,kind):
     jump=pe.read_rva(thunk-base,6)
     if jump[:2]!=b"\xff\x25":raise ValueError("Expected original FF25 import thunk")
     slot=thunk+6+struct.unpack_from("<i",jump,2)[0]
-    slots={base+r:(lib.lower(),symbol) for r,lib,symbol in import_slots(pe)}
     if slots.get(slot)!=("msvcr90.dll",kind):raise ValueError("Original import provenance mismatch")
     if slot%PAGE>PAGE-8:raise ValueError("Cross-page IAT slot")
+    return [(thunk,jump),(target,b"\xc3")],slot,ret
+
+def owned_crt_input(path,kind):
+    from tools.pe_probe import PE
+    from mxbikes_first_callee_emu import import_slots
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
+    pe=PE(path);base=pe.u64(pe.opt+24)
+    if base!=0x140000000:raise ValueError("Unexpected image base")
+    slots={base+r:(lib.lower(),symbol) for r,lib,symbol in import_slots(pe)}
+    if kind=="heap-init":
+        start,stop=0x28394a,0x283972
+        windows=[(base+start,pe.read_rva(start,stop-start)),
+                 (base+0x2838e0,pe.read_rva(0x2838e0,7))]
+        imports={};iat={}
+        for i,(site,name) in enumerate(((0x283956,"malloc"),(0x28396d,"memset"))):
+            target=0x750000000+i*16
+            pieces,slot,ret=owned_import_site(pe,base,slots,site,name,target)
+            windows.extend(pieces);imports[target]=name;iat[slot]=(target,ret)
+        pages=[HEAP_ARENA+i*PAGE for i in range(3)]
+        return windows,base+start,base+stop,pages,imports,iat,(kind,9600)
+    call_rva,n={"memcpy":(0x1599df,4),"memset":(0x15c1f2,296)}[kind]
     target=0x740000000
-    windows=[(base+call_rva,original_call),(thunk,jump),(target,b"\xc3")]
+    pieces,slot,ret=owned_import_site(pe,base,slots,call_rva,kind,target)
+    windows=[(base+call_rva,pe.read_rva(call_rva,5)),*pieces]
     return windows,base+call_rva,ret,[0x730000000,0x730001000],{target:kind},{slot:(target,ret)},(kind,n)
 
 FILENAME_GLOBAL=0x1403968a0
@@ -384,7 +429,7 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
     code,static_pages,nodes=decode_cfg(windows,entry,stop,imports,iat,alternate_stops)
     if split_modules:
         if original_loop:split=0x140283945
-        elif imports_fixture:split=entry+4+31
+        elif imports_fixture:split=stop-35  # final memmove setup, CALL and stack restoration
         else:raise ValueError("Split fixture requires owned loop or public CRT sequence")
         first,p1,n1=decode_cfg(windows,entry,split,imports,iat)
         second,p2,n2=decode_cfg(windows,split,stop,imports,iat)
@@ -428,7 +473,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
         regs,flags,out,of,hashes,th,trace,endpoint=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions,alternate_stops,patches,original_filename)
         endpoints.append(endpoint)
         lengths.append(len(trace));covered.update(trace)
-        parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
+        parts.append("{State s={0};uint8_t storage[%du*4096u];uint8_t *backing[sizeof(storage)/4096u];for(unsigned j=0;j<sizeof(storage)/4096u;j++)backing[j]=storage+j*4096u;Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
         parts.append("s.flags=%s;"%u(flags))
         for i,p in enumerate(pages):
@@ -444,6 +489,11 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
                     for k,b in enumerate(struct.pack("<Q",target)):
                         parts.append("backing[%d][%d]=%du;"%(i,off+k,b))
             perm=1 if any(slot&~(PAGE-1)==p for slot in iat) else page_permissions.get(p,3)
+            arena_size = 3*PAGE if original_crt=="heap-init" else PAGE if imports_fixture else 0
+            if HEAP_ARENA<=p<HEAP_ARENA+arena_size:
+                if p==HEAP_ARENA:
+                    parts.append("if(!mxb_guest_heap_init(&s,%s,backing[%d],%du))return 96;"%(u(p),i,arena_size))
+                continue
             parts.append("if(!mxb_guest_map(&s.memory,%s,backing[%d],4096u,%du))return 96;"%(u(p),i,perm))
         # Vary the pause interval, including very short boundaries inside calls.
         quota=1+seed*19
@@ -515,7 +565,7 @@ if __name__=="__main__":
     p.add_argument('--original-loop',action='store_true')
     p.add_argument('--imports-fixture',action='store_true')
     p.add_argument('--original-return',action='store_true')
-    p.add_argument('--original-crt',choices=['memcpy','memset'])
+    p.add_argument('--original-crt',choices=['memcpy','memset','heap-init'])
     p.add_argument('--original-image-data',action='store_true')
     p.add_argument('--split-modules',action='store_true')
     p.add_argument('--original-filename',action='store_true')
