@@ -8,6 +8,8 @@ struct NativeMetalSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
         view.colorPixelFormat = .bgra8Unorm
+        view.depthStencilPixelFormat = .depth32Float
+        view.clearDepth = 1.0
         view.clearColor = MTLClearColor(red: 0.025, green: 0.03, blue: 0.045, alpha: 1)
         view.framebufferOnly = true
         view.preferredFramesPerSecond = 60
@@ -23,6 +25,7 @@ struct NativeMetalSurface: UIViewRepresentable {
 final class GPUBridge: NSObject, MTKViewDelegate {
     private var queue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
+    private var depthStates: [UInt32: MTLDepthStencilState] = [:]
     private var probeTextureReady = false
     private var probeGPUTexture: MTLTexture?
     private let guestGL = mxb_gl_create()
@@ -43,6 +46,7 @@ final class GPUBridge: NSObject, MTKViewDelegate {
         descriptor.vertexFunction = vertex
         descriptor.fragmentFunction = fragment
         descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.colorAttachments[0].isBlendingEnabled = true
         descriptor.colorAttachments[0].rgbBlendOperation = .add
         descriptor.colorAttachments[0].alphaBlendOperation = .add
@@ -53,6 +57,36 @@ final class GPUBridge: NSObject, MTKViewDelegate {
         pipeline = try? device.makeRenderPipelineState(descriptor: descriptor)
         queue = device.makeCommandQueue()
         probeGPUTexture = nil
+        depthStates.removeAll()
+    }
+
+    private func depthState(_ batch: MXBGLDrawBatch, device: MTLDevice) -> MTLDepthStencilState? {
+        // GL with depth test disabled must never write depth, even if mask is true.
+        let enabled = batch.depth_test != 0
+        let write = enabled && batch.depth_write != 0
+        let compare: MTLCompareFunction
+        if !enabled { compare = .always }
+        else {
+            switch batch.depth_func {
+            case 0x0200: compare = .never
+            case 0x0201: compare = .less
+            case 0x0202: compare = .equal
+            case 0x0203: compare = .lessEqual
+            case 0x0204: compare = .greater
+            case 0x0205: compare = .notEqual
+            case 0x0206: compare = .greaterEqual
+            case 0x0207: compare = .always
+            default: return nil
+            }
+        }
+        let key = UInt32(compare.rawValue) * 2 + (write ? 1 : 0)
+        if let cached = depthStates[key] { return cached }
+        let descriptor = MTLDepthStencilDescriptor()
+        descriptor.depthCompareFunction = compare
+        descriptor.isDepthWriteEnabled = write
+        guard let state = device.makeDepthStencilState(descriptor: descriptor) else { return nil }
+        depthStates[key] = state
+        return state
     }
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
@@ -127,7 +161,19 @@ final class GPUBridge: NSObject, MTKViewDelegate {
                     return
                 }
 
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: count)
+                // Each committed GL draw retains the depth state at submission.
+                // Texture/blend state is still shared by the prototype.
+                if let batches = mxb_gl_batches(guestGL) {
+                    for index in 0..<Int(mxb_gl_batch_count(guestGL)) {
+                        let batch = batches[index]
+                        let first = Int(batch.first_vertex)
+                        let length = Int(batch.vertex_count)
+                        guard first <= count, length <= count - first,
+                              let depth = depthState(batch, device: device) else { break }
+                        encoder.setDepthStencilState(depth)
+                        encoder.drawPrimitives(type: .triangle, vertexStart: first, vertexCount: length)
+                    }
+                }
             }
         }
         encoder.endEncoding()
