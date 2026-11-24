@@ -111,9 +111,7 @@ the compiled original startup code automatically.
 
 ## Remaining critical path
 
-1. Resume the retained process at the second CRT routine, RVA `0x2AB02C`.
-   Its first imported call is `KERNEL32!GetStartupInfoA` at RVA `0x2AB043`.
-   Verify the guest startup structure and stack against the original x64 path.
+1. Resume the retained process at the original call to `_initterm_e`, RVA `0x2AB0B6`. The compiled iOS app reached this call directly from entry in 62 original instructions. The adapter provided a 104-byte GUI startup structure and a single-thread guest environment. The original code acquired the free CRT lock, set the initialization phase, and selected the table at RVAs `0x321A88–0x321AA0`. It contains a null slot followed by callbacks at RVAs `0x2AB234` and `0x2AB714`. Connect their execution and preserve error returns. [Installed iOS check and x64 comparisons](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45347716389)
 2. Connect native units from more original control-flow regions to a common
    image-backed process state and route actual original imports to verified
    native adapters; don't silently treat unresolved imports as success.
