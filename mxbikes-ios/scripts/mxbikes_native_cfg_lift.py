@@ -73,8 +73,9 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None,iat=None):
+def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=()):
     imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
+    frontiers={stop,*alternate_stops}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
     nodes={}; pages=set(); pending=[entry]; ranges=[(a,a+len(b)) for a,b in windows]
     def in_code(pc):return any(a<=pc<b for a,b in ranges)
@@ -100,16 +101,16 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None):
         if op.type==CS_OP_REG:
             i,w=reg(ins,op);return "(s->r[%d]&%s)"%(i,u((1<<w)-1))
         if op.type==CS_OP_IMM:return u(op.imm)
-        if op.type==CS_OP_MEM and op.size in (4,8):return "load(s,%s,%du)"%(addr(ins,op),op.size)
+        if op.type==CS_OP_MEM and op.size in (1,2,4,8):return "load(s,%s,%du)"%(addr(ins,op),op.size)
         raise ValueError("Unsupported source operand")
     def write(ins,op,v):
         if op.type==CS_OP_REG:
             i,w=reg(ins,op);return "s->r[%d]=(%s)&%s;"%(i,v,u((1<<w)-1))
-        if op.type==CS_OP_MEM and op.size in (4,8):return "store(s,%s,%s,%du);"%(addr(ins,op),v,op.size)
+        if op.type==CS_OP_MEM and op.size in (1,2,4,8):return "store(s,%s,%s,%du);"%(addr(ins,op),v,op.size)
         raise ValueError("Unsupported destination operand")
     while pending:
         pc=pending.pop()
-        if pc==stop or pc in nodes or pc in imports:continue
+        if pc in frontiers or pc in nodes or pc in imports:continue
         if len(nodes)>=MAX_STATIC:raise ValueError("Static budget exhausted")
         found=[(base,buf) for base,buf in windows if base<=pc<base+len(buf)]
         if len(found)!=1:raise ValueError("Unapproved direct target "+hex(pc))
@@ -122,6 +123,15 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None):
         edges=[nxt];next_pc=u(nxt);stmt=""
         if mn in ("mov","movabs") and len(op)==2:
             stmt=write(ins,op[0],read(ins,op[1]))
+        elif mn in ("movsx","movsxd","movzx") and len(op)==2 and op[0].type==CS_OP_REG:
+            _,width=reg(ins,op[0]);src_width=op[1].size*8
+            if src_width not in (8,16,32) or src_width>=width:raise ValueError("Invalid extending move width")
+            value=read(ins,op[1]);mask=u((1<<src_width)-1)
+            if mn=="movzx":value="(%s&%s)"%(value,mask)
+            else:
+                sign=u(1<<(src_width-1))
+                value="(((%s&%s)^%s)-%s)"%(value,mask,sign,sign)
+            stmt=write(ins,op[0],value)
         elif mn=="lea" and len(op)==2 and op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM:
             stmt=write(ins,op[0],addr(ins,op[1]))
         elif mn in ("xor","sub","add","and","or") and len(op)==2 and op[0].type==CS_OP_REG:
@@ -141,7 +151,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None):
             target=op[0].imm
             stmt="s->r[4]-=8u;store(s,s->r[4],%s,8u);"%u(nxt)
             next_pc=u(target);edges=[target]
-            if in_code(nxt) or nxt==stop:edges.append(nxt)
+            if in_code(nxt) or nxt in frontiers:edges.append(nxt)
             if target in imports:import_returns[target].add(nxt)
         elif mn=="ret" and not op:
             stmt="next=load(s,s->r[4],8u);s->r[4]+=8u;"
@@ -198,7 +208,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
  }
  return 0;
 }
-""".replace("ENTRY",u(entry)).replace("STOP",u(stop)).replace("CASES","\n".join(cases))
+""".replace("ENTRY",u(entry)).replace("STOP",u(stop)+"".join("&&pc!="+u(a) for a in alternate_stops)).replace("CASES","\n".join(cases))
     return c,sorted(pages),set(nodes)
 
 def synthetic_input():
@@ -210,7 +220,7 @@ def synthetic_input():
     b=bytes.fromhex("53 89cb 01d8 83eb01 75f9 5b c3")
     return [(base,a),(base+0x100,b)],base,base+len(a)
 
-def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=None,crt_case=None,image_pages=None,page_permissions=None):
+def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=None,crt_case=None,image_pages=None,page_permissions=None,alternate_stops=(),patches=None,filename_case=False):
     imports=imports or {};iat=iat or {}
     regs,flags,data=initial(seed,pages)
     data.update(image_pages or {});page_permissions=page_permissions or {}
@@ -220,6 +230,10 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
         regs[1]=heap+4094 if name=='memcpy' else heap+128
         regs[2]=heap+32 if name=='memcpy' else seed*19
         regs[8]=n
+    for address,payload in (patches or {}).items():
+        page=address&~(PAGE-1);off=address-page
+        if off+len(payload)>PAGE:raise ValueError('Fixture patch crosses page')
+        buf=bytearray(data[page]);buf[off:off+len(payload)]=payload;data[page]=bytes(buf)
     for slot,(target,_) in iat.items():
         page=slot&~(PAGE-1);off=slot-page
         buf=bytearray(data[page]);buf[off:off+8]=struct.pack('<Q',target);data[page]=bytes(buf)
@@ -236,6 +250,7 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
     cpu.reg_write(x.UC_X86_REG_EFLAGS,flags)
     trace=[]; invalid=[]; import_events=[]
     def hook(uc,pc,size,ctx):
+        if pc in alternate_stops:uc.emu_stop();return
         if pc not in nodes:invalid.append(pc);uc.emu_stop();return
         trace.append(pc)
         if pc in imports:
@@ -253,11 +268,20 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
             import_events.append(name)
     cpu.hook_add(UC_HOOK_CODE,hook)
     cpu.emu_start(entry,stop,count=MAX_DYNAMIC,timeout=2_000_000)
-    if invalid or cpu.reg_read(x.UC_X86_REG_RIP)!=stop:raise ValueError("Reference did not reach frontier")
+    final_pc=cpu.reg_read(x.UC_X86_REG_RIP)
+    if invalid or final_pc not in {stop,*alternate_stops}:raise ValueError("Reference did not reach frontier")
+    if filename_case:
+        path=FILENAME_CASES[seed-1];last=max(path.rfind(b"/"),path.rfind(b"\\\\"))
+        if last>=0:
+            if final_pc!=stop or cpu.reg_read(x.UC_X86_REG_RAX)!=FILENAME_GLOBAL or cpu.reg_read(x.UC_X86_REG_RSP)!=RSP+0x40:
+                raise ValueError("Original filename helper return contract")
+            if bytes(cpu.mem_read(FILENAME_GLOBAL,last+2))!=path[:last+1]+b"\\x00":
+                raise ValueError("Original directory truncation mismatch")
+        elif final_pc not in alternate_stops:raise ValueError("Original no-separator frontier mismatch")
     if imports and import_events!=([crt_case[0]] if crt_case else ["memcpy","memset","memmove"]):raise ValueError("Reference import sequence")
     th=TRACE_INIT
     for pc in trace:th=((th^pc)*TRACE_PRIME)&MASK
-    return regs,flags,[cpu.reg_read(r) for r in UC_REG],cpu.reg_read(x.UC_X86_REG_EFLAGS),[hash_page(cpu.mem_read(p,PAGE)) for p in pages],th,trace
+    return regs,flags,[cpu.reg_read(r) for r in UC_REG],cpu.reg_read(x.UC_X86_REG_EFLAGS),[hash_page(cpu.mem_read(p,PAGE)) for p in pages],th,trace,final_pc
 
 def owned_loop_input(path):
     from tools.pe_probe import PE
@@ -324,10 +348,25 @@ def owned_crt_input(path,kind):
     windows=[(base+call_rva,original_call),(thunk,jump),(target,b"\xc3")]
     return windows,base+call_rva,ret,[0x730000000,0x730001000],{target:kind},{slot:(target,ret)},(kind,n)
 
-def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None,original_image_data=False,split_modules=False):
+FILENAME_GLOBAL=0x1403968a0
+FILENAME_CASES=(b"C:\\games\\mxbikes.exe",b"/tmp/mxbikes.exe",b"mixed\\dir/file.exe",
+                b"mxbikes.exe",b"C:\\",b"/",b"",b"high\\x80/dir/file.exe")
+def owned_filename_input(path):
+    from tools.pe_probe import PE
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
+    pe=PE(path);base=pe.u64(pe.opt+24)
+    if base!=0x140000000:raise ValueError("Unexpected image base")
+    spans=((0x15b7aa,0x15b81b),(0x15b862,0x15b867))
+    windows=[(base+a,pe.read_rva(a,b-a)) for a,b in spans]
+    return windows,base+0x15b7aa,base+0x136769,[FILENAME_GLOBAL&~(PAGE-1)],(base+0x15b81b,)
+
+def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None,original_image_data=False,split_modules=False,original_filename=False):
     if original_image_data and (not path or not original_loop):raise ValueError('Actual image data requires owned loop') 
-    imports={};iat={};crt_case=None
-    if original_crt:
+    imports={};iat={};crt_case=None;alternate_stops=()
+    if original_filename:
+        if not path or original_loop or original_return or original_crt or imports_fixture or split_modules:raise ValueError('Owned filename fixture requires owned executable')
+        windows,entry,stop,extra,alternate_stops=owned_filename_input(path)
+    elif original_crt:
         if not path or original_loop or original_return or imports_fixture:raise ValueError("Owned CRT fixture requires owned executable")
         windows,entry,stop,extra,imports,iat,crt_case=owned_crt_input(path,original_crt)
     elif imports_fixture:
@@ -342,7 +381,7 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
     else:
         windows,entry,stop=owned_input(path) if path else synthetic_input()
         extra=[]
-    code,static_pages,nodes=decode_cfg(windows,entry,stop,imports,iat)
+    code,static_pages,nodes=decode_cfg(windows,entry,stop,imports,iat,alternate_stops)
     if split_modules:
         if original_loop:split=0x140283945
         elif imports_fixture:split=entry+4+31
@@ -382,10 +421,12 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
                     parts.append(",".join(str(b) for b in data[start:start+32])+",")
                 parts.append("};")
     parts.extend(["int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke()||!mxb_pe_guest_smoke())return 95;"])
-    lengths=[];covered=set();case_parts=[];prefix_length=len(parts)
+    lengths=[];covered=set();case_parts=[];endpoints=[];prefix_length=len(parts)
     for seed in range(1,9):
         case_start=len(parts)
-        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions)
+        patches={RSP+0x38:struct.pack('<Q',stop),FILENAME_GLOBAL:FILENAME_CASES[seed-1]+b'\\x00'} if original_filename else {}
+        regs,flags,out,of,hashes,th,trace,endpoint=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions,alternate_stops,patches,original_filename)
+        endpoints.append(endpoint)
         lengths.append(len(trace));covered.update(trace)
         parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
@@ -394,6 +435,9 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
             if p in native_pages:
                 parts.append("__builtin_memcpy(backing[%d],image_page_%d,4096u);"%(i,i))
             else:parts.append("for(unsigned j=0;j<4096u;j++)backing[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
+            for address,payload in patches.items():
+                if address&~(PAGE-1)==p:
+                    for k,b in enumerate(payload):parts.append('backing[%d][%d]=%du;'%(i,address-p+k,b))
             for slot,(target,_) in iat.items():
                 if slot&~(PAGE-1)==p:
                     off=slot-p
@@ -404,7 +448,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
         # Vary the pause interval, including very short boundaries inside calls.
         quota=1+seed*19
         parts.append("int rc;do{rc=lifted_resume(&s,&cursor,%du);slices++;if(slices>8193u)return 94;}while(rc==93);if(rc)return rc;"%quota)
-        parts.append("if(cursor.pc!=%s||cursor.trace!=%s||cursor.steps!=%du)return 80;"%(u(stop),u(th),len(trace)))
+        parts.append("if(cursor.pc!=%s||cursor.trace!=%s||cursor.steps!=%du)return 80;"%(u(endpoint),u(th),len(trace)))
         parts.append("if(slices!=%du)return 81;"%((len(trace)+quota-1)//quota))
         for i,v in enumerate(out):parts.append("if(s.r[%d]!=%s)return %d;"%(i,u(v),10+i))
         parts.append("if((s.flags&%s)!=%s)return 40;"%(u(CMP_FLAGS),u(of&CMP_FLAGS)))
@@ -444,9 +488,9 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
             batch=parts[:prefix_length]+[line for case in case_parts[start:start+4] for line in case]+[footer]
             compile_native("\n".join(batch),RUNTIME_SOURCES,redact_diagnostics=True)
     else:compile_native("\n".join(parts),RUNTIME_SOURCES)
-    print(json.dumps({"mode":"private_owned_original_loop_actual_image_data" if original_image_data else "private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
+    print(json.dumps({"mode":"private_owned_original_filename" if original_filename else "private_owned_original_loop_actual_image_data" if original_image_data else "private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes)-len(imports),"modeled_import_nodes":len(imports),"original_iat_provenance":bool(iat),"covered_unique":len(covered),
-        "dynamic_instructions_per_case":lengths,"cases":8,
+        "dynamic_instructions_per_case":lengths,"cases":8,"complete_primary_returns":sum(e==stop for e in endpoints),"alternate_frontiers":sum(e!=stop for e in endpoints),
         "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"original_image_seed_pages":len(native_pages),"native_execution_batches":2 if original_image_data else 1,"independent_translation_units":2 if split_modules else 1,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
         "original_game_booted":False},indent=2))
@@ -474,10 +518,11 @@ if __name__=="__main__":
     p.add_argument('--original-crt',choices=['memcpy','memset'])
     p.add_argument('--original-image-data',action='store_true')
     p.add_argument('--split-modules',action='store_true')
+    p.add_argument('--original-filename',action='store_true')
     p.add_argument('--emit-module',type=Path)
     args=p.parse_args()
     if args.emit_module:
-        if not args.source_only or not args.imports_fixture or args.original_loop or args.original_return or args.original_crt or args.original_image_data or args.split_modules:
+        if not args.source_only or not args.imports_fixture or args.original_loop or args.original_return or args.original_crt or args.original_image_data or args.split_modules or args.original_filename:
             p.error('Only the public synthetic imports fixture can be emitted')
         emit_public_module(args.emit_module)
-    else:run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt,args.original_image_data,args.split_modules)
+    else:run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt,args.original_image_data,args.split_modules,args.original_filename)
