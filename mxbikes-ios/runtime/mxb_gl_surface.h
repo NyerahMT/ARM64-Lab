@@ -24,6 +24,9 @@ extern "C" {
 #define MXB_GL_UNSIGNED_SHORT 0x1403u
 #define MXB_GL_UNSIGNED_INT 0x1405u
 #define MXB_GL_MAX_INDEXED 512u
+/* Total OpenGL stack depths, including the current matrix. */
+#define MXB_GL_MODELVIEW_STACK_DEPTH 32u
+#define MXB_GL_PROJECTION_STACK_DEPTH 2u
 typedef struct {float position[4];float color[4];float uv[2];} MXBGLVertex;
 typedef struct MXBGLSurface MXBGLSurface;
 MXBGLSurface *mxb_gl_create(void);
@@ -32,6 +35,8 @@ void mxb_gl_reset(MXBGLSurface *s);
 void mxb_gl_clear_frame(MXBGLSurface *s);
 int mxb_gl_matrix_mode(MXBGLSurface *s,unsigned mode);
 int mxb_gl_load_identity(MXBGLSurface *s);
+int mxb_gl_push_matrix(MXBGLSurface *s);
+int mxb_gl_pop_matrix(MXBGLSurface *s);
 int mxb_gl_translatef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_scalef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_ortho(MXBGLSurface *s,float l,float r,float b,float t,float n,float f);
