@@ -4,6 +4,7 @@ import struct
 from pathlib import Path
 
 from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u
+from mxbikes_native_local_discovery import discover_pe
 from mxbikes_first_callee_emu import import_slots
 from tools.crt_cfg_lift import translate_crt_cfg
 from tools.entry_wrapper import decode_entry_wrapper
@@ -161,6 +162,11 @@ def prepare_startup(executable: Path, destination: Path):
         0x2e84c0,base+0x2d2ad6,register_calls={base+0x30b17c:base+0x2abbd0})
     parent_tail=region("parent_tail",((0x2d2ad6,0x2d2b6a),(0x2dbe70,0x2dbe93)),
                        0x2d2ad6,base+0x2d2b6a)
+    # Discover the remaining local constructor's complete direct-call closure
+    # from original executable bytes. The following parent call is the stop.
+    next_windows=discover_pe(pe,base,base+0x2d2b6a,base+0x2bbd90,max_nodes=256)
+    next_code,_,_=decode_cfg(next_windows,base+0x2d2b6a,base+0x2bbd90)
+    next_constructor=next_code.replace("lifted_begin","next_constructor_begin").replace("lifted_resume","next_constructor_resume")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -354,6 +360,9 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=parent_tail_begin();
     if(parent_tail_resume(&p->cpu,&c,128)!=0 || c.pc!=PARENT_TAIL_END || p->cpu.fault)return 0;
     p->pc=c.pc;p->instructions+=c.steps;
+    c=next_constructor_begin();
+    if(next_constructor_resume(&p->cpu,&c,512)!=0 || c.pc!=NEXT_CONSTRUCTOR_END || p->cpu.fault)return 0;
+    p->pc=c.pc;p->instructions+=c.steps;
     return 1;
 }
 """
@@ -371,10 +380,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a)
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90)
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
