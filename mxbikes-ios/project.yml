@@ -34,6 +34,9 @@ targets:
       - path: runtime/mxb_pe_guest_image.c
       - path: runtime/mxb_pe_guest_image.h
         buildPhase: headers
+      - path: runtime/mxb_config_file.c
+      - path: runtime/mxb_config_file.h
+        buildPhase: headers
       - path: runtime/mxb_guest_crt.c
       - path: runtime/mxb_guest_crt.h
         buildPhase: headers
