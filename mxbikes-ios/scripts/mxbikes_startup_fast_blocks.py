@@ -356,6 +356,36 @@ def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False
                     u,pe,original_slots,lib,symbol,verified_import_return):
                     return
             except GuestHeapResearchRejected as exc:
+                if malloc_research.guest_small_memcpy_events:
+                    try:
+                        from mxbikes_crt_guest_malloc_research import (
+                            FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_MAX_TOTAL_BYTES,
+                            GUEST_TEMP_DATA_MIN,GUEST_TEMP_DATA_MAX)
+                        rsp=u.reg_read(UC_X86_REG_RSP)
+                        ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+                        dest=u.reg_read(UC_X86_REG_RCX)
+                        src=u.reg_read(UC_X86_REG_RDX)
+                        def cls(ptr):
+                            if BASE<=ptr<image_hi:return "original_image"
+                            if FOLLOWUP_HEAP_BASE<=ptr<FOLLOWUP_HEAP_BASE+FOLLOWUP_HEAP_MAX_TOTAL_BYTES:
+                                return "bounded_guest_heap"
+                            if GUEST_TEMP_DATA_MIN<=ptr<GUEST_TEMP_DATA_MAX:
+                                return "mapped_guest_temp_data"
+                            return "other_guest_pointer"
+                        blocker["subsequent_memcpy_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,ret,lib,symbol,original_slots),
+                            "size_bytes":u.reg_read(UC_X86_REG_R8),
+                            "source_region":cls(src),
+                            "destination_region":cls(dest),
+                            "source_alignment_mod8":src&7,
+                            "destination_alignment_mod8":dest&7,
+                            "win64_stack_aligned":rsp&15==8,
+                            "no_additional_bytes_copied":True,
+                        }
+                    except Exception as inspect_exc:
+                        blocker["subsequent_memcpy_abi"]={
+                            "inspection_error":type(inspect_exc).__name__}
                 stop(u,"original_guest_small_memcpy_rejected",**{
                     "import":lib+"!"+symbol,"reason":str(exc)})
                 return
