@@ -7,7 +7,7 @@ from mxbikes_crt_guest_malloc_research import (
     SingleGuestMallocResearch,GuestHeapResearchRejected,
     IMAGE_BASE,FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_GUEST_OFFSET,
     MEMCPY_FOUR_ORIGINAL_CALL_RVA,MEMCPY_FOUR_ORIGINAL_RETURN_RVA,
-    GUEST_TEMP_DATA_MIN,
+    GUEST_TEMP_DATA_MIN, MEMCPY_FOUR_MAX_CALLS,
 )
 SRC=FOLLOWUP_HEAP_BASE+0x2000+FOLLOWUP_HEAP_GUEST_OFFSET+7
 DEST=GUEST_TEMP_DATA_MIN+0x1104
@@ -52,6 +52,10 @@ class FourByteOriginalMemcpyTests(unittest.TestCase):
         self.assertEqual(cpu.writes,[(DEST,b"ABCD")])
         self.assertEqual(cpu.reg_read(UC_X86_REG_RAX),DEST)
         self.assertEqual(bridge.summary()["original_small_memcpy_guest_count"],1)
+        self.assertTrue(bridge.handle_guest_small_memcpy(
+            cpu,None,{"ok":True},"MSVCR90.dll","memcpy",verified))
+        self.assertEqual(bridge.summary()["original_small_memcpy_guest_count"],2)
+        bridge.guest_small_memcpy_events=[{} for _ in range(MEMCPY_FOUR_MAX_CALLS)]
         with self.assertRaisesRegex(GuestHeapResearchRejected,"budget"):
             bridge.handle_guest_small_memcpy(
                 cpu,None,{"ok":True},"MSVCR90.dll","memcpy",verified)
