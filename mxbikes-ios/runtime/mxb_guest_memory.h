@@ -32,6 +32,8 @@ typedef struct {
  MXBGuestMemory memory;
  MXBGuestHeap heap;
  unsigned fault;
+ /* Persistent Win64 SSE registers, low and high 64-bit lanes. */
+ uint64_t xmm[16][2];
 } MXBGuestState;
 enum { MXB_RAX=0, MXB_RCX=1, MXB_RDX=2, MXB_RBX=3, MXB_RSP=4,
  MXB_RBP=5, MXB_RSI=6, MXB_RDI=7, MXB_R8=8, MXB_R9=9 };
