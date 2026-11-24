@@ -33,6 +33,7 @@ INITIALIZE_296_BYTES=296
 MEMCPY_FOUR_ORIGINAL_CALL_RVA=0x1599DF
 MEMCPY_FOUR_ORIGINAL_RETURN_RVA=MEMCPY_FOUR_ORIGINAL_CALL_RVA+5
 MEMCPY_FOUR_BYTES=4
+MEMCPY_FOUR_MAX_CALLS=64
 GUEST_TEMP_DATA_MIN=0x710000000
 GUEST_TEMP_DATA_MAX=0x720000000
 
@@ -310,7 +311,7 @@ class SingleGuestMallocResearch:
         return True
 
     def handle_guest_small_memcpy(self,u,pe,slots,library,symbol,verify):
-        """Original Win64 memcpy of 4 bytes from validated malloc to guest data.
+        """Bounded original Win64 4-byte memcpy calls from malloc to guest data.
 
         Never touches the original PE, host resources, or any address outside
         a recorded bounded user allocation and readable, mapped temporary
@@ -318,8 +319,8 @@ class SingleGuestMallocResearch:
         """
         if library.lower()!="msvcr90.dll" or symbol!="memcpy":
             return False
-        if (not self.followup_heap_memset_events or self.guest_small_memcpy_events
-            or not self.followup_malloc_events):
+        if (not self.followup_heap_memset_events or not self.followup_malloc_events
+            or len(self.guest_small_memcpy_events)>=MEMCPY_FOUR_MAX_CALLS):
             raise GuestHeapResearchRejected("guest_small_memcpy_original_sequence_or_budget")
         rsp=u.reg_read(UC_X86_REG_RSP)
         dest=u.reg_read(UC_X86_REG_RCX)
