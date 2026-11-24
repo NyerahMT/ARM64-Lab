@@ -100,3 +100,62 @@ runtime services over one-off original-game code patches.
 object, synthetic Metal frame, synthetic Steam positive response, or
 unsigned demo viewport as a playable original game. Player-visible
 milestones are still **0/4**.
+
+
+## Second verified three-tier checkpoint — original E8 CALL into game helper
+
+The first true **cross-function** native checkpoint now executes original
+RVAs `0x133F66` through `0x133F76` and the entry of the called original
+game helper at `0x2A9AE0` through `0x2A9B06`. It stops before the
+helper's first **nested** original game CALL at `0x2A9B08`.
+
+Original x64 operations:
+
+- The previous three timer-state instructions are run first.
+- An original `E8 CALL` at RVA `0x133F76` pushes the original
+  `0x133F7B` return PC and enters the helper.
+- Nine authentic helper-prologue instructions store `RBX` and `RSI`
+  in caller shadow-space slots, push `RDI`, allocate a `0x130`-byte
+  Win64 stack frame, read the original image security-cookie global at
+  **RVA `0x3928A0`**, XOR with post-prologue RSP, save the resulting
+  cookie and copy zero-extended `EDX`/`ECX` into `ESI`/`EDI`.
+- The native implementation uses an explicitly bounded, fully testable
+  1,024-byte **guest stack**, not real Windows pointers or actual iOS
+  process stack addresses.
+
+All 13 exact original instructions were disassembled and executed
+from the SHA-pinned, privately owned executable in Unicorn x64.
+Across five independent fixture inputs, their resulting register,
+defined status flags, original timer-global DWORD and **all 1,024 guest
+stack bytes** matched the compiled host and AArch64 implementation.
+Original security cookie bytes were not exported to source or logs;
+the oracle used explicit synthetic test cookie inputs. Undefined
+x64 auxiliary flag `AF` from XOR is not asserted.
+
+[Private authentic x64/native AArch64 differential passed](
+https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45304495014).
+
+The native translation lives in
+`runtime/mxb_poststeam_helper_entry_native.{h,c}` and the
+source-only/public plus private-original differential in
+`scripts/mxbikes_poststeam_joined_differential.py`.
+The explicit machine-readable original-to-native/iOS contract is
+`contracts/poststeam-joined-entry-v1.json`.
+The C source is included in the XcodeGen project and bridged into
+the actual SwiftUI prototype, which calls a C-owned **synthetic**
+guest-state smoke test. Both unsigned iOS Simulator and iPhone
+ARM64-target applications compiled successfully.
+
+[Public source-only and actual iOS application build passed](
+https://github.com/NyerahMT/ARM64-Lab/actions/runs/45304483495).
+
+**Next technical frontier**: original game call at `0x2A9B08`
+enters original RVA `0x2838F0`, after which the current helper
+uses many more internal calls. Our native join does not translate
+that target, does not maintain a complete process-wide Win64
+memory model, and does not execute the full MX Bikes engine.
+
+**Milestone assessment**: the scoped 13-instruction cross-function
+native checkpoint is complete (100%); the overall original-game
+playable milestones remain **0/4 (0%)**. No original game graphics
+have been rendered on iPhone or in native ARM64 game execution.
