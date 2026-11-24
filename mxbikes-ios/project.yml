@@ -17,6 +17,9 @@ targets:
         excludes:
           - Info.plist
           - Bridge.h
+      - path: runtime/mxb_native_dispatch.c
+      - path: runtime/mxb_native_dispatch.h
+        buildPhase: headers
       - path: runtime/generated/mxb_native_probe.c
       - path: runtime/mxb_native_probe_smoke.c
       - path: runtime/mxb_native_exec.h

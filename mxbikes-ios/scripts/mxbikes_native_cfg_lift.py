@@ -48,7 +48,7 @@ void *memcpy(void *dst,const void *src,unsigned long n){
 }
 #endif
 """
-RUNTIME_SOURCES=("mxb_guest_memory.c","mxb_guest_crt.c","mxb_pe_guest_image.c")
+RUNTIME_SOURCES=("mxb_guest_memory.c","mxb_guest_crt.c","mxb_pe_guest_image.c","mxb_native_dispatch.c")
 MAX_STATIC=512
 MAX_DYNAMIC=8192
 TRACE_INIT=0xcbf29ce484222325
@@ -324,7 +324,7 @@ def owned_crt_input(path,kind):
     windows=[(base+call_rva,original_call),(thunk,jump),(target,b"\xc3")]
     return windows,base+call_rva,ret,[0x730000000,0x730001000],{target:kind},{slot:(target,ret)},(kind,n)
 
-def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None,original_image_data=False):
+def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None,original_image_data=False,split_modules=False):
     if original_image_data and (not path or not original_loop):raise ValueError('Actual image data requires owned loop') 
     imports={};iat={};crt_case=None
     if original_crt:
@@ -343,6 +343,29 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
         windows,entry,stop=owned_input(path) if path else synthetic_input()
         extra=[]
     code,static_pages,nodes=decode_cfg(windows,entry,stop,imports,iat)
+    if split_modules:
+        if original_loop:split=0x140283945
+        elif imports_fixture:split=entry+4+31
+        else:raise ValueError("Split fixture requires owned loop or public CRT sequence")
+        first,p1,n1=decode_cfg(windows,entry,split,imports,iat)
+        second,p2,n2=decode_cfg(windows,split,stop,imports,iat)
+        if n1&n2 or n1|n2!=nodes or sorted(set(p1+p2))!=static_pages:
+            raise ValueError("Invalid translation unit partition")
+        first=first.replace("lifted_begin","unit1_begin").replace("lifted_resume","unit1_resume")
+        second=second.replace("lifted_begin","unit2_begin").replace("lifted_resume","unit2_resume")
+        def arr(name,values):return "static const uint64_t %s[]={%s};"%(name,",".join(map(u,sorted(values))))
+        registry=r"""
+static const MXBNativeUnit units[]={
+ {pcs1,sizeof(pcs1)/sizeof(pcs1[0]),unit1_resume},
+ {pcs2,sizeof(pcs2)/sizeof(pcs2[0]),unit2_resume}
+};
+static const MXBNativeRegistry registry={units,2};
+static Cursor lifted_begin(void){return unit1_begin();}
+static int lifted_resume(State*s,Cursor*c,unsigned quota){
+ return mxb_native_dispatch(&registry,s,c,quota,FINAL);
+}
+""".replace("FINAL",u(stop))
+        code='#include "mxb_native_dispatch.h"\n'+first+second+arr("pcs1",n1)+arr("pcs2",n2)+registry
     pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
     parts=[MEMORY_RUNTIME,EXTRA,code]
@@ -415,7 +438,7 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
     print(json.dumps({"mode":"private_owned_original_loop_actual_image_data" if original_image_data else "private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes)-len(imports),"modeled_import_nodes":len(imports),"original_iat_provenance":bool(iat),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
-        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"original_image_seed_pages":len(native_pages),"registers":16,
+        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"original_image_seed_pages":len(native_pages),"independent_translation_units":2 if split_modules else 1,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
         "original_game_booted":False},indent=2))
 
@@ -441,10 +464,11 @@ if __name__=="__main__":
     p.add_argument('--original-return',action='store_true')
     p.add_argument('--original-crt',choices=['memcpy','memset'])
     p.add_argument('--original-image-data',action='store_true')
+    p.add_argument('--split-modules',action='store_true')
     p.add_argument('--emit-module',type=Path)
     args=p.parse_args()
     if args.emit_module:
-        if not args.source_only or not args.imports_fixture or args.original_loop or args.original_return or args.original_crt or args.original_image_data:
+        if not args.source_only or not args.imports_fixture or args.original_loop or args.original_return or args.original_crt or args.original_image_data or args.split_modules:
             p.error('Only the public synthetic imports fixture can be emitted')
         emit_public_module(args.emit_module)
-    else:run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt,args.original_image_data)
+    else:run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt,args.original_image_data,args.split_modules)
