@@ -1,8 +1,9 @@
 """Generate a private Apple native entry wrapper and first CRT initializer."""
+import hashlib
 import struct
 from pathlib import Path
 
-from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, decode_cfg, u
+from mxbikes_native_cfg_lift import EXTRA, MEMORY_RUNTIME, SHA, decode_cfg, u
 from mxbikes_first_callee_emu import import_slots
 from tools.crt_cfg_lift import translate_crt_cfg
 from tools.entry_wrapper import decode_entry_wrapper
@@ -10,7 +11,8 @@ from tools.pe_probe import PE
 
 
 def prepare_startup(executable: Path, destination: Path):
-    # The calling build script first verifies the game SHA in owned_filename_input.
+    if hashlib.sha256(executable.read_bytes()).hexdigest()!=SHA:
+        raise ValueError("Wrong owned executable")
     pe=PE(executable)
     base=pe.u64(pe.opt+24)
     entry=pe.u32(pe.opt+16)
