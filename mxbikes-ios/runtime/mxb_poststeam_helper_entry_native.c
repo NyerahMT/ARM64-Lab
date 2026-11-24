@@ -66,3 +66,36 @@ int mxb_poststeam_join_to_helper_entry(mxb_poststeam_joined_guest *guest)
     guest->timer.rip=MXB_POSTSTEAM_HELPER_NEXT_PC;
     return 1;
 }
+
+int mxb_poststeam_joined_synthetic_smoke(void)
+{
+    mxb_poststeam_joined_guest state={0};
+    state.timer.rip=MXB_POSTSTEAM_TIMER_BEGIN_PC;
+    state.timer.rax=UINT64_C(0x1234567887654321);
+    state.timer.rcx=UINT64_C(0xffffffffffffffff);
+    state.timer.rdx=UINT64_C(0xabcdef0012345678);
+    state.timer.rflags=UINT64_C(0x202);
+    state.timer.global_time_ms=UINT32_C(0xbaadface);
+    state.stack_base=UINT64_C(0x720000000);
+    state.rsp=state.stack_base+UINT64_C(0x300);
+    state.rbx=UINT64_C(0x11223344);
+    state.rsi=UINT64_C(0x55667788);
+    state.rdi=UINT64_C(0x99aabbcc);
+    state.security_cookie=UINT64_C(0xcafed00d);
+    for (unsigned i=0U;i<MXB_POSTSTEAM_JOINED_STACK_BYTES;++i)
+        state.stack[i]=0xa5U;
+    if (!mxb_poststeam_join_to_helper_entry(&state))
+        return 0;
+    const uint64_t rsp=state.stack_base+UINT64_C(0x1c0);
+    if (state.timer.rip!=MXB_POSTSTEAM_HELPER_NEXT_PC ||
+        state.rsp!=rsp ||
+        state.timer.global_time_ms!=UINT32_C(0x87654321) ||
+        state.timer.rax!=(UINT64_C(0xcafed00d)^rsp) ||
+        state.timer.rcx!=UINT64_C(0xd3b8) ||
+        state.timer.rdx!=UINT64_C(1) ||
+        state.rsi!=UINT64_C(1) ||
+        state.rdi!=UINT64_C(0xd3b8) ||
+        state.rbx!=UINT64_C(0x11223344))
+        return 0;
+    return 1;
+}
