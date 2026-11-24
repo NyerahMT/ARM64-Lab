@@ -256,7 +256,7 @@ def prepare_startup(executable: Path, destination: Path):
     main_windows=[(base+0x136710,pe.read_rva(0x136710,0x136756-0x136710)),
                   (base+0x136120,callee_code),(base+0x136207,pe.read_rva(0x136207,3))]
     main_code,_,_=decode_cfg(main_windows,base+0x136710,base+0x136756,
-                            alternate_stops=(main_layout["fallthrough"],))
+                            alternate_stops=(main_layout["fallthrough_va"],))
     main_body=main_code.replace("lifted_begin","main_body_begin").replace("lifted_resume","main_body_resume")
     module_slot=check_import(0x136756,"call","GetModuleFileNameA","kernel32.dll")
     cwd_slot=check_import(0x13676c,"call","SetCurrentDirectoryA","kernel32.dll")
