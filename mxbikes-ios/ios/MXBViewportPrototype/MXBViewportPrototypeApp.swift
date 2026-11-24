@@ -32,6 +32,10 @@ struct MXBViewportPrototypeApp: App {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Native Metal surface").font(.headline)
                     Text("Original MX Bikes engine not connected").font(.caption)
+                    Text(mxb_poststeam_joined_synthetic_smoke() == 1
+                         ? "Native timer → helper entry: synthetic check passed"
+                         : "Native timer → helper entry: synthetic check failed")
+                        .font(.caption2)
                     Text(nativePostSteamTimerSmoke()
                          ? "Native post-Steam timer: synthetic state check passed"
                          : "Native post-Steam timer: synthetic state check failed")
