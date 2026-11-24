@@ -25,6 +25,21 @@ private func nativePostSteamTimerSmoke() -> Bool {
 // Native renderer lab only; the original MX Bikes engine is not running.
 @main
 struct MXBViewportPrototypeApp: App {
+    init() {
+        // Explicit CI-only runtime marker: a successful simulator launch must
+        // actually call the linked generated native module, not merely build.
+        if ProcessInfo.processInfo.arguments.contains("--native-selftest") {
+            let passed = mxb_native_probe_smoke() == 1 &&
+                         mxb_poststeam_joined_synthetic_smoke() == 1 &&
+                         nativePostSteamTimerSmoke()
+            let marker = passed ? "PASS: synthetic generated native runtime" :
+                                  "FAIL: synthetic generated native runtime"
+            if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                let destination = docs.appendingPathComponent("mxb-native-selftest.txt")
+                try? Data((marker + "\n").utf8).write(to: destination, options: .atomic)
+            }
+        }
+    }
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .bottom) {
