@@ -36,9 +36,9 @@ struct MXBViewportPrototypeApp: App {
                          ? "Native timer → helper entry: synthetic check passed"
                          : "Native timer → helper entry: synthetic check failed")
                         .font(.caption2)
-                    Text(mxb_guest_memory_smoke() == 1 && mxb_guest_crt_smoke() == 1
-                         ? "Persistent guest memory: synthetic check passed"
-                         : "Persistent guest memory: synthetic check failed")
+                    Text(mxb_native_probe_smoke() == 1
+                         ? "Generated native CPU → CRT → guest memory: synthetic check passed"
+                         : "Generated native CPU → CRT → guest memory: synthetic check failed")
                         .font(.caption2)
                     Text(nativePostSteamTimerSmoke()
                          ? "Native post-Steam timer: synthetic state check passed"
