@@ -10,6 +10,7 @@ that a game frame was rendered without original-game provenance.
 from __future__ import annotations
 
 import argparse
+import calendar
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ SCRIPTS = ROOT / "scripts"
 PINNED_EXE_SHA256 = "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
 MAX_EXE = 750 * 1024 * 1024
 MAX_DLL = 64 * 1024 * 1024
+MAX_CORE_INI = 64 * 1024
 COPY_BLOCK = 1024 * 1024
 
 
@@ -81,6 +83,27 @@ def archive_member(zf: zipfile.ZipFile, name: str, limit: int) -> zipfile.ZipInf
     return hits[0]
 
 
+def optional_owned_core_ini(zf: zipfile.ZipFile) -> zipfile.ZipInfo | None:
+    """Only the exact root core.ini, never an arbitrary user/host path.
+
+    A missing file is allowed (original Windows fopen would return NULL).
+    A duplicate, encrypted, symlink or oversized file is not. The contents
+    remain private and are only extracted to the temporary owned-game dir.
+    """
+    matches=[x for x in zf.infolist() if not x.is_dir()
+             and x.filename.replace(chr(92),"/").lower()=="core.ini"]
+    if len(matches)>1:
+        raise InputRejected("duplicate_original_core_ini")
+    if not matches:
+        return None
+    member=matches[0]
+    mode=(member.external_attr>>16)&0o170000
+    if (member.flag_bits&1 or mode==0o120000 or
+        member.file_size<=0 or member.file_size>MAX_CORE_INI):
+        raise InputRejected("unsafe_or_oversized_original_core_ini")
+    return member
+
+
 def bounded_extract(zf: zipfile.ZipFile, member: zipfile.ZipInfo, destination: Path) -> None:
     total = 0
     with zf.open(member, "r") as src, destination.open("xb") as output:
@@ -108,6 +131,22 @@ def extract_owned_archive(archive: Path, destination: Path) -> tuple[Path, Path]
         dll = destination / "steam_api64.dll"
         bounded_extract(zf, exe_info, exe)
         bounded_extract(zf, dll_info, dll)
+        core_info=optional_owned_core_ini(zf)
+        if core_info is not None:
+            core_path=destination/"core.ini"
+            bounded_extract(zf,core_info,core_path)
+            # ZIP stores naive local-wall-clock timestamps, not UTC offsets.
+            # For deterministic research, preserve the archived wall-clock
+            # fields as a UTC-assumed mtime on this PRIVATE temporary copy.
+            # This must not be represented as the true Windows NTFS time.
+            try:
+                zip_time=calendar.timegm((*core_info.date_time,0,0,0))
+                if zip_time<0:
+                    raise ValueError("ZIP time predates Unix epoch")
+                os.utime(core_path,ns=(zip_time*1_000_000_000,
+                                        zip_time*1_000_000_000))
+            except (OverflowError,ValueError,OSError) as exc:
+                raise InputRejected("invalid_original_core_ini_archive_time") from exc
     validate_owned_pair(exe, dll)
     return exe, dll
 
@@ -120,8 +159,29 @@ def public_safe_output(path: Path) -> Path:
     return output
 
 
-def make_report(exe: Path, dll: Path, output: Path, mode: str) -> dict:
+def make_report(exe: Path, dll: Path, output: Path, mode: str, *,
+                steam_failure_probe: bool = False,
+                steam_init_success_probe: bool = False,
+                steam_subscription_research_probe: bool = False) -> dict:
     manifest = validate_owned_pair(exe, dll)
+    core_ini=exe.parent/"core.ini"
+    if core_ini.is_symlink():
+        raise InputRejected("owned_core_ini_symlink_rejected")
+    core_present=core_ini.is_file()
+    if core_present and not 0<core_ini.stat().st_size<=MAX_CORE_INI:
+        raise InputRejected("owned_core_ini_size_budget")
+    manifest["owned_core_ini_present"]=core_present
+    manifest["owned_core_ini_size_bytes"]=core_ini.stat().st_size if core_present else 0
+    # This is provenance metadata only. The 100ns value is based on a ZIP
+    # local datetime *treated as UTC* or on an installed file's native mtime.
+    # It is NOT a claim of exact original Windows creation/access timestamps.
+    win_filetime_offset=116444736000000000
+    filetime=(core_ini.stat().st_mtime_ns//100+win_filetime_offset
+              if core_present else None)
+    if filetime is not None and not 0<=filetime<2**64:
+        raise InputRejected("owned_core_ini_filetime_outside_win64_range")
+    manifest["owned_core_ini_last_write_filetime_100ns"]=filetime
+    manifest["owned_core_ini_zip_wall_clock_assumed_utc"]=mode=="owned_zip"
     output.mkdir(parents=True, exist_ok=True)
     (output / "owned-steam-file-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -131,6 +191,39 @@ def make_report(exe: Path, dll: Path, output: Path, mode: str) -> dict:
     # ROOT.parent/tools, NOT the old ROOT/arm64-lab/tools checkout.
     sys.path.insert(0, str(PUBLIC_REPO_ROOT))
     sys.path.insert(0, str(SCRIPTS))
+    if steam_failure_probe or steam_init_success_probe or steam_subscription_research_probe:
+        from mxbikes_startup_fast_blocks import execute
+        # Probe the genuine guest game failure path; never synthesize Steam
+        # authentication or pass through unsupported interface creation.
+        guest = execute(exe, dll, output,
+            steam_failure_probe=steam_failure_probe,
+            steam_init_success_probe=steam_init_success_probe,
+            steam_subscription_research_probe=steam_subscription_research_probe)
+        result = {
+            "mode": mode,
+            "steam_failure_probe": steam_failure_probe,
+            "steam_init_success_probe": steam_init_success_probe,
+            "steam_subscription_research_probe": steam_subscription_research_probe,
+            "real_original_x64_executed": guest["original_guest_basic_block_executions"]>0,
+            "explicit_failed_steam_returns": guest["steam_failure_probe"]["original_guest_steam_failure_return_count"],
+            "modeled_steam_returns": guest["steam_failure_probe"]["original_guest_steam_modeled_return_count"],
+            "modeled_init_success_is_not_real_authentication": steam_init_success_probe or steam_subscription_research_probe,
+            "synthetic_ownership_method_reached": bool(guest.get("synthetic_steam_subscription_research") and guest["synthetic_steam_subscription_research"]["original_subscription_vtable_call_reached"]),
+            "real_original_blocks_after_first_failed_return": len(guest["original_post_failure_block_rvas"]),
+            "stop": guest["stop"]["status"],
+            "blocked_import": guest["stop"].get("import"),
+            "actual_original_opengl_calls": guest["actual_original_gl_import_events"],
+            "steam_client_initialized": False,
+            "license_or_entitlement_granted": False,
+            "native_ios_game_running": False,
+        }
+        report_name = ("local-steam-init-success-probe.json" if steam_init_success_probe else
+                       "local-steam-subscription-research.json" if steam_subscription_research_probe else
+                       "local-steam-failure-probe.json")
+        (output / report_name).write_text(
+            json.dumps(result, indent=2) + "\n", encoding="utf-8"
+        )
+        return result
     from mxbikes_original_game_graphics_handoff import run
     trace = run(exe, dll, output)
     result = {
@@ -167,9 +260,18 @@ def run_cli(argv=None) -> int:
                         help="Also statically index original direct-call paths toward Steam/graphics; no guessed execution")
     parser.add_argument("--static-graphics-only", action="store_true",
                         help="Run genuine original-PE static graph without executing the game")
+    scenarios = parser.add_mutually_exclusive_group()
+    scenarios.add_argument("--steam-failure-probe", action="store_true",
+                        help="Opt-in diagnostic: execute original game with documented Steam false/failure returns")
+    scenarios.add_argument("--steam-init-success-probe", action="store_true",
+                        help="Opt-in counterfactual x64 branch probe: model Steam Init true WITHOUT real authentication or interfaces")
+    scenarios.add_argument("--steam-subscription-research-probe", action="store_true",
+                        help="Research-only: model one SteamApps virtual method true to map original post-subscription code; NOT entitlement")
     parser.add_argument("--validate-only", action="store_true",
                         help="Verify owned inputs without running any original instructions")
     args = parser.parse_args(argv)
+    if (args.steam_failure_probe or args.steam_init_success_probe or args.steam_subscription_research_probe) and (args.validate_only or args.static_graphics_only):
+        parser.error("Steam branch probes require execution, not --validate-only/--static-graphics-only")
 
     if bool(args.game_exe) != bool(args.steam_dll):
         parser.error("--game-exe and --steam-dll must be provided together")
@@ -206,7 +308,10 @@ def run_cli(argv=None) -> int:
                 if args.static_graphics_only:
                     print(json.dumps(graph_overview, indent=2))
                     return 0
-            report = make_report(exe, dll, out, mode)
+            report = make_report(exe, dll, out, mode,
+                                 steam_failure_probe=args.steam_failure_probe,
+                                 steam_init_success_probe=args.steam_init_success_probe,
+                                 steam_subscription_research_probe=args.steam_subscription_research_probe)
             if args.map_graphics_paths:
                 report["static_graph"] = graph_overview
             print(json.dumps(report, indent=2))

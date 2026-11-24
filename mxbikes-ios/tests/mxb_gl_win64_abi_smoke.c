@@ -1,7 +1,13 @@
 #include "mxb_gl_win64_abi.h"
-#include <math.h>
 #include <stdint.h>
+#ifdef MXB_FREESTANDING_TEST
+/* The cross-architecture test links its own bounded test-only libc shim. */
+#define fabsf __builtin_fabsf
+extern void *memcpy(void *,const void *,size_t);
+#else
+#include <math.h>
 #include <string.h>
+#endif
 
 #define HEAP UINT64_C(0x650000000)
 #define STACK UINT64_C(0x720000000)
@@ -175,6 +181,121 @@ int main(void){
  mxb_gl_clear_frame(s);
  regs.rdx=65535;regs.r8=3;
  if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_RENDER_REJECTED)return 47;
+ /* Hierarchical transforms via actual Win64 register dispatch. No game
+  * code or assets are required to exercise these renderer semantics. */
+ mxb_gl_reset(s);
+ regs.rcx=MXB_GL_MODELVIEW;
+ if(invoke(s,&mem,&regs,"glMatrixMode")!=MXB_GL_GUEST_OK)return 50;
+ regs.xmm_low64[0]=bits_f(2);regs.xmm_low64[1]=bits_f(0);regs.xmm_low64[2]=bits_f(0);
+ if(invoke(s,&mem,&regs,"glTranslatef")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 51;
+ regs.xmm_low64[0]=bits_f(3);regs.xmm_low64[1]=bits_f(2);regs.xmm_low64[2]=bits_f(1);
+ if(invoke(s,&mem,&regs,"glScalef")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 52;
+ regs.rcx=MXB_GL_PROJECTION;
+ if(invoke(s,&mem,&regs,"glMatrixMode")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 53;
+ regs.xmm_low64[0]=bits_f(.5f);regs.xmm_low64[1]=bits_f(.5f);regs.xmm_low64[2]=bits_f(1);
+ if(invoke(s,&mem,&regs,"glScalef")!=MXB_GL_GUEST_OK)return 54;
+ /* Draw at each stack level; verify composed clip positions and UVs. */
+ const float expected_x[4]={2.5f,5.0f,5.0f,3.0f};
+ const float expected_y[4]={1.0f,2.0f,2.0f,1.0f};
+ const unsigned initial_reads=mem.reads;
+ for(unsigned pass=0;pass<4u;pass++){
+  regs.rcx=MXB_GL_TRIANGLES;
+  if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 55;
+  if(invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_RENDER_REJECTED||
+     invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED||
+     invoke(s,&mem,&regs,"glTranslatef")!=MXB_GL_GUEST_RENDER_REJECTED)return 56;
+  regs.xmm_low64[0]=bits_f(.25f);regs.xmm_low64[1]=bits_f(.75f);
+  if(invoke(s,&mem,&regs,"glTexCoord2f")!=MXB_GL_GUEST_OK)return 57;
+  for(unsigned i=0;i<3u;i++){
+   regs.xmm_low64[0]=bits_f(1);regs.xmm_low64[1]=bits_f(1);regs.xmm_low64[2]=bits_f(0);
+   if(invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK)return 58;
+  }
+  if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK||
+     mxb_gl_vertex_count(s)!=(pass+1u)*3u)return 59;
+  vertices=mxb_gl_vertices(s);
+  const MXBGLVertex *v=&vertices[pass*3u];
+  if(!nearly(v->position[0],expected_x[pass])||
+     !nearly(v->position[1],expected_y[pass])||
+     !nearly(v->uv[0],.25f)||!nearly(v->uv[1],.75f))return 60;
+  if(pass<3u){
+   if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_OK)return 61;
+   if(pass==0u){
+    if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 62;
+    regs.rcx=MXB_GL_MODELVIEW;
+    if(invoke(s,&mem,&regs,"glMatrixMode")!=MXB_GL_GUEST_OK)return 63;
+   }
+  }
+ }
+ if(mem.reads!=initial_reads||
+    invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 64;
+ for(unsigned i=1u;i<MXB_GL_MODELVIEW_STACK_DEPTH;i++)
+  if(invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 65;
+ if(invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 66;
+ for(unsigned i=1u;i<MXB_GL_MODELVIEW_STACK_DEPTH;i++)
+  if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_OK)return 67;
+ if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 68;
+ if(invoke(s,&mem,&regs,"glPushMatrix")!=MXB_GL_GUEST_OK)return 69;
+ mxb_gl_reset(s);
+ if(invoke(s,&mem,&regs,"glPopMatrix")!=MXB_GL_GUEST_RENDER_REJECTED)return 70;
+ /* Ordered draw batches must preserve the original depth state even
+  * after subsequent state changes, including across frame reset. */
+ mxb_gl_reset(s);
+ for(unsigned pass=0;pass<4u;pass++){
+  if(pass==1u){
+   regs.rcx=MXB_GL_DEPTH_TEST;
+   if(invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_OK)return 71;
+  }else if(pass==2u){
+   regs.rcx=MXB_GL_GEQUAL;
+   if(invoke(s,&mem,&regs,"glDepthFunc")!=MXB_GL_GUEST_OK)return 72;
+   regs.rcx=0;
+   if(invoke(s,&mem,&regs,"glDepthMask")!=MXB_GL_GUEST_OK)return 73;
+  }else if(pass==3u){
+   regs.rcx=MXB_GL_DEPTH_TEST;
+   if(invoke(s,&mem,&regs,"glDisable")!=MXB_GL_GUEST_OK)return 74;
+  }
+  regs.rcx=MXB_GL_TRIANGLES;
+  if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 75;
+  regs.rcx=MXB_GL_ALWAYS;
+  if(invoke(s,&mem,&regs,"glDepthFunc")!=MXB_GL_GUEST_RENDER_REJECTED)return 76;
+  regs.rcx=1;
+  if(invoke(s,&mem,&regs,"glDepthMask")!=MXB_GL_GUEST_RENDER_REJECTED)return 77;
+  for(unsigned i=0;i<3u;i++){
+   regs.xmm_low64[0]=bits_f(points[i][0]);
+   regs.xmm_low64[1]=bits_f(points[i][1]);
+   regs.xmm_low64[2]=bits_f((float)pass*.25f);
+   if(invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK)return 78;
+  }
+  if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK)return 79;
+ }
+ if(mxb_gl_batch_count(s)!=4u||mxb_gl_vertex_count(s)!=12u)return 80;
+ const MXBGLDrawBatch*batch=mxb_gl_batches(s);
+ for(unsigned i=0;i<4u;i++){
+  if(batch[i].first_vertex!=i*3u||batch[i].vertex_count!=3u||
+     batch[i].depth_test!=(i==1u||i==2u)||
+     batch[i].depth_write!=(i<2u)||
+     batch[i].depth_func!=(i<2u?MXB_GL_LESS:MXB_GL_GEQUAL))return 81;
+ }
+ regs.rcx=0xdead;
+ if(invoke(s,&mem,&regs,"glDepthFunc")!=MXB_GL_GUEST_RENDER_REJECTED||
+    invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_UNSUPPORTED)return 82;
+ regs.rcx=MXB_GL_TRIANGLES;
+ if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK||
+    invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_RENDER_REJECTED||
+    mxb_gl_batch_count(s)!=4u||mxb_gl_vertex_count(s)!=12u)return 83;
+ mxb_gl_clear_frame(s);
+ if(mxb_gl_batch_count(s)||mxb_gl_vertex_count(s))return 84;
+ regs.rcx=MXB_GL_TRIANGLES;
+ if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 85;
+ for(unsigned i=0;i<3u;i++)if(invoke(s,&mem,&regs,"glVertex3f")!=MXB_GL_GUEST_OK)return 86;
+ if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK||
+    mxb_gl_batch_count(s)!=1u||batch[0].first_vertex||
+    batch[0].depth_test||batch[0].depth_write||
+    batch[0].depth_func!=MXB_GL_GEQUAL)return 87;
  mxb_gl_destroy(s);
  return 0;
 }

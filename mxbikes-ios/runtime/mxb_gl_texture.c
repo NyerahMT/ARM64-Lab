@@ -9,6 +9,7 @@ typedef struct {
 } Texture;
 struct MXBGLTextures {
  Texture slots[MXB_GL_MAX_TEXTURES];
+ size_t used_bytes;
  uint32_t current,next_name;
  unsigned enabled,unpack_alignment,filter;
 };
@@ -38,6 +39,7 @@ static int stack(const MXBGLWin64Call*g,MXBGLGuestRead cb,void*ctx,
  return read_guest(cb,ctx,g->rsp,(uint64_t)arg_num*8u,out,8u);
 }
 static Texture* find(MXBGLTextures*t,uint32_t name){
+ if(!name)return 0;
  for(unsigned i=0;i<MXB_GL_MAX_TEXTURES;i++)
   if(t->slots[i].id==name)return &t->slots[i];
  return 0;
@@ -47,6 +49,32 @@ static Texture* ensure(MXBGLTextures*t,uint32_t name){
  for(unsigned i=0;i<MXB_GL_MAX_TEXTURES;i++)
   if(!t->slots[i].id){t->slots[i].id=name;return &t->slots[i];}
  return 0;
+}
+static size_t texture_bytes(const Texture*x){
+ return (size_t)x->width*x->height*4u;
+}
+/* Convert guest rows into an owned RGBA staging buffer. The source may
+ * straddle a bounded read chunk or padded row. No texture state is changed. */
+static int copy_pixels(MXBGLGuestRead read,void*ctx,uint64_t pixels,
+                       unsigned w,unsigned h,unsigned bpp,unsigned alignment,
+                       uint8_t*rgba){
+ unsigned row=w*bpp;
+ unsigned pitch=(row+alignment-1u)&~(alignment-1u);
+ uint8_t chunk[128];
+ for(unsigned y=0;y<h;y++){
+  for(unsigned start=0;start<row;){
+   unsigned bytes=row-start;
+   if(bytes>sizeof(chunk))bytes=sizeof(chunk);
+   if(!read_guest(read,ctx,pixels,(uint64_t)y*pitch+start,chunk,bytes))return 0;
+   for(unsigned i=0;i<bytes;i++){
+    unsigned source=start+i;
+    rgba[((size_t)y*w+source/bpp)*4u+source%bpp]=chunk[i];
+   }
+   start+=bytes;
+  }
+  if(bpp==3u)for(unsigned x=0;x<w;x++)rgba[((size_t)y*w+x)*4u+3u]=255u;
+ }
+ return 1;
 }
 MXBGLTextures*mxb_tex_create(void){
  MXBGLTextures*t=(MXBGLTextures*)calloc(1,sizeof(*t));
@@ -89,7 +117,7 @@ enum MXBGLGuestStatus mxb_tex_dispatch_win64(
   t->enabled=same(name,"glEnable");return MXB_GL_GUEST_OK;
  }
  if(same(name,"glPixelStorei")){
-  if(g->rcx!=MXB_GL_UNPACK_ALIGNMENT||(g->rdx!=1u&&g->rdx!=4u))
+  if(g->rcx!=MXB_GL_UNPACK_ALIGNMENT||(g->rdx!=1u&&g->rdx!=2u&&g->rdx!=4u&&g->rdx!=8u))
    return MXB_GL_GUEST_UNSUPPORTED;
   t->unpack_alignment=(unsigned)g->rdx;return MXB_GL_GUEST_OK;
  }
@@ -110,32 +138,35 @@ enum MXBGLGuestStatus mxb_tex_dispatch_win64(
   t->current=id;return MXB_GL_GUEST_OK;
  }
  if(same(name,"glGenTextures")){
-  if(g->rcx==0||g->rcx>MXB_GL_MAX_TEXTURES)return MXB_GL_GUEST_UNSUPPORTED;
+  if(g->rcx>MXB_GL_MAX_TEXTURES)return MXB_GL_GUEST_UNSUPPORTED;
+  unsigned n=(unsigned)g->rcx,free_count=0;
+  if(!n)return MXB_GL_GUEST_OK;
+  for(unsigned i=0;i<MXB_GL_MAX_TEXTURES;i++)if(!t->slots[i].id)free_count++;
+  if(n>free_count)return MXB_GL_GUEST_RENDER_REJECTED;
   uint32_t names[MXB_GL_MAX_TEXTURES];
-  unsigned n=(unsigned)g->rcx;
   uint32_t cursor=t->next_name;
   for(unsigned i=0;i<n;i++){
    while(cursor&&find(t,cursor))cursor++;
-   if(!cursor||!ensure(t,cursor))return MXB_GL_GUEST_RENDER_REJECTED;
+   if(!cursor)return MXB_GL_GUEST_RENDER_REJECTED;
    names[i]=cursor++;
   }
-  if(!write_guest(write,ctx,g->rdx,names,n*4u)){
-   for(unsigned i=0;i<n;i++){
-    Texture*x=find(t,names[i]);if(x){x->id=0;}
-   }
-   return MXB_GL_GUEST_UNMAPPED_POINTER;
-  }
+  /* Reserve nothing until all names fit and the guest write succeeds. */
+  if(!write_guest(write,ctx,g->rdx,names,n*4u))return MXB_GL_GUEST_UNMAPPED_POINTER;
+  for(unsigned i=0;i<n;i++)(void)ensure(t,names[i]);
   t->next_name=cursor;return MXB_GL_GUEST_OK;
  }
  if(same(name,"glDeleteTextures")){
   if(g->rcx>MXB_GL_MAX_TEXTURES)return MXB_GL_GUEST_UNSUPPORTED;
-  for(unsigned i=0;i<(unsigned)g->rcx;i++){
-   uint32_t id=0;
-   if(!read_guest(read,ctx,g->rdx,(uint64_t)i*4u,&id,4u))
+  uint32_t names[MXB_GL_MAX_TEXTURES];
+  unsigned n=(unsigned)g->rcx;
+  /* Read every name first; a failed later read must not delete earlier names. */
+  for(unsigned i=0;i<n;i++)
+   if(!read_guest(read,ctx,g->rdx,(uint64_t)i*4u,&names[i],4u))
     return MXB_GL_GUEST_UNMAPPED_POINTER;
-   Texture*x=find(t,id);
-   if(x){free(x->rgba);__builtin_memset(x,0,sizeof(*x));}
-   if(t->current==id)t->current=0;
+  for(unsigned i=0;i<n;i++){
+   Texture*x=find(t,names[i]);
+   if(x){t->used_bytes-=texture_bytes(x);free(x->rgba);__builtin_memset(x,0,sizeof(*x));}
+   if(t->current==names[i])t->current=0;
   }
   return MXB_GL_GUEST_OK;
  }
@@ -151,38 +182,53 @@ enum MXBGLGuestStatus mxb_tex_dispatch_win64(
      !g->r9||g->r9>MXB_GL_MAX_TEX_DIM||
      !height||height>MXB_GL_MAX_TEX_DIM||border!=0||
      (format!=MXB_GL_RGB&&format!=MXB_GL_RGBA)||
-     type!=MXB_GL_UNSIGNED_BYTE||!pixels||!t->current)
+     type!=MXB_GL_UNSIGNED_BYTE||!t->current)
    return MXB_GL_GUEST_UNSUPPORTED;
   Texture*x=find(t,t->current);
   if(!x)return MXB_GL_GUEST_RENDER_REJECTED;
   unsigned w=(unsigned)g->r9,h=(unsigned)height;
   unsigned bpp=format==MXB_GL_RGB?3u:4u;
-  unsigned row=w*bpp;
-  unsigned aligned=(row+t->unpack_alignment-1u)&~(t->unpack_alignment-1u);
-  uint8_t*rgba=(uint8_t*)calloc((size_t)w*h,4u);
+  size_t bytes=(size_t)w*h*4u,old=texture_bytes(x);
+  if(bytes>MXB_GL_TEXTURE_BYTE_BUDGET-(t->used_bytes-old))
+   return MXB_GL_GUEST_RENDER_REJECTED;
+  uint8_t*rgba=(uint8_t*)calloc(1,bytes);
   if(!rgba)return MXB_GL_GUEST_RENDER_REJECTED;
-  uint8_t chunk[128];
-  for(unsigned y=0;y<h;y++){
-   for(unsigned start_byte=0;start_byte<row;){
-    unsigned bytes=row-start_byte;
-    if(bytes>sizeof(chunk))bytes=sizeof(chunk);
-    if(!read_guest(read,ctx,pixels,(uint64_t)y*aligned+start_byte,chunk,bytes)){
-     free(rgba);return MXB_GL_GUEST_UNMAPPED_POINTER;
-    }
-    /* Writing RGB->RGBA must preserve triples that span chunks.
-     * Stage the row as RGBA through byte-offset tracking, no overreads. */
-    for(unsigned i=0;i<bytes;i++){
-     unsigned source_byte=start_byte+i;
-     unsigned pixel=source_byte/bpp,channel=source_byte%bpp;
-     rgba[((size_t)y*w+pixel)*4u+channel]=chunk[i];
-    }
-    start_byte+=bytes;
-   }
-   if(bpp==3u)for(unsigned xx=0;xx<w;xx++)rgba[((size_t)y*w+xx)*4u+3u]=255u;
+  /* GL permits null data to allocate storage with unspecified contents.
+   * Choose deterministic zero initialization for this bounded bridge. */
+  if(pixels&&!copy_pixels(read,ctx,pixels,w,h,bpp,t->unpack_alignment,rgba)){
+   free(rgba);return MXB_GL_GUEST_UNMAPPED_POINTER;
   }
   free(x->rgba);
   x->rgba=rgba;x->width=(uint16_t)w;x->height=(uint16_t)h;
+  t->used_bytes=t->used_bytes-old+bytes;
   return MXB_GL_GUEST_OK;
+ }
+ if(same(name,"glTexSubImage2D")){
+  /* target,level,xoffset,yoffset,width,height,format,type,pixels */
+  uint64_t w64=0,h64=0,format=0,type=0,pixels=0;
+  if(!stack(g,read,ctx,5,&w64)||!stack(g,read,ctx,6,&h64)||
+     !stack(g,read,ctx,7,&format)||!stack(g,read,ctx,8,&type)||
+     !stack(g,read,ctx,9,&pixels))return MXB_GL_GUEST_UNMAPPED_POINTER;
+  if(g->rcx!=MXB_GL_TEXTURE_2D||g->rdx!=0||
+     g->r8>MXB_GL_MAX_TEX_DIM||g->r9>MXB_GL_MAX_TEX_DIM||
+     w64>MXB_GL_MAX_TEX_DIM||h64>MXB_GL_MAX_TEX_DIM||
+     (format!=MXB_GL_RGB&&format!=MXB_GL_RGBA)||type!=MXB_GL_UNSIGNED_BYTE)
+   return MXB_GL_GUEST_UNSUPPORTED;
+  Texture*x=find(t,t->current);
+  if(!x||!x->rgba||g->r8+w64>x->width||g->r9+h64>x->height)
+   return MXB_GL_GUEST_RENDER_REJECTED;
+  if(!w64||!h64)return MXB_GL_GUEST_OK;
+  unsigned w=(unsigned)w64,h=(unsigned)h64;
+  uint8_t*stage=(uint8_t*)calloc((size_t)w*h,4u);
+  if(!stage)return MXB_GL_GUEST_RENDER_REJECTED;
+  if(!copy_pixels(read,ctx,pixels,w,h,format==MXB_GL_RGB?3u:4u,
+                  t->unpack_alignment,stage)){
+   free(stage);return MXB_GL_GUEST_UNMAPPED_POINTER;
+  }
+  for(unsigned y=0;y<h;y++)
+   __builtin_memcpy(x->rgba+((size_t)(g->r9+y)*x->width+(size_t)g->r8)*4u,
+                    stage+(size_t)y*w*4u,(size_t)w*4u);
+  free(stage);return MXB_GL_GUEST_OK;
  }
  return MXB_GL_GUEST_UNSUPPORTED;
 }

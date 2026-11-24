@@ -17,7 +17,36 @@ targets:
         excludes:
           - Info.plist
           - Bridge.h
+      - path: runtime/mxb_native_dispatch.c
+      - path: runtime/mxb_native_dispatch.h
+        buildPhase: headers
+      - path: ../runtime/mx_time_compat.c
+      - path: ../runtime/mx_guest_imports.c
+      - path: ../runtime/mx_import_registry.c
+      - path: runtime/mxb_owned_startup.c
+      - path: runtime/private
+        optional: true
+      - path: runtime/mxb_owned_directory.c
+      - path: runtime/generated/mxb_native_probe.c
+      - path: runtime/mxb_native_probe_smoke.c
+      - path: runtime/mxb_native_exec.h
+        buildPhase: headers
+      - path: runtime/mxb_pe_guest_image.c
+      - path: runtime/mxb_pe_guest_image.h
+        buildPhase: headers
+      - path: runtime/mxb_guest_crt.c
+      - path: runtime/mxb_guest_crt.h
+        buildPhase: headers
+      - path: runtime/mxb_guest_memory.c
+      - path: runtime/mxb_guest_memory.h
+        buildPhase: headers
       - path: runtime/mxb_gl_surface.c
+      - path: runtime/mxb_poststeam_timer_native.c
+      - path: runtime/mxb_poststeam_helper_entry_native.c
+      - path: runtime/mxb_poststeam_helper_entry_native.h
+        buildPhase: headers
+      - path: runtime/mxb_poststeam_timer_native.h
+        buildPhase: headers
       - path: runtime/mxb_gl_win64_abi.c
       - path: runtime/mxb_gl_texture.c
       - path: runtime/mxb_gl_texture.h
@@ -36,6 +65,7 @@ targets:
       path: ios/MXBViewportPrototype/Info.plist
     settings:
       base:
+        HEADER_SEARCH_PATHS: ["$(inherited)", "$(SRCROOT)/runtime", "$(SRCROOT)/../runtime"]
         PRODUCT_BUNDLE_IDENTIFIER: com.nyerahworks.mxbviewportprototype
         SWIFT_OBJC_BRIDGING_HEADER: ios/MXBViewportPrototype/Bridge.h
         CODE_SIGNING_ALLOWED: "NO"

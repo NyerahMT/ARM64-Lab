@@ -1,5 +1,12 @@
 #include "mxb_gl_surface.h"
 #include <stddef.h>
+/* The Metal shader reads exactly ten consecutive float32 lanes per vertex.
+ * Native float4 alignment differs from this packed C/Swift buffer layout. */
+_Static_assert(sizeof(float)==4,"MXBGL vertex lanes must be float32");
+_Static_assert(sizeof(MXBGLVertex)==40,"MXBGL vertex stride must be 40 bytes");
+_Static_assert(offsetof(MXBGLVertex,position)==0,"position ABI mismatch");
+_Static_assert(offsetof(MXBGLVertex,color)==16,"color ABI mismatch");
+_Static_assert(offsetof(MXBGLVertex,uv)==32,"UV ABI mismatch");
 /* AArch64 freestanding compilation; the app resolves libc allocation. */
 extern void *calloc(size_t,size_t);
 extern void free(void *);
@@ -7,7 +14,13 @@ extern void free(void *);
 struct MXBGLSurface {
  MXBGLVertex frame[MXB_GL_MAX_OUTPUT],working[MXB_GL_MAX_INPUT];
  size_t frame_len,working_len;
+ MXBGLDrawBatch batches[MXB_GL_MAX_BATCHES];
+ size_t batch_len;
+ unsigned depth_test,depth_write,depth_func;
  float modelview[16],projection[16],current_color[4],current_uv[2];
+ float modelview_saved[MXB_GL_MODELVIEW_STACK_DEPTH-1u][16];
+ float projection_saved[MXB_GL_PROJECTION_STACK_DEPTH-1u][16];
+ unsigned modelview_saved_count,projection_saved_count;
  unsigned current_matrix,begin_mode,faults;
  MXBGLClientArray vertex_array,color_array,texcoord_array;
  int building;
@@ -36,8 +49,28 @@ void mxb_gl_reset(MXBGLSurface*s){
  identity(s->modelview);identity(s->projection);
  for(unsigned i=0;i<4u;i++)s->current_color[i]=1.0f;
  s->current_matrix=MXB_GL_MODELVIEW;
+ s->depth_write=1u;s->depth_func=MXB_GL_LESS;
 }
-void mxb_gl_clear_frame(MXBGLSurface*s){if(s)s->frame_len=0u;}
+void mxb_gl_clear_frame(MXBGLSurface*s){
+ if(s){s->frame_len=0u;s->batch_len=0u;}
+}
+int mxb_gl_depth_enable(MXBGLSurface*s,int enabled){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ s->depth_test=enabled!=0;return 1;
+}
+int mxb_gl_depth_mask(MXBGLSurface*s,unsigned enabled){
+ if(!s)return 0;
+ if(s->building||enabled>1u)return fail(s);
+ s->depth_write=enabled;return 1;
+}
+int mxb_gl_depth_func(MXBGLSurface*s,unsigned func){
+ if(!s)return 0;
+ if(s->building||func<MXB_GL_NEVER||func>MXB_GL_ALWAYS)return fail(s);
+ s->depth_func=func;return 1;
+}
+size_t mxb_gl_batch_count(const MXBGLSurface*s){return s?s->batch_len:0u;}
+const MXBGLDrawBatch*mxb_gl_batches(const MXBGLSurface*s){return s?s->batches:NULL;}
 int mxb_gl_matrix_mode(MXBGLSurface*s,unsigned mode){
  if(!s)return 0;
  if(s->building||(mode!=MXB_GL_MODELVIEW&&mode!=MXB_GL_PROJECTION))return fail(s);
@@ -47,6 +80,32 @@ int mxb_gl_load_identity(MXBGLSurface*s){
  if(!s)return 0;
  if(s->building)return fail(s);
  identity(selected(s));return 1;
+}
+/* Both stacks are independent; failed push/pop must leave the selected
+ * matrix and stack depth untouched. Reset returns both to depth one. */
+int mxb_gl_push_matrix(MXBGLSurface*s){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ if(s->current_matrix==MXB_GL_PROJECTION){
+  if(s->projection_saved_count>=MXB_GL_PROJECTION_STACK_DEPTH-1u)return fail(s);
+  __builtin_memcpy(s->projection_saved[s->projection_saved_count++],s->projection,sizeof(s->projection));
+ }else{
+  if(s->modelview_saved_count>=MXB_GL_MODELVIEW_STACK_DEPTH-1u)return fail(s);
+  __builtin_memcpy(s->modelview_saved[s->modelview_saved_count++],s->modelview,sizeof(s->modelview));
+ }
+ return 1;
+}
+int mxb_gl_pop_matrix(MXBGLSurface*s){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ if(s->current_matrix==MXB_GL_PROJECTION){
+  if(!s->projection_saved_count)return fail(s);
+  __builtin_memcpy(s->projection,s->projection_saved[--s->projection_saved_count],sizeof(s->projection));
+ }else{
+  if(!s->modelview_saved_count)return fail(s);
+  __builtin_memcpy(s->modelview,s->modelview_saved[--s->modelview_saved_count],sizeof(s->modelview));
+ }
+ return 1;
 }
 int mxb_gl_translatef(MXBGLSurface*s,float x,float y,float z){
  if(!s)return 0;
@@ -114,7 +173,9 @@ int mxb_gl_end(MXBGLSurface*s){
   if(n%4u)return fail(s);
   triangles=(n/4u)*2u;
  }else triangles=n>=3u?n-2u:0u;
- if(triangles>(MXB_GL_MAX_OUTPUT-s->frame_len)/3u)return fail(s);
+ if(triangles>(MXB_GL_MAX_OUTPUT-s->frame_len)/3u||
+    (triangles&&s->batch_len>=MXB_GL_MAX_BATCHES))return fail(s);
+ size_t first=s->frame_len;
  if(s->begin_mode==MXB_GL_TRIANGLES){
   for(size_t i=0;i<n;i+=3u)tri(s,i,i+1u,i+2u);
  }else if(s->begin_mode==MXB_GL_QUADS){
@@ -126,6 +187,11 @@ int mxb_gl_end(MXBGLSurface*s){
    if(i&1u)tri(s,i-1u,i-2u,i);
    else tri(s,i-2u,i-1u,i);
   }
+ }
+ if(triangles){
+  MXBGLDrawBatch*b=&s->batches[s->batch_len++];
+  b->first_vertex=(uint32_t)first;b->vertex_count=(uint32_t)(s->frame_len-first);
+  b->depth_test=s->depth_test;b->depth_write=s->depth_write;b->depth_func=s->depth_func;
  }
  s->working_len=0;return 1;
 }
@@ -183,10 +249,22 @@ int mxb_gl_dispatch_import(MXBGLSurface*s,const char*lib,const char*name,
                            unsigned word,const float*a,size_t n){
  if(!s)return 0;
  if(!sym_eq(lib,"OPENGL32.dll")||!name)return fail(s);
+ if(sym_eq(name,"glEnable")||sym_eq(name,"glDisable"))
+  return word==MXB_GL_DEPTH_TEST?mxb_gl_depth_enable(s,sym_eq(name,"glEnable")):fail(s);
+ if(sym_eq(name,"glDepthMask"))return mxb_gl_depth_mask(s,word);
+ if(sym_eq(name,"glDepthFunc"))return mxb_gl_depth_func(s,word);
  if(sym_eq(name,"glBegin"))return mxb_gl_begin(s,word);
  if(sym_eq(name,"glEnd"))return mxb_gl_end(s);
  if(sym_eq(name,"glMatrixMode"))return mxb_gl_matrix_mode(s,word);
  if(sym_eq(name,"glLoadIdentity"))return mxb_gl_load_identity(s);
+ if(sym_eq(name,"glPushMatrix"))return mxb_gl_push_matrix(s);
+ if(sym_eq(name,"glPopMatrix"))return mxb_gl_pop_matrix(s);
+ if(sym_eq(name,"glTranslatef"))
+  return (n==3u&&a)?mxb_gl_translatef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glScalef"))
+  return (n==3u&&a)?mxb_gl_scalef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glTexCoord2f"))
+  return (n==2u&&a)?mxb_gl_tex_coord2f(s,a[0],a[1]):fail(s);
  if(sym_eq(name,"glVertex3f")||sym_eq(name,"glVertex3fv"))
   return (n==3u&&a)?mxb_gl_vertex3fv(s,a):fail(s);
  if(sym_eq(name,"glColor3f")||sym_eq(name,"glColor3fv"))

@@ -32,7 +32,34 @@ ASM=r"""
 guest_entry:
  push rbp
  mov rbp, rsp
- sub rsp, 32
+ push rbx
+ sub rsp, 40
+
+ mov ecx, 0x0b71
+ movabs rax, 0x11000090
+ call rax
+ mov ecx, 0x0203
+ movabs rax, 0x110000a0
+ call rax
+ movabs rcx, 0xaabbccddeeff0001
+ movabs rax, 0x110000b0
+ call rax
+
+ movabs rax, 0x11000040
+ call rax
+ lea rax, [rip + transform]
+ movss xmm0, dword ptr [rax]
+ movss xmm1, dword ptr [rax+4]
+ movss xmm2, dword ptr [rax+8]
+ movabs rax, 0x11000050
+ call rax
+ lea rax, [rip + scale]
+ movss xmm0, dword ptr [rax]
+ movss xmm1, dword ptr [rax+4]
+ movss xmm2, dword ptr [rax+8]
+ movabs rax, 0x11000060
+ call rax
+
  mov ecx, 4
  movabs rax, 0x11000000
  call rax
@@ -43,6 +70,12 @@ guest_entry:
  movss xmm2, dword ptr [rax+8]
  movss xmm3, dword ptr [rax+12]
  movabs rax, 0x11000010
+ call rax
+
+ lea rax, [rip + uv]
+ movss xmm0, dword ptr [rax]
+ movss xmm1, dword ptr [rax+4]
+ movabs rax, 0x11000070
  call rax
 
  lea rbx, [rip + vertices]
@@ -66,11 +99,50 @@ guest_entry:
 
  movabs rax, 0x11000030
  call rax
- add rsp, 32
+ movabs rax, 0x11000080
+ call rax
+ mov ecx, 0x0b71
+ movabs rax, 0x110000c0
+ call rax
+ movabs rcx, 0xffeeddccbbaa0000
+ movabs rax, 0x110000b0
+ call rax
+ mov ecx, 0x0204
+ movabs rax, 0x110000a0
+ call rax
+ mov ecx, 4
+ movabs rax, 0x11000000
+ call rax
+ lea rbx, [rip + vertices]
+ movss xmm0, dword ptr [rbx]
+ movss xmm1, dword ptr [rbx+4]
+ movss xmm2, dword ptr [rbx+8]
+ movabs rax, 0x11000020
+ call rax
+ movss xmm0, dword ptr [rbx+12]
+ movss xmm1, dword ptr [rbx+16]
+ movss xmm2, dword ptr [rbx+20]
+ movabs rax, 0x11000020
+ call rax
+ movss xmm0, dword ptr [rbx+24]
+ movss xmm1, dword ptr [rbx+28]
+ movss xmm2, dword ptr [rbx+32]
+ movabs rax, 0x11000020
+ call rax
+ movabs rax, 0x11000030
+ call rax
+ add rsp, 40
+ pop rbx
  pop rbp
  ret
 
 .balign 4
+transform:
+.float 0.25, -0.125, 0.0
+scale:
+.float 0.5, 0.5, 1.0
+uv:
+.float 0.25, 0.75
 test_color:
 .float 1.0, 0.25, 0.10, 1.0
 vertices:
@@ -86,6 +158,10 @@ class Win64(C.Structure):
 
 class Vertex(C.Structure):
     _fields_=[("position",C.c_float*4),("color",C.c_float*4),("uv",C.c_float*2)]
+
+class Batch(C.Structure):
+    _fields_=[(name,C.c_uint32) for name in
+              ("first_vertex","vertex_count","depth_test","depth_write","depth_func")]
 
 def run():
     with tempfile.TemporaryDirectory(prefix="mxb-synthetic-win64-gl-") as td:
@@ -111,6 +187,10 @@ def run():
         lib.mxb_gl_vertex_count.restype=C.c_size_t
         lib.mxb_gl_vertices.argtypes=[C.c_void_p]
         lib.mxb_gl_vertices.restype=C.POINTER(Vertex)
+        lib.mxb_gl_batch_count.argtypes=[C.c_void_p]
+        lib.mxb_gl_batch_count.restype=C.c_size_t
+        lib.mxb_gl_batches.argtypes=[C.c_void_p]
+        lib.mxb_gl_batches.restype=C.POINTER(Batch)
         lib.mxb_gl_dispatch_win64.argtypes=[
             C.c_void_p,C.c_char_p,C.c_char_p,C.POINTER(Win64),
             C.c_void_p,C.c_void_p
@@ -124,7 +204,7 @@ def run():
             emu.mem_map(BASE,0x20000)
             emu.mem_write(BASE,guest_code)
             emu.mem_map(STUBS,0x1000)
-            for i in range(4):
+            for i in range(13):
                 emu.mem_write(STUBS+0x10*i,b"\xc3")  # genuine x64 RET
             emu.mem_map(STACK,0x10000)
             emu.mem_write(ENTRY_SP,SENTINEL.to_bytes(8,"little"))
@@ -135,6 +215,15 @@ def run():
                 STUBS+0x10:b"glColor4f",
                 STUBS+0x20:b"glVertex3f",
                 STUBS+0x30:b"glEnd",
+                STUBS+0x40:b"glPushMatrix",
+                STUBS+0x50:b"glTranslatef",
+                STUBS+0x60:b"glScalef",
+                STUBS+0x70:b"glTexCoord2f",
+                STUBS+0x80:b"glPopMatrix",
+                STUBS+0x90:b"glEnable",
+                STUBS+0xa0:b"glDepthFunc",
+                STUBS+0xb0:b"glDepthMask",
+                STUBS+0xc0:b"glDisable",
             }
             xmm_regs=(UC_X86_REG_XMM0,UC_X86_REG_XMM1,
                       UC_X86_REG_XMM2,UC_X86_REG_XMM3)
@@ -159,19 +248,35 @@ def run():
                 raise AssertionError("Guest synthetic x64 code did not RET")
             if emu.reg_read(UC_X86_REG_RSP)!=ENTRY_SP+8:
                 raise AssertionError("Win64 CALL/RET stack restore mismatch")
-            if observed!=["glBegin","glColor4f"]+["glVertex3f"]*3+["glEnd"]:
+            expected=(["glEnable","glDepthFunc","glDepthMask",
+                       "glPushMatrix","glTranslatef","glScalef",
+                       "glBegin","glColor4f","glTexCoord2f"]+
+                      ["glVertex3f"]*3+["glEnd","glPopMatrix","glDisable",
+                      "glDepthMask","glDepthFunc","glBegin"]+
+                      ["glVertex3f"]*3+["glEnd"])
+            if observed!=expected:
                 raise AssertionError(f"Unexpected genuine guest import order: {observed}")
-            if lib.mxb_gl_vertex_count(surface)!=3:
-                raise AssertionError("Native renderer did not emit guest's triangle")
+            if lib.mxb_gl_vertex_count(surface)!=6:
+                raise AssertionError("Native renderer did not emit both triangles")
+            if lib.mxb_gl_batch_count(surface)!=2:
+                raise AssertionError("Expected two independently captured GL draw batches")
+            batches=lib.mxb_gl_batches(surface)
+            snapshots=[tuple(getattr(batches[i],k) for k,_ in Batch._fields_) for i in range(2)]
+            if snapshots!=[(0,3,1,1,0x0203),(3,3,0,0,0x0204)]:
+                raise AssertionError(f"Depth snapshots failed across genuine x64 calls: {snapshots}")
             v=lib.mxb_gl_vertices(surface)
-            if not (abs(v[0].position[0]+.65)<.001 and
-                    abs(v[1].position[0]-.65)<.001 and
-                    abs(v[2].position[1]-.7)<.001 and
-                    abs(v[0].color[0]-1.0)<.001 and
-                    abs(v[0].color[1]-.25)<.001):
-                raise AssertionError("Decoded x64 XMM vertices/color do not match")
-            print("PASS: six actual synthetic x64 CALL/RET import events -> "
-                  "native C guest ABI adapter -> three vertices")
+            points=[(-.65,-.6),(.65,-.6),(0,.7)]
+            for i,(x,y) in enumerate(points):
+                for j,px,py in ((i,.25+.5*x,-.125+.5*y),(i+3,x,y)):
+                    if not (abs(v[j].position[0]-px)<.001 and
+                            abs(v[j].position[1]-py)<.001 and
+                            abs(v[j].uv[0]-.25)<.001 and
+                            abs(v[j].uv[1]-.75)<.001 and
+                            abs(v[j].color[0]-1.0)<.001 and
+                            abs(v[j].color[1]-.25)<.001):
+                        raise AssertionError("x64 nested transform, restore, UV or color mismatch")
+            print(f"PASS: {len(observed)} actual synthetic x64 CALL/RET events -> "
+                  "native C guest ABI -> transformed triangles and ordered depth batches")
             print("NO original game code, Steam, authorization or real game frame executed")
         finally:
             lib.mxb_gl_destroy(surface)

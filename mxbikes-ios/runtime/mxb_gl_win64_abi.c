@@ -143,6 +143,15 @@ enum MXBGLGuestStatus mxb_gl_dispatch_win64(
   return MXB_GL_GUEST_INVALID_STATE;
  if(!same(library,"OPENGL32.dll"))
   return MXB_GL_GUEST_UNSUPPORTED;
+ if(same(name,"glEnable")||same(name,"glDisable")){
+  /* Other capabilities belong to separate adapters; never silently accept. */
+  if((uint32_t)g->rcx!=MXB_GL_DEPTH_TEST)return MXB_GL_GUEST_UNSUPPORTED;
+  return rendered(mxb_gl_depth_enable(s,same(name,"glEnable")));
+ }
+ if(same(name,"glDepthMask"))
+  return rendered(mxb_gl_depth_mask(s,(unsigned)(uint8_t)g->rcx));
+ if(same(name,"glDepthFunc"))
+  return rendered(mxb_gl_depth_func(s,(unsigned)g->rcx));
  if(same(name,"glEnableClientState")||same(name,"glDisableClientState"))
   return rendered(mxb_gl_client_enable(s,(unsigned)g->rcx,
                         same(name,"glEnableClientState")));
@@ -162,12 +171,14 @@ enum MXBGLGuestStatus mxb_gl_dispatch_win64(
  }
  if(same(name,"glBegin")||same(name,"glMatrixMode"))
   return rendered(mxb_gl_dispatch_import(s,library,name,(unsigned)g->rcx,0,0));
- if(same(name,"glEnd")||same(name,"glLoadIdentity"))
+ if(same(name,"glEnd")||same(name,"glLoadIdentity")||
+    same(name,"glPushMatrix")||same(name,"glPopMatrix"))
   return rendered(mxb_gl_dispatch_import(s,library,name,0,0,0));
 
- if(same(name,"glVertex3f")||same(name,"glColor3f")||same(name,"glColor4f")){
+ if(same(name,"glVertex3f")||same(name,"glColor3f")||same(name,"glColor4f")||
+    same(name,"glTranslatef")||same(name,"glScalef")||same(name,"glTexCoord2f")){
   float args[4]={0.0f,0.0f,0.0f,0.0f};
-  size_t count=same(name,"glColor4f")?4u:3u;
+  size_t count=same(name,"glColor4f")?4u:same(name,"glTexCoord2f")?2u:3u;
   for(size_t i=0;i<count;i++)args[i]=xmm_float(g->xmm_low64[i]);
   return rendered(mxb_gl_dispatch_import(s,library,name,0,args,count));
  }

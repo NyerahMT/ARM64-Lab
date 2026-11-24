@@ -2,6 +2,11 @@ name: MX Bikes iOS — public source-only checks
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "mxbikes-ios/**"
+      - ".github/workflows/mxbikes-ios-public-checks.yml"
   push:
     branches: [main, public/mxbikes-ios-source]
     paths:
@@ -56,11 +61,69 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_real_frame_frontier.py -v
           python -m unittest discover -s tests -p test_mxbikes_real_runtime_imports.py -v
           python -m unittest discover -s tests -p test_mxbikes_steam_call_contract.py -v
+          python -m unittest discover -s tests -p test_mxbikes_offline_relaunch_experiment.py -v
+          python -m unittest discover -s tests -p test_mxbikes_steam_failure_path.py -v
+          python -m unittest discover -s tests -p test_mxbikes_steam_branch_import_provenance.py -v
+          python -m unittest discover -s tests -p test_mxbikes_steam_context_layout.py -v
+          python -m unittest discover -s tests -p test_mxbikes_steam_offline_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_steam_original_native_branch.py -v
+          python -m unittest discover -s tests -p test_mxbikes_steam_winmm_time_probe.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_guest_malloc_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_startup_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_getaddrinfo_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_followup_nameinfo.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_followup_pton.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_freeaddrinfo_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_winsock_ntohl_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_sprintf_ipv4.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_third_memset_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_fourth_memset_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_fifth_memset_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_second_malloc_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_sixth_memset_research.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_bounded_image_memset.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_followup_malloc.py -v
+          python -m unittest discover -s tests -p test_mxbikes_core_ini_owned_stream.py -v
+          python -m unittest discover -s tests -p test_mxbikes_win32_owned_core_ini.py -v
+          python -m unittest discover -s tests -p test_mxbikes_win32_core_filetime.py -v
+          python -m unittest discover -s tests -p test_mxbikes_win32_core_closehandle.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_zero_memmove.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_followup_heap_memset.py -v
+          python -m unittest discover -s tests -p test_mxbikes_crt_small_memcpy.py -v
+      - name: Differential-check original post-Steam timer semantics on host and AArch64
+        run: |
+          set -euo pipefail
+          python scripts/mxbikes_poststeam_timer_differential.py --source-only
+          python scripts/mxbikes_poststeam_joined_differential.py --source-only
+          python scripts/mxbikes_native_slice_lift.py --source-only
+          python scripts/mxbikes_native_cfg_lift.py --source-only
+          python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture
+          python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture --split-modules
+          python scripts/mxbikes_native_cfg_lift.py --source-only --imports-fixture --emit-module "$RUNNER_TEMP/mxb-native-probe.c"
+          diff -u runtime/generated/mxb_native_probe.c "$RUNNER_TEMP/mxb-native-probe.c"
+          python scripts/mxbikes_native_module_smoke.py
+          echo "Public fixture: source-only timer semantics, NOT original x64 proof." >> "$GITHUB_STEP_SUMMARY"
+      - name: Build native post-Steam timer translator for iOS ARM64 Mach-O target
+        run: |
+          set -euo pipefail
+          clang --target=arm64-apple-ios17.0 -std=c11 -O2 -ffreestanding             -Wall -Wextra -Werror -Iruntime             -c runtime/mxb_poststeam_timer_native.c             -o /tmp/mxb_poststeam_timer_ios_arm64.o
+          file /tmp/mxb_poststeam_timer_ios_arm64.o | grep -E 'Mach-O.*arm64'
+          clang --target=arm64-apple-ios17.0 -std=c11 -O2 -ffreestanding \
+            -Wall -Wextra -Werror -Iruntime \
+            -c runtime/mxb_poststeam_helper_entry_native.c \
+            -o /tmp/mxb_poststeam_helper_entry_ios_arm64.o
+          file /tmp/mxb_poststeam_helper_entry_ios_arm64.o | grep -E 'Mach-O.*arm64'
+          echo "iOS-target native object compiled; no signed IPA or device boot claimed." >> "$GITHUB_STEP_SUMMARY"
       - name: Execute synthetic x64-to-native OpenGL import tests
         run: |
           set -euo pipefail
           python tests/mxb_gl_win64_unicorn_import_test.py
           python tests/mxb_gl_win64_indexed_guest_test.py
+      - name: Execute full Win64 graphics ABI fixture as native AArch64 ELF
+        run: |
+          set -euo pipefail
+          python tests/mxb_gl_native_arm64_test.py
+          echo "Native AArch64 renderer and Win64 ABI fixture executed under Unicorn; no original game code or assets." >> "$GITHUB_STEP_SUMMARY"
       - name: Cross-compile native renderer and guest adapter for ARM64
         run: |
           set -euo pipefail
@@ -72,3 +135,123 @@ jobs:
             readelf -h "/tmp/${name}-aarch64.o" | grep -q AArch64
           done
           echo "Source-only ARM64/Win64 graphics tests passed. No original game code or assets were used." >> "$GITHUB_STEP_SUMMARY"
+
+  # Compile the actual SwiftUI/MetalKit XcodeGen project and linked native
+  # timer translation. This is a signed-out synthetic viewport build,
+  # NOT execution of the commercial MX Bikes game.
+  ios-viewport-unsigned-simulator-build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mxbikes-ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the iPhone simulator while compiling the app
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; xs=[x for runtime,devices in d.items() if "iOS" in runtime for x in devices if x.get("isAvailable") and x.get("name","").startswith("iPhone")]; print(next((x["udid"] for x in xs if x.get("state")=="Booted"),xs[0]["udid"] if xs else ""))')"
+          test -n "$DEVICE" || { echo "No available iPhone simulator"; exit 1; }
+          echo "MXB_SIM_DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          # bootstatus -b also boots a shutdown device in the later verification step.
+          xcrun simctl boot "$DEVICE" || xcrun simctl bootstatus "$DEVICE"
+      - name: Ensure project generator is available
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+      - name: Compile and run offscreen Metal shader readback probe when GPU is available
+        run: |
+          set -euo pipefail
+          swiftc tests/mxb_metal_offscreen_probe.swift -framework Metal -o "$RUNNER_TEMP/mxb-metal-readback"
+          "$RUNNER_TEMP/mxb-metal-readback" ios/MXBViewportPrototype/Shader.metal
+      - name: Execute generated module through Swift and C on Apple host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxb-apple-native"
+          objects=()
+          for source in runtime/mxb_guest_memory.c runtime/mxb_guest_crt.c runtime/mxb_pe_guest_image.c runtime/generated/mxb_native_probe.c runtime/mxb_native_probe_smoke.c; do
+            object="$RUNNER_TEMP/mxb-apple-native/$(basename "$source" .c).o"
+            clang -O2 -std=c11 -Wall -Wextra -Werror -Wno-unused-function -Iruntime -c "$source" -o "$object"
+            objects+=("$object")
+          done
+          swiftc -import-objc-header runtime/mxb_native_exec.h tests/mxb_native_apple_bridge_probe.swift "${objects[@]}" -o "$RUNNER_TEMP/mxb-apple-native/probe"
+          uname -m
+          "$RUNNER_TEMP/mxb-apple-native/probe"
+          echo "PASS: actual Apple host Swift/C execution of generated native runtime." >> "$GITHUB_STEP_SUMMARY"
+      - name: Generate actual iOS viewport Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Build unsigned iOS Simulator app including native post-Steam timer C
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MXBViewportPrototype.xcodeproj \
+            -scheme MXBViewportPrototype \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/mxb-ios-simulator-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/mxb-ios-build.log" 2>&1 || {
+              tail -n 160 "$RUNNER_TEMP/mxb-ios-build.log"
+              exit 1
+            }
+          echo "Unsigned iOS Simulator viewport project compiled including original post-Steam native C translator." >> "$GITHUB_STEP_SUMMARY"
+          echo "Original-game engine is not connected; no real frame or signed IPA." >> "$GITHUB_STEP_SUMMARY"
+      - name: Compile unsigned iPhone arm64 device-target application
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MXBViewportPrototype.xcodeproj \
+            -scheme MXBViewportPrototype \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/mxb-ios-device-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/mxb-iphone-build.log" 2>&1 || {
+              tail -n 160 "$RUNNER_TEMP/mxb-iphone-build.log"
+              exit 1
+            }
+          echo "Unsigned iPhone device-target app compiled with Swift/C post-Steam bridge." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Apple signature, physical iPhone test, original game engine or original game frame." >> "$GITHUB_STEP_SUMMARY"
+      - name: Package the unsigned device prototype
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxb-ipa/Payload"
+          ditto "$RUNNER_TEMP/mxb-ios-device-build/Build/Products/Debug-iphoneos/MXBViewportPrototype.app" "$RUNNER_TEMP/mxb-ipa/Payload/MXBViewportPrototype.app"
+          cd "$RUNNER_TEMP/mxb-ipa"
+          ditto -c -k --keepParent Payload "$RUNNER_TEMP/MXBViewportPrototype-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MXBViewportPrototype-unsigned
+          path: ${{ runner.temp }}/MXBViewportPrototype-unsigned.ipa
+          if-no-files-found: error
+      - name: Execute linked native runtime on an actual iOS Simulator when available
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE="$MXB_SIM_DEVICE"
+          set -x
+          xcrun simctl bootstatus "$DEVICE" -b
+          APP="$RUNNER_TEMP/mxb-ios-simulator-build/Build/Products/Debug-iphonesimulator/MXBViewportPrototype.app"
+          test -d "$APP"
+          BUNDLE="com.nyerahworks.mxbviewportprototype"
+          xcrun simctl install "$DEVICE" "$APP"
+          DATA="$(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)"
+          rm -f "$DATA/Documents/mxb-native-selftest.txt"
+          xcrun simctl launch "$DEVICE" "$BUNDLE" --native-selftest
+          for attempt in $(seq 1 60); do
+            if [ -s "$DATA/Documents/mxb-native-selftest.txt" ]; then break; fi
+            sleep 1
+          done
+          cat "$DATA/Documents/mxb-native-selftest.txt"
+          grep -Fx 'PASS: synthetic generated native runtime' "$DATA/Documents/mxb-native-selftest.txt"
+          echo "PASS: iOS Simulator executed generated native CPU/CRT/guest-memory module from the actual app." >> "$GITHUB_STEP_SUMMARY"
+          xcrun simctl terminate "$DEVICE" "$BUNDLE" || true

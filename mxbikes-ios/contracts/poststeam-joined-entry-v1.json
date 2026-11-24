@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "id": "poststeam_timer_e8_call_helper_prologue_v1",
+  "original_exe_sha256": "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6",
+  "original_entry_rva": "0x133f66",
+  "original_call_rva": "0x133f76",
+  "original_call_return_rva": "0x133f7b",
+  "original_helper_rva": "0x2a9ae0",
+  "original_stop_rva": "0x2a9b08",
+  "original_verified_instruction_count": 13,
+  "original_operations": [
+    "MOV EDX,1",
+    "MOV ECX,0xD3B8",
+    "MOV DWORD [guest image +0xE4B240],EAX",
+    "E8 CALL original 0x2A9AE0; push return 0x133F7B",
+    "MOV [RSP+0x18],RBX",
+    "MOV [RSP+0x20],RSI",
+    "PUSH RDI",
+    "SUB RSP,0x130",
+    "MOV RAX,[original image cookie RVA 0x3928A0]",
+    "XOR RAX,RSP",
+    "MOV [RSP+0x120],RAX",
+    "MOV ESI,EDX",
+    "MOV EDI,ECX"
+  ],
+  "original_guest_stack_writes": [
+    {
+      "relative_to_original_caller_rsp": -8,
+      "bytes": 8,
+      "value": "original_call_return_PC"
+    },
+    {
+      "relative_to_original_caller_rsp": 16,
+      "bytes": 8,
+      "value": "original_RBX"
+    },
+    {
+      "relative_to_original_caller_rsp": 24,
+      "bytes": 8,
+      "value": "original_RSI"
+    },
+    {
+      "relative_to_original_caller_rsp": -16,
+      "bytes": 8,
+      "value": "original_RDI"
+    },
+    {
+      "relative_to_original_caller_rsp": -32,
+      "bytes": 8,
+      "value": "synthetic_security_cookie_XOR_post_prologue_RSP"
+    }
+  ],
+  "original_nonstack_write": {
+    "image_rva": "0xe4b240",
+    "bytes": 4,
+    "value": "original_EAX"
+  },
+  "native_sources": [
+    "runtime/mxb_poststeam_timer_native.c",
+    "runtime/mxb_poststeam_helper_entry_native.c"
+  ],
+  "native_entry_symbol": "mxb_poststeam_join_to_helper_entry",
+  "native_swift_smoke_symbol": "mxb_poststeam_joined_synthetic_smoke",
+  "native_bounded_stack_bytes": 1024,
+  "native_guest_stack_output_compared": true,
+  "private_differential_runner": "scripts/mxbikes_poststeam_joined_differential.py",
+  "ios": {
+    "xcodegen": "project.yml",
+    "bridging_header": "ios/MXBViewportPrototype/Bridge.h",
+    "swift_app": "ios/MXBViewportPrototype/MXBViewportPrototypeApp.swift",
+    "physically_executed_on_iphone": false,
+    "compiled_app_contains_native_guest_stub": true
+  },
+  "exclusions": {
+    "original_steam_authentication_implemented": false,
+    "original_helper_fully_translated": false,
+    "next_nested_game_call_rva": "0x2a9b08",
+    "continuous_game_engine_running": false,
+    "original_game_frame_rendered": false
+  },
+  "evidence": {
+    "private_original_x64_aarch64_13_instruction_differential": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45304495014",
+    "authentic_original_x64_instructions_executed": 13,
+    "guest_stack_bytes_verified_per_case": 1024,
+    "original_x64_vs_native_arm64_test_cases": 5,
+    "host_compiled_C_result": "pass",
+    "AArch64_unicorn_compiled_C_result": "pass",
+    "original_code_bytes_in_public_artifacts": false,
+    "unsigned_ios_simulator_and_iphone_build": "https://github.com/NyerahMT/ARM64-Lab/actions/runs/45304483495",
+    "signed_or_ran_on_physical_iphone": false,
+    "original_game_frame_rendered": false
+  }
+}

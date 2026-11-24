@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "id": "poststeam_winmm_second_timegettime_global_write_v1",
+  "original_exe_sha256": "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6",
+  "reference": {
+    "architecture": "x86_64_windows",
+    "input_rva": "0x133f66",
+    "continuation_rva": "0x133f76",
+    "original_instruction_count": 3,
+    "original_next_rva": "0x133f76",
+    "original_next_instruction": "CALL original game helper; intentionally not executed",
+    "prerequisites": "original timeGetTime returned; Steam positive results in private scenario are counterfactual diagnostics, not authentication",
+    "operations": [
+      {
+        "rva": "0x133f66",
+        "semantics": "MOV EDX,1; zero-extend to full RDX"
+      },
+      {
+        "rva": "0x133f6b",
+        "semantics": "MOV ECX,0xD3B8; zero-extend to full RCX"
+      },
+      {
+        "rva": "0x133f70",
+        "semantics": "MOV DWORD PTR [RIP+0xD172CA],EAX"
+      }
+    ],
+    "guest_memory_writes": [
+      {
+        "image_rva": "0xe4b240",
+        "bytes": 4,
+        "source": "low_32_bits_of_guest_RAX"
+      }
+    ],
+    "affected_registers": [
+      "RIP",
+      "RCX",
+      "RDX"
+    ],
+    "preserved_registers": [
+      "RAX"
+    ],
+    "preserved_flags": true,
+    "guest_write_bounded": true
+  },
+  "translation": {
+    "strategy": "state_preserving_portable_C_compiled_to_aarch64",
+    "header": "runtime/mxb_poststeam_timer_native.h",
+    "source": "runtime/mxb_poststeam_timer_native.c",
+    "entry_symbol": "mxb_poststeam_timer_apply",
+    "source_only_ci_mode": "source_only_instruction_semantics_not_original_proof",
+    "original_private_ci_mode": "original_x64_SHA_pinned_private_oracle",
+    "differential_script": "scripts/mxbikes_poststeam_timer_differential.py"
+  },
+  "ios": {
+    "xcodegen": "project.yml",
+    "bridging_header": "ios/MXBViewportPrototype/Bridge.h",
+    "app_source": "ios/MXBViewportPrototype/MXBViewportPrototypeApp.swift",
+    "ios_app_signed_build_verified": false,
+    "game_engine_connected": false
+  },
+  "outcomes": {
+    "native_aarch64_compilation_and_execution_is_not_iphone_gameplay": true,
+    "synthetic_steam_research_is_not_license_verification": true,
+    "next_untranslated_call_rva": "0x133f76",
+    "original_renderer_has_not_executed": true
+  },
+  "evidence": {
+    "original_exe_verification": "sha256_pinned_private_original_binary",
+    "original_x64_vs_native_aarch64_differential_run": "https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45302204365",
+    "original_x64_reference_cases": 5,
+    "original_x64_instruction_count": 3,
+    "host_and_native_aarch64_guest_state_match": true,
+    "unsigned_iphone_device_and_simulator_build_run": "https://github.com/NyerahMT/ARM64-Lab/actions/runs/45302192984",
+    "app_signed_or_run_on_device": false,
+    "native_game_engine_joined": false
+  }
+}

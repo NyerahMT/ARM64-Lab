@@ -10,12 +10,12 @@ The resulting block-count instruction estimate is NOT a native ARM64 port,
 not a Steam client, not an authenticated game launch, and not a true CPU
 instruction counter if the run ends part-way through the final block.
 """
-import hashlib,json
+import hashlib,json,struct
 from collections import Counter
 from pathlib import Path
 from unicorn import UC_HOOK_BLOCK,UC_HOOK_CODE,UcError
 from unicorn.x86_const import (
- UC_X86_REG_RIP,UC_X86_REG_RAX,UC_X86_REG_RCX,
+ UC_X86_REG_RIP,UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RSP,
  UC_X86_REG_RDX,UC_X86_REG_R8,UC_X86_REG_R9,
 )
 from capstone import Cs,CS_ARCH_X86,CS_MODE_64
@@ -23,13 +23,14 @@ from capstone import Cs,CS_ARCH_X86,CS_MODE_64
 import mxbikes_main_joined_callee_native as joined
 import mxbikes_steam_fopen_result_probe as bootstrap
 from mxbikes_owned_file_crt import (
-    GuestServiceBlocked,OwnedReadOnlyFile,ReadOnlyCRT,FILE_HANDLE
+    GuestServiceBlocked,OwnedReadOnlyFile,ReadOnlyCRT,FILE_HANDLE,CORE_INI_HANDLE
 )
 from mxbikes_startup_batch_runner import (
     install_import_dispatch,unwind_index,owner_rva,symbol_is_supported,
     STUBS,STUB_BYTES
 )
 from mxbikes_whole_game_map import INPUT_SHA
+from mxbikes_first_callee_emu import import_slots
 
 BASE=joined.BASE
 MAX_BLOCKS=1500000
@@ -37,7 +38,70 @@ MAX_INSTRUCTIONS=15000000
 MAX_USEC=25000000
 
 
-def execute(executable,dll,out,*,graphics_handler=None):
+def verified_import_return(pe, return_va, library, symbol, original_slots):
+    """Verify the exact original imported CALL chain ending at the guest return PC.
+
+    Two unmodified original PE patterns are accepted:
+      FF 15 disp32            => CALL QWORD PTR [RIP+disp32] (IAT)
+      E8 rel32 -> FF 25 disp32 => CALL original import JMP thunk to IAT.
+
+    Both must resolve to the claimed library/symbol using the original import
+    table. No synthetic callsite, unverified thunk, or patched EXE is accepted.
+    """
+    if not isinstance(return_va,int) or not BASE+6<=return_va<BASE+0x8000000:
+        return None
+    try:
+        direct_rva=return_va-BASE-6
+        try:
+            op=bytes(pe.read_rva(direct_rva,6))
+        except (ValueError,OverflowError):
+            op=b""
+        if len(op)==6 and op[:2]==bytes((0xff,0x15)):
+            slot=direct_rva+6+struct.unpack_from("<i",op,2)[0]
+            if original_slots.get(slot)==(library.lower(),symbol):
+                return hex(direct_rva)
+        # Full original guest Win64 CALL stack contract: an E8 always has
+        # exactly five bytes. Its original callee must be a strict RIP-based
+        # imported JMP, never an arbitrary executable or writable pointer.
+        call_rva=return_va-BASE-5
+        call=bytes(pe.read_rva(call_rva,5))
+        if len(call)!=5 or call[0]!=0xe8:
+            return None
+        thunk_rva=call_rva+5+struct.unpack_from("<i",call,1)[0]
+        if thunk_rva<0 or thunk_rva>=0x8000000:
+            return None
+        thunk=bytes(pe.read_rva(thunk_rva,6))
+        if len(thunk)==6 and thunk[:2]==bytes((0xff,0x25)):
+            slot=thunk_rva+6+struct.unpack_from("<i",thunk,2)[0]
+            if original_slots.get(slot)==(library.lower(),symbol):
+                return hex(call_rva)
+        # Original allocations use CALL -> lazily initialized
+        # CRT wrapper. That wrapper checks its cached function pointer
+        # and tail-jumps through a REX-prefixed imported IAT JMP on the
+        # observed cold-start branch. Verify the entire exact original
+        # instruction shape and IAT identity, never simply trust RAX.
+        if (thunk_rva==0x2bd710 and
+            library.lower()=="msvcr90.dll" and symbol=="malloc"):
+            lazy=bytes(pe.read_rva(thunk_rva,22))
+            if (len(lazy)==22 and
+                lazy[:3]==bytes((0x48,0x8b,0x05)) and
+                lazy[7:10]==bytes((0x48,0x85,0xc0)) and
+                lazy[10:12]==bytes((0x74,0x03)) and
+                lazy[12:15]==bytes((0x48,0xff,0xe0)) and
+                lazy[15:18]==bytes((0x48,0xff,0x25))):
+                cached_slot=thunk_rva+7+struct.unpack_from("<i",lazy,3)[0]
+                imported_slot=thunk_rva+22+struct.unpack_from("<i",lazy,18)[0]
+                if (imported_slot in original_slots and
+                    original_slots[imported_slot]==("msvcr90.dll","malloc") and
+                    cached_slot!=imported_slot):
+                    return hex(call_rva)
+        return None
+    except (ValueError,struct.error,OverflowError):
+        return None
+
+def execute(executable,dll,out,*,graphics_handler=None,steam_failure_probe=False,
+            steam_init_success_probe=False,
+            steam_subscription_research_probe=False):
     from tools.pe_probe import PE
     pe=PE(executable)
     if hashlib.sha256(pe.b).hexdigest()!=INPUT_SHA:
@@ -52,19 +116,57 @@ def execute(executable,dll,out,*,graphics_handler=None):
     _,uc=bootstrap.original_case(
         pe,0,FILE_HANDLE,0x1305c0,0x1305b6,return_cpu=True)
     imports=install_import_dispatch(uc,pe)
+    original_slots={rva:(lib.lower(),name) for rva,lib,name in import_slots(pe)}
+    if sum(bool(v) for v in (steam_failure_probe,steam_init_success_probe,
+                             steam_subscription_research_probe))>1:
+        raise ValueError("Choose exactly one Steam diagnostic scenario")
+    steam_failure = None
+    if steam_failure_probe or steam_init_success_probe or steam_subscription_research_probe:
+        from mxbikes_steam_failure_path import SteamFailureProbe
+        steam_failure = SteamFailureProbe(pe,
+            init_success_branch_probe=steam_init_success_probe or steam_subscription_research_probe)
+    research=None
+    time_research=None
+    malloc_research=None
+    winsock_research=None
+    if steam_subscription_research_probe:
+        from mxbikes_steam_offline_research import OfflineAppsResearchProbe
+        research=OfflineAppsResearchProbe()
+        from mxbikes_steam_winmm_time_probe import WinMMTimeGetTimeResearch
+        time_research=WinMMTimeGetTimeResearch()
+        from mxbikes_crt_guest_malloc_research import SingleGuestMallocResearch
+        malloc_research=SingleGuestMallocResearch()
+        from mxbikes_winsock_startup_research import OfflineWinsockResearch
+        winsock_research=OfflineWinsockResearch()
     starts,ends=unwind_index(pe)
-    crt=ReadOnlyCRT(file)
+    core_stream=None
+    extra_owned_streams={}
+    if research is not None and manifest.get("owned_core_ini_present") is True:
+        core_path=Path(executable).parent/"core.ini"
+        core_stream=OwnedReadOnlyFile.from_private_path(
+            core_path,manifest.get("owned_core_ini_size_bytes"),
+            filename="core.ini",handle=CORE_INI_HANDLE,initially_open=False)
+        extra_owned_streams["core.ini"]=core_stream
+    crt=ReadOnlyCRT(file,extra_owned_streams)
+    core_win32=None
+    if core_stream is not None:
+        from mxbikes_win32_owned_core_ini import OwnedCoreIniWin32Research
+        core_win32=OwnedCoreIniWin32Research(
+            core_stream.content,
+            last_write_filetime_100ns=manifest.get("owned_core_ini_last_write_filetime_100ns"))
     decoded={}
     md=Cs(CS_ARCH_X86,CS_MODE_64)
     counters=Counter()
     functions=set()
     seen=set()
     first=[]
+    post_failure_blocks=[]
     original_blocks=0
     emulated_instructions=0
     import_call_count=0
     actual_original_gl_import_events=0
     blocker={"status":None,"import":None,"reason":None}
+    steam_context_layout=None
     image_hi=BASE+max(rva+max(vsz,raw) for _,vsz,rva,raw,_,_ in pe.sections)
     def stop(u,status_name,**extra):
         if blocker["status"] is None:
@@ -76,6 +178,10 @@ def execute(executable,dll,out,*,graphics_handler=None):
         if blocker["status"] is not None:return
         if pc in imports:
             return
+        if research is not None:
+            from mxbikes_steam_offline_research import SUBSCRIPTION_METHOD
+            if pc == SUBSCRIPTION_METHOD:
+                return  # synthetic one-byte RET; never counted as original code
         if not BASE<=pc<image_hi:
             stop(u,"guest_executed_outside_original_image")
             return
@@ -86,6 +192,8 @@ def execute(executable,dll,out,*,graphics_handler=None):
         original_blocks+=1
         counters[rva]+=1
         seen.add(rva)
+        if steam_failure is not None and steam_failure.events and len(post_failure_blocks)<64:
+            post_failure_blocks.append(hex(rva))
         owner=owner_rva(starts,ends,rva)
         if owner is not None:functions.add(owner)
         if len(first)<64:first.append(hex(rva))
@@ -108,7 +216,7 @@ def execute(executable,dll,out,*,graphics_handler=None):
             stop(u,"original_basic_block_budget")
 
     def on_import(u,pc,size,ctx):
-        nonlocal import_call_count,actual_original_gl_import_events
+        nonlocal import_call_count,actual_original_gl_import_events,steam_context_layout
         if blocker["status"] is not None:return
         reference=imports.get(pc)
         if reference is None:
@@ -116,6 +224,298 @@ def execute(executable,dll,out,*,graphics_handler=None):
             return
         import_call_count+=1
         lib,symbol=reference
+        if ((steam_init_success_probe or research is not None) and
+            lib.lower()=="steam_api64.dll" and
+            symbol=="SteamInternal_ContextInit"):
+            from mxbikes_steam_context_layout import inspect_context_init_data
+            steam_context_layout=inspect_context_init_data(u,BASE,image_hi)
+            if research is not None:
+                from mxbikes_steam_offline_research import (
+                    OfflineResearchRejected,CONTEXT_CALL_RVA)
+                try:
+                    rsp=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+                    proven=verified_import_return(pe,ret,lib,symbol,original_slots)
+                    if proven!=hex(CONTEXT_CALL_RVA):
+                        raise OfflineResearchRejected("unverified_original_context_import")
+                    research.context_init(u,image_hi)
+                    return
+                except (OfflineResearchRejected,ValueError,struct.error) as exc:
+                    stop(u,"steam_research_context_rejected",**{"import":lib+"!"+symbol,
+                         "reason":str(exc)})
+                    return
+        if steam_failure is not None and lib.lower()=="steam_api64.dll":
+            from mxbikes_steam_failure_path import SteamFailureProbeRejected
+            try:
+                if steam_failure.handle(u,lib,symbol):
+                    return
+            except SteamFailureProbeRejected as exc:
+                stop(u,"steam_failure_probe_rejected",**{"import":lib+"!"+symbol,
+                                                     "reason":str(exc)})
+                return
+        if time_research is not None and lib.lower()=="winmm.dll":
+            from mxbikes_steam_winmm_time_probe import TimeGetTimeProbeRejected
+            try:
+                if time_research.handle(u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except TimeGetTimeProbeRejected as exc:
+                stop(u,"time_get_time_original_call_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="malloc":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if malloc_research.second_malloc_events:
+                    accepted=malloc_research.handle_followup_malloc(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                elif malloc_research.called:
+                    accepted=malloc_research.handle_second_malloc(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=malloc_research.handle(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if accepted:
+                    return
+            except GuestHeapResearchRejected as exc:
+                if malloc_research.called:
+                    try:
+                        sp=u.reg_read(UC_X86_REG_RSP)
+                        return_addr=struct.unpack("<Q",bytes(u.mem_read(sp,8)))[0]
+                        blocker["original_second_malloc_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,return_addr,lib,symbol,original_slots),
+                            "original_return_rva":hex(return_addr-BASE)
+                                if BASE<=return_addr<image_hi else None,
+                            "size_bytes":u.reg_read(UC_X86_REG_RCX),
+                            "win64_stack_aligned":sp&15==8,
+                            "previous_malloc_allocations":len(malloc_research.events),
+                            "image_data_memset_count":len(malloc_research.image_memset_events),
+                            "host_allocation_not_attempted":True,
+                        }
+                    except Exception as observe_exc:
+                        blocker["original_second_malloc_abi"]={
+                            "observation_error":type(observe_exc).__name__}
+                stop(u,"original_guest_malloc_research_rejected",**{
+                   "import":lib+"!"+symbol,"reason":str(exc)})
+                return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memset":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                # Allow a second import only after the first malloc-backed
+                # memset completed; the second must pass independent exact
+                # caller/length/destination-section verification.
+                if malloc_research.memset_events:
+                    from mxbikes_crt_guest_malloc_research import IMAGE_MEMSET_STEPS
+                    if (malloc_research.zero_len_memmove_events
+                        and not malloc_research.followup_heap_memset_events
+                        and malloc_research.followup_malloc_events
+                        and malloc_research.followup_malloc_events[-1].get("requested_bytes")==296):
+                        handled=malloc_research.handle_followup_heap_memset(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    elif len(malloc_research.image_memset_events)>=len(IMAGE_MEMSET_STEPS):
+                        handled=malloc_research.handle_bounded_image_memset(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    else:
+                        handled=malloc_research.handle_image_memset(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    handled=malloc_research.handle_memset(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if handled:
+                    return
+            except GuestHeapResearchRejected as exc:
+                # Record only Win64 ABI/provenance metadata at the second
+                # malloc-independent memset. Never read or publish buffers.
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    blocked_memset={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "guest_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "dst_is_guest_allocated_heap":(
+                            u.reg_read(UC_X86_REG_RCX)==
+                            __import__("mxbikes_crt_guest_malloc_research").HEAP_RESULT),
+                        "dst_is_original_image":(BASE<=u.reg_read(UC_X86_REG_RCX)<image_hi),
+                        "dst_alignment_mod8":u.reg_read(UC_X86_REG_RCX)&7,
+                        "fill_byte":u.reg_read(UC_X86_REG_RDX)&255,
+                        "fill_value_high_bits_zero":u.reg_read(UC_X86_REG_RDX)>>8==0,
+                        "length":u.reg_read(UC_X86_REG_R8),
+                        "guest_stack_aligned":stack&15==8,
+                    }
+                    blocker["next_memset_abi"]=blocked_memset
+                except Exception as abi_exc:
+                    blocker["next_memset_abi"]={"error":type(abi_exc).__name__}
+                stop(u,"original_guest_memset_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memcpy":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if malloc_research.handle_guest_small_memcpy(
+                    u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except GuestHeapResearchRejected as exc:
+                if malloc_research.guest_small_memcpy_events:
+                    try:
+                        from mxbikes_crt_guest_malloc_research import (
+                            FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_MAX_TOTAL_BYTES,
+                            GUEST_TEMP_DATA_MIN,GUEST_TEMP_DATA_MAX)
+                        rsp=u.reg_read(UC_X86_REG_RSP)
+                        ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+                        dest=u.reg_read(UC_X86_REG_RCX)
+                        src=u.reg_read(UC_X86_REG_RDX)
+                        def cls(ptr):
+                            if BASE<=ptr<image_hi:return "original_image"
+                            if FOLLOWUP_HEAP_BASE<=ptr<FOLLOWUP_HEAP_BASE+FOLLOWUP_HEAP_MAX_TOTAL_BYTES:
+                                return "bounded_guest_heap"
+                            if GUEST_TEMP_DATA_MIN<=ptr<GUEST_TEMP_DATA_MAX:
+                                return "mapped_guest_temp_data"
+                            return "other_guest_pointer"
+                        blocker["subsequent_memcpy_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,ret,lib,symbol,original_slots),
+                            "size_bytes":u.reg_read(UC_X86_REG_R8),
+                            "source_region":cls(src),
+                            "destination_region":cls(dest),
+                            "source_alignment_mod8":src&7,
+                            "destination_alignment_mod8":dest&7,
+                            "win64_stack_aligned":rsp&15==8,
+                            "no_additional_bytes_copied":True,
+                        }
+                    except Exception as inspect_exc:
+                        blocker["subsequent_memcpy_abi"]={
+                            "inspection_error":type(inspect_exc).__name__}
+                stop(u,"original_guest_small_memcpy_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="memmove":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if not (core_win32 is not None and core_win32.close_calls):
+                    raise GuestHeapResearchRejected("original_zero_memmove_before_core_file_close")
+                if malloc_research.handle_zero_len_memmove(
+                    u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except GuestHeapResearchRejected as exc:
+                stop(u,"original_zero_memmove_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
+        if malloc_research is not None and lib.lower()=="msvcr90.dll" and symbol=="sprintf":
+            from mxbikes_crt_guest_malloc_research import GuestHeapResearchRejected
+            try:
+                if not (winsock_research is not None and winsock_research.ntohs_events):
+                    raise GuestHeapResearchRejected("original_sprintf_before_verified_winsock_byte_conversions")
+                if malloc_research.handle_sprintf_ipv4(
+                    u,pe,original_slots,lib,symbol,verified_import_return):
+                    return
+            except GuestHeapResearchRejected as exc:
+                stop(u,"original_ipv4_sprintf_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
+        if winsock_research is not None and lib.lower()=="ws2_32.dll":
+            from mxbikes_winsock_startup_research import OfflineWinsockRejected
+            try:
+                if symbol=="inet_pton":
+                    if winsock_research.followup_nameinfo_events:
+                        accepted=winsock_research.handle_followup_inet_pton(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    else:
+                        accepted=winsock_research.handle_inet_pton(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="getnameinfo":
+                    if winsock_research.addrinfo_events:
+                        accepted=winsock_research.handle_followup_getnameinfo(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                    else:
+                        accepted=winsock_research.handle_getnameinfo(
+                            u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="getaddrinfo":
+                    accepted=winsock_research.handle_getaddrinfo(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="freeaddrinfo":
+                    accepted=winsock_research.handle_freeaddrinfo(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="#14":
+                    accepted=winsock_research.handle_ntohl(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="#15":
+                    accepted=winsock_research.handle_ntohs(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=winsock_research.handle(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if accepted:
+                    return
+            except OfflineWinsockRejected as exc:
+                if symbol=="inet_pton" and winsock_research.pton_events:
+                    try:
+                        import ipaddress
+                        stack=u.reg_read(UC_X86_REG_RSP)
+                        ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                        source=u.reg_read(UC_X86_REG_RDX)
+                        dest=u.reg_read(UC_X86_REG_R8)
+                        chars=bytearray()
+                        for i in range(64):
+                            c=bytes(u.mem_read(source+i,1))
+                            if c==bytes((0,)):break
+                            chars.extend(c)
+                        else:
+                            raise ValueError("unterminated address")
+                        try:
+                            ip=ipaddress.ip_address(chars.decode("ascii"))
+                            source_class={"numeric_version":ip.version,
+                                          "loopback":ip.is_loopback,
+                                          "unspecified":ip.is_unspecified,
+                                          "length":len(chars)}
+                        except (ValueError,UnicodeError):
+                            source_class={"numeric_version":None,
+                                          "length":len(chars)}
+                        blocker["followup_inet_pton_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,ret,lib,symbol,original_slots),
+                            "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                            "stack_aligned":stack&15==8,
+                            "address_family":u.reg_read(UC_X86_REG_RCX),
+                            "source":source_class,
+                            "destination_present":dest!=0,
+                            "destination_is_in_original_image":BASE<=dest<image_hi,
+                            "destination_aligned_mod4":dest&3,
+                            "original_getaddrinfo_mock_active":bool(winsock_research.addrinfo_events),
+                            "no_host_dns_or_socket":True,
+                        }
+                    except Exception as ex:
+                        blocker["followup_inet_pton_abi"]={
+                            "inspection_error":type(ex).__name__}
+                if symbol=="getnameinfo" and winsock_research.nameinfo_events:
+                    try:
+                        stack=u.reg_read(UC_X86_REG_RSP)
+                        ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                        sa=u.reg_read(UC_X86_REG_RCX)
+                        sa_len=u.reg_read(UC_X86_REG_RDX)
+                        node=u.reg_read(UC_X86_REG_R8)
+                        node_len=u.reg_read(UC_X86_REG_R9)
+                        service,service_len,flags=struct.unpack(
+                            "<QQQ",bytes(u.mem_read(stack+0x28,24)))
+                        sa_family=struct.unpack("<H",bytes(u.mem_read(sa,2)))[0]
+                        blocker["followup_getnameinfo_abi"]={
+                            "original_call_rva":verified_import_return(
+                                pe,ret,lib,symbol,original_slots),
+                            "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                            "stack_aligned":stack&15==8,
+                            "family":sa_family,"sockaddr_length":sa_len,
+                            "sockaddr_matches_mock_getaddrinfo_result":(
+                                sa==__import__("mxbikes_winsock_startup_research").ADDRINFO_SOCKADDR),
+                            "node_buffer_present":node!=0,"node_buffer_length":node_len,
+                            "service_present":service!=0,"service_length":service_len,
+                            "flags_hex":hex(flags),"no_dns_used":True,
+                        }
+                    except Exception as observation_exc:
+                        blocker["followup_getnameinfo_abi"]={
+                            "inspection_error":type(observation_exc).__name__}
+                stop(u,"original_wsa_startup_research_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if lib.lower()=="opengl32.dll":
             actual_original_gl_import_events+=1
             if graphics_handler is not None:
@@ -127,20 +527,355 @@ def execute(executable,dll,out,*,graphics_handler=None):
                          **{"import":lib+"!"+symbol,
                             "reason":type(exc).__name__})
                     return
+        if (core_win32 is not None and lib.lower()=="kernel32.dll"
+            and symbol in ("CreateFileA","GetFileTime","CloseHandle")):
+            from mxbikes_win32_owned_core_ini import CoreIniWin32Rejected
+            try:
+                if symbol=="CreateFileA":
+                    accepted=core_win32.handle_createfilea(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                elif symbol=="GetFileTime":
+                    accepted=core_win32.handle_getfiletime(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                else:
+                    accepted=core_win32.handle_closehandle(
+                        u,pe,original_slots,lib,symbol,verified_import_return)
+                if accepted:
+                    return
+            except CoreIniWin32Rejected as exc:
+                stop(u,"original_win32_core_ini_service_rejected",**{
+                    "import":lib+"!"+symbol,"reason":str(exc)})
+                return
         if not symbol_is_supported(lib,symbol):
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="memcpy":
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    dest=u.reg_read(UC_X86_REG_RCX)
+                    src=u.reg_read(UC_X86_REG_RDX)
+                    n=u.reg_read(UC_X86_REG_R8)
+                    from mxbikes_crt_guest_malloc_research import (
+                        FOLLOWUP_HEAP_BASE,FOLLOWUP_HEAP_MAX_TOTAL_BYTES,
+                        HEAP_BASE,HEAP_BYTES,SECOND_HEAP_BASE,
+                        SECOND_HEAP_MAP_SIZE)
+                    def classify(ptr):
+                        if BASE<=ptr<image_hi:return "original_image"
+                        if FOLLOWUP_HEAP_BASE<=ptr<FOLLOWUP_HEAP_BASE+FOLLOWUP_HEAP_MAX_TOTAL_BYTES:
+                            return "bounded_guest_heap"
+                        if HEAP_BASE<=ptr<HEAP_BASE+HEAP_BYTES:
+                            return "first_guest_malloc_heap"
+                        if SECOND_HEAP_BASE<=ptr<SECOND_HEAP_BASE+SECOND_HEAP_MAP_SIZE:
+                            return "second_guest_malloc_heap"
+                        if 0x700000000<=ptr<0x710000000:
+                            return "bootstrap_guest_stack_or_heap"
+                        if 0x710000000<=ptr<0x720000000:
+                            return "mapped_guest_stack_or_data"
+                        if 0x720000000<=ptr<0x800000000:return "other_guest_mapping"
+                        return "unknown"
+                    blocker["original_next_memcpy_abi"]={
+                        "original_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "size_bytes":n,
+                        "source_region":classify(src),
+                        "destination_region":classify(dest),
+                        "source_alignment_mod8":src&7,
+                        "destination_alignment_mod8":dest&7,
+                        "source_equals_destination":src==dest,
+                        "stack_aligned":stack&15==8,
+                        "guest_memory_not_modified":True,
+                    }
+                except Exception as exc:
+                    blocker["original_next_memcpy_abi"]={"inspection_error":type(exc).__name__}
+
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="memmove":
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    dest=u.reg_read(UC_X86_REG_RCX)
+                    source=u.reg_read(UC_X86_REG_RDX)
+                    size=u.reg_read(UC_X86_REG_R8)
+                    def mapped_region(pointer,length):
+                        if BASE<=pointer<image_hi:
+                            return "original_image"
+                        if (malloc_research is not None and
+                            pointer>=0x7C0000000 and pointer<0x7C1000000):
+                            return "bounded_followup_guest_heap"
+                        if pointer>=0x700000000 and pointer<0x800000000:
+                            return "other_guest_mapping"
+                        return "unknown"
+                    blocker["original_memmove_abi"]={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "guest_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "size_bytes":size,
+                        "destination_region":mapped_region(dest,size),
+                        "source_region":mapped_region(source,size),
+                        "source_equals_destination":source==dest,
+                        "destination_alignment_mod8":dest&7,
+                        "source_alignment_mod8":source&7,
+                        "guest_stack_aligned":stack&15==8,
+                        "original_guest_memory_not_modified":True,
+                    }
+                except Exception as exc:
+                    blocker["original_memmove_abi"]={"inspection_error":type(exc).__name__}
+
+            if (core_win32 is not None and lib.lower()=="kernel32.dll"
+                and symbol=="GetFileTime"):
+                try:
+                    from mxbikes_win32_owned_core_ini import CORE_INI_WIN32_HANDLE
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    ptrs=[u.reg_read(UC_X86_REG_RDX),
+                          u.reg_read(UC_X86_REG_R8),
+                          u.reg_read(UC_X86_REG_R9)]
+                    blocker["original_core_ini_get_file_time_abi"]={
+                        "original_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "handle_is_verified_read_only_core_ini":(
+                            u.reg_read(UC_X86_REG_RCX)==CORE_INI_WIN32_HANDLE),
+                        "creation_time_output_present":ptrs[0]!=0,
+                        "access_time_output_present":ptrs[1]!=0,
+                        "write_time_output_present":ptrs[2]!=0,
+                        "output_pointer_alignment_mod8":[p&7 if p else None for p in ptrs],
+                        "win64_stack_aligned":stack&15==8,
+                        "original_windows_metadata_not_invented":True,
+                    }
+                except Exception as exc:
+                    blocker["original_core_ini_get_file_time_abi"]={
+                        "inspection_error":type(exc).__name__}
+
+            if (research is not None and lib.lower()=="kernel32.dll"
+                and symbol=="CreateFileA"):
+                # Private-runner ABI inspection; neither host filesystem nor
+                # original guest contents are changed.
+                try:
+                    from mxbikes_owned_file_crt import read_guest_cstring
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    name=read_guest_cstring(u,u.reg_read(UC_X86_REG_RCX))
+                    creation,flags,template=struct.unpack(
+                        "<QQQ",bytes(u.mem_read(stack+0x28,24)))
+                    blocker["original_create_file_a_abi"]={
+                        "original_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "guest_requested_path":name,
+                        "desired_access_hex":hex(u.reg_read(UC_X86_REG_RDX)&0xffffffff),
+                        "share_mode_hex":hex(u.reg_read(UC_X86_REG_R8)&0xffffffff),
+                        "security_attributes_null":u.reg_read(UC_X86_REG_R9)==0,
+                        "creation_disposition":creation&0xffffffff,
+                        "flags_and_attributes_hex":hex(flags&0xffffffff),
+                        "template_handle_null":template==0,
+                        "win64_stack_aligned":stack&15==8,
+                        "host_createfile_not_called":True,
+                    }
+                except Exception as exc:
+                    blocker["original_create_file_a_abi"]={
+                        "inspection_error":type(exc).__name__}
+
+            # One-time, metadata-only original Win64 Winsock initialization ABI
+            # survey. Do not write WSADATA, signal success, or execute the DLL.
+            if (research is not None and lib.lower()=="ws2_32.dll" and
+                symbol=="#115"):
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    output=u.reg_read(UC_X86_REG_RDX)
+                    version=u.reg_read(UC_X86_REG_RCX)
+                    initial=bytes(u.mem_read(output,16))
+                    blocker["observed_original_wsa_startup"]={
+                        "original_import":lib+"!"+symbol,
+                        "guest_call_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "version_word_hex":hex(version & 0xffff),
+                        "rcx_high_bits_zero":version>>16==0,
+                        "output_pointer_nonnull":output!=0,
+                        "output_address_mod8":output&7,
+                        "output_memory_first_16_zero":initial==bytes(16),
+                        "output_is_in_original_image":BASE<=output<image_hi,
+                    }
+                except Exception as exc:
+                    blocker["observed_original_wsa_startup"]={
+                        "inspection_error":type(exc).__name__
+                    }
+            if (winsock_research is not None and lib.lower()=="ws2_32.dll"
+                and symbol=="getnameinfo"):
+                try:
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    sa=u.reg_read(UC_X86_REG_RCX)
+                    sa_len=u.reg_read(UC_X86_REG_RDX)
+                    node=u.reg_read(UC_X86_REG_R8)
+                    node_len=u.reg_read(UC_X86_REG_R9)
+                    service_buffer,service_len,flags=struct.unpack(
+                        "<QQQ",bytes(u.mem_read(stack+0x28,24)))
+                    sa_family=struct.unpack("<H",bytes(u.mem_read(sa,2)))[0]
+                    blocker["original_getnameinfo_abi"]={
+                        "source_call_rva":verified_import_return(pe,ret,lib,symbol,original_slots),
+                        "stack_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "sockaddr_family":sa_family,
+                        "sockaddr_byte_length":sa_len,
+                        "node_buffer_present":node!=0,
+                        "node_buffer_size":node_len,
+                        "service_buffer_present":service_buffer!=0,
+                        "service_buffer_size":service_len,
+                        "flags_hex":hex(flags),
+                        "host_resolution_not_attempted":True,
+                    }
+                except Exception as exc:
+                    blocker["original_getnameinfo_abi"]={"error":type(exc).__name__}
+            if (winsock_research is not None and
+                lib.lower()=="ws2_32.dll" and symbol=="getaddrinfo"):
+                # Capture non-sensitive Win64 ABI metadata only: no raw node,
+                # service strings, guest pointers, or private EXE data.
+                try:
+                    import ipaddress
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    node=u.reg_read(UC_X86_REG_RCX)
+                    service=u.reg_read(UC_X86_REG_RDX)
+                    hints=u.reg_read(UC_X86_REG_R8)
+                    output=u.reg_read(UC_X86_REG_R9)
+                    def classify_guest_cstr(pointer):
+                        if not pointer:return {"kind":"null"}
+                        raw=bytearray()
+                        for pos in range(128):
+                            ch=bytes(u.mem_read(pointer+pos,1))
+                            if ch==bytes((0,)):break
+                            raw.extend(ch)
+                        else:return {"kind":"unterminated","length_at_least":128}
+                        if not raw:return {"kind":"empty","length":0}
+                        try:
+                            name=raw.decode("ascii")
+                            parsed=ipaddress.ip_address(name)
+                            return {"kind":"numeric_ipv"+str(parsed.version),
+                                    "length":len(raw),
+                                    "loopback":parsed.is_loopback,
+                                    "unspecified":parsed.is_unspecified}
+                        except (ValueError,UnicodeError):
+                            return {"kind":"other","length":len(raw),
+                                    "ascii":all(x<128 for x in raw)}
+                    hint_values=None
+                    if hints:
+                        h=bytes(u.mem_read(hints,48))
+                        flags,family,socktype,protocol,alen,cname,addr,nxt=struct.unpack(
+                            "<iiiiQQQQ",h)
+                        hint_values={"flags":flags,"family":family,
+                                     "socktype":socktype,"protocol":protocol,
+                                     "addrlen_zero":alen==0,
+                                     "canonname_null":cname==0,
+                                     "addr_null":addr==0,"next_null":nxt==0}
+                    original_out=bytes(u.mem_read(output,8)) if output else None
+                    blocker["original_getaddrinfo_abi"]={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "original_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "win64_stack_aligned":stack&15==8,
+                        "node":classify_guest_cstr(node),
+                        "service":classify_guest_cstr(service),
+                        "hints_present":bool(hints),
+                        "hints":hint_values,
+                        "result_pointer_present":bool(output),
+                        "result_pointer_alignment_mod8":output&7 if output else None,
+                        "result_pointer_currently_zero":original_out==bytes(8)
+                          if original_out is not None else None,
+                        "external_dns_invoked":False,
+                    }
+                except Exception as exc:
+                    blocker["original_getaddrinfo_abi"]={
+                        "inspection_error":type(exc).__name__}
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="sprintf":
+                try:
+                    import re
+                    stack=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(stack,8)))[0]
+                    dest=u.reg_read(UC_X86_REG_RCX)
+                    fmt=u.reg_read(UC_X86_REG_RDX)
+                    buf=bytearray()
+                    for n in range(128):
+                        ch=bytes(u.mem_read(fmt+n,1))
+                        if ch==bytes((0,)):break
+                        buf.extend(ch)
+                    else:
+                        raise ValueError("unterminated sprintf format")
+                    decoded_format=buf.decode("ascii")
+                    stack_args=struct.unpack("<QQQQ",bytes(u.mem_read(stack+0x28,32)))
+                    # Private-workflow-only metadata; original file remains
+                    # private. Do not commit literal proprietary format strings.
+                    blocker["original_sprintf_abi"]={
+                        "source_call_rva":verified_import_return(pe,ret,lib,symbol,original_slots),
+                        "return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "stack_aligned":stack&15==8,
+                        "destination_in_original_image":BASE<=dest<image_hi,
+                        "destination_alignment_mod8":dest&7,
+                        "format_in_original_image":BASE<=fmt<image_hi,
+                        "format_ascii":decoded_format,
+                        "format_length":len(buf),
+                        "format_conversions":re.findall(r"%[-+ #0.0-9]*[a-zA-Z]",decoded_format),
+                        "arg3_low32":u.reg_read(UC_X86_REG_R8)&0xffffffff,
+                        "arg4_low32":u.reg_read(UC_X86_REG_R9)&0xffffffff,
+                        "stack_arg_low32":list(v&0xffffffff for v in stack_args),
+                        "host_sprintf_not_invoked":True,
+                    }
+                except Exception as exc:
+                    blocker["original_sprintf_abi"]={"inspection_error":type(exc).__name__}
+            try:
+                return_va=struct.unpack("<Q",bytes(u.mem_read(u.reg_read(UC_X86_REG_RSP),8)))[0]
+            except Exception:
+                return_va=None
+            exact_site=verified_import_return(pe,return_va,lib,symbol,original_slots)
             stop(u,"unsupported_import",**{"import":lib+"!"+symbol,
-                                         "reason":"unsupported_service"})
+                      "reason":"unsupported_service",
+                      "verified_original_iat_call_rva":exact_site,
+                      "guest_stack_return_rva": (hex(return_va-BASE)
+                             if return_va is not None and BASE<=return_va<image_hi else None)})
             return
         try:
             result=crt.dispatch(u,symbol,
                 u.reg_read(UC_X86_REG_RCX),u.reg_read(UC_X86_REG_RDX),
                 u.reg_read(UC_X86_REG_R8),u.reg_read(UC_X86_REG_R9))
         except GuestServiceBlocked as exc:
+            if research is not None and lib.lower()=="msvcr90.dll" and symbol=="fopen":
+                # Private-runner diagnostics only, no host file access or
+                # guessed resource creation. Path and mode originate from
+                # the original guest data and are at most 256 ASCII chars.
+                try:
+                    from mxbikes_owned_file_crt import read_guest_cstring
+                    rsp=u.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",bytes(u.mem_read(rsp,8)))[0]
+                    filename=read_guest_cstring(u,u.reg_read(UC_X86_REG_RCX))
+                    mode=read_guest_cstring(u,u.reg_read(UC_X86_REG_RDX))
+                    blocker["next_original_fopen_abi"]={
+                        "original_import_call_rva":verified_import_return(
+                            pe,ret,lib,symbol,original_slots),
+                        "original_return_rva":hex(ret-BASE) if BASE<=ret<image_hi else None,
+                        "original_guest_filename":filename,
+                        "original_guest_mode":mode,
+                        "win64_stack_aligned":rsp&15==8,
+                        "original_steam_dll_handle_closed":not file.open,
+                        "new_external_file_was_not_opened":True,
+                    }
+                except Exception as inspect_exc:
+                    blocker["next_original_fopen_abi"]={
+                        "inspection_error":type(inspect_exc).__name__}
             stop(u,"blocked_guest_crt_call",**{"import":lib+"!"+symbol,
                                            "reason":str(exc)})
             return
         u.reg_write(UC_X86_REG_RAX,result&0xffffffffffffffff)
 
+    if research is not None:
+        from mxbikes_steam_offline_research import (
+            SUBSCRIPTION_METHOD,OfflineResearchRejected)
+        def on_subscription_method(u,pc,size,ctx):
+            try:
+                research.subscription_method(u)
+            except OfflineResearchRejected as exc:
+                stop(u,"steam_research_subscription_rejected",reason=str(exc))
+        uc.hook_add(UC_HOOK_CODE,on_subscription_method,
+                    begin=SUBSCRIPTION_METHOD,end=SUBSCRIPTION_METHOD)
     uc.hook_add(UC_HOOK_BLOCK,on_block)
     uc.hook_add(UC_HOOK_CODE,on_import,begin=STUBS,end=STUBS+STUB_BYTES-1)
     start=uc.reg_read(UC_X86_REG_RIP)
@@ -175,6 +910,11 @@ def execute(executable,dll,out,*,graphics_handler=None):
         "actual_original_gl_import_events":actual_original_gl_import_events,
         "original_GL_calls_from_synthetic_fixture":0,
         "supported_crt_calls":dict(crt.calls),
+        "owned_core_ini_guest_stream_available":core_stream is not None,
+        "original_core_ini_guest_stream_cursor":(core_stream.cursor if core_stream else None),
+        "original_core_ini_guest_stream_closed":(not core_stream.open if core_stream else None),
+        "original_core_ini_owned_file_size":(len(core_stream.content) if core_stream else None),
+        "original_core_ini_win32_guest":core_win32.summary() if core_win32 else None,
         "guest_file_final_cursor":file.cursor,
         "guest_file_closed":not file.open,
         "first_original_block_rvas":first,
@@ -183,10 +923,25 @@ def execute(executable,dll,out,*,graphics_handler=None):
         "stop":blocker,
         "actual_native_arm64_executed_by_this_runner":False,
         "actual_ios_steam_client_initialized":False,
-        "original_game_engine_booted":False
+        "original_game_engine_booted":False,
+        "steam_failure_probe_enabled":bool(steam_failure_probe),
+        "steam_init_success_probe_enabled":bool(steam_init_success_probe),
+        "steam_subscription_research_probe_enabled":bool(steam_subscription_research_probe),
+        "original_post_failure_block_rvas":post_failure_blocks,
+        "authentic_post_failure_original_blocks_observed":len(post_failure_blocks)>0,
+        "steam_failure_probe":steam_failure.summary() if steam_failure else None,
+        "original_steam_context_argument_snapshot":steam_context_layout,
+        "synthetic_steam_subscription_research":research.summary() if research else None,
+        "synthetic_winmm_timer_research":time_research.summary() if time_research else None,
+        "synthetic_guest_malloc_research":malloc_research.summary() if malloc_research else None,
+        "synthetic_winsock_startup_research":winsock_research.summary() if winsock_research else None,
     }
     out.mkdir(parents=True,exist_ok=True)
-    (out/"startup-fast-blocks.json").write_text(json.dumps(result,indent=2)+"\n")
+    report_name = ("startup-steam-failure-blocks" if steam_failure_probe else
+                   "startup-steam-init-success-probe" if steam_init_success_probe else
+                   "startup-steam-subscribed-research" if steam_subscription_research_probe else
+                   "startup-fast-blocks")
+    (out/(report_name+".json")).write_text(json.dumps(result,indent=2)+"\n")
     lines=["# MX Bikes — fast multi-block original game execution","",
        "- Original guest translated BASIC BLOCK executions: **"+str(original_blocks)+"**",
        "- Distinct original guest block entry RVAs: **"+str(len(seen))+"**",
@@ -198,6 +953,8 @@ def execute(executable,dll,out,*,graphics_handler=None):
        "- Real original x64 import calls handled: **"+str(import_call_count)+"**",
        "- Actual game-produced GL imported calls: **"+str(actual_original_gl_import_events)+"**",
        "- Supported service calls: **"+str(dict(crt.calls))+"**",
+       "- Experimental Steam response calls: **"+str(len(steam_failure.events))+"**" if steam_failure is not None else "- Steam response probe: disabled",
+       "- Original blocks after probe call observed: **"+str(len(post_failure_blocks))+"**",
        "- Stop: **"+str(blocker["status"])+"**"+
           (", import "+str(blocker["import"]) if blocker.get("import") else "")+
           (", reason "+str(blocker["reason"]) if blocker.get("reason") else ""),
@@ -209,7 +966,7 @@ def execute(executable,dll,out,*,graphics_handler=None):
        "This is batched original x64 guest execution for dependency discovery, not ARM64 translation.",
        "No Windows Steam DLL executed, authentication granted, original game renderer, or iOS IPA.",""])
     summary="\n".join(lines)
-    (out/"startup-fast-blocks.md").write_text(summary)
+    (out/(report_name+".md")).write_text(summary)
     print(summary)
     return result
 

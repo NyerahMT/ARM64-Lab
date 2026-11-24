@@ -24,14 +24,39 @@ extern "C" {
 #define MXB_GL_UNSIGNED_SHORT 0x1403u
 #define MXB_GL_UNSIGNED_INT 0x1405u
 #define MXB_GL_MAX_INDEXED 512u
+#define MXB_GL_MAX_BATCHES (MXB_GL_MAX_OUTPUT/3u)
+#define MXB_GL_DEPTH_TEST 0x0b71u
+#define MXB_GL_NEVER 0x0200u
+#define MXB_GL_LESS 0x0201u
+#define MXB_GL_EQUAL 0x0202u
+#define MXB_GL_LEQUAL 0x0203u
+#define MXB_GL_GREATER 0x0204u
+#define MXB_GL_NOTEQUAL 0x0205u
+#define MXB_GL_GEQUAL 0x0206u
+#define MXB_GL_ALWAYS 0x0207u
+/* Immutable snapshot of depth state at each committed draw. Texture and
+ * blend state are not yet captured by this batch structure. */
+typedef struct {
+ uint32_t first_vertex,vertex_count,depth_test,depth_write,depth_func;
+} MXBGLDrawBatch;
+/* Total OpenGL stack depths, including the current matrix. */
+#define MXB_GL_MODELVIEW_STACK_DEPTH 32u
+#define MXB_GL_PROJECTION_STACK_DEPTH 2u
 typedef struct {float position[4];float color[4];float uv[2];} MXBGLVertex;
 typedef struct MXBGLSurface MXBGLSurface;
 MXBGLSurface *mxb_gl_create(void);
 void mxb_gl_destroy(MXBGLSurface *s);
 void mxb_gl_reset(MXBGLSurface *s);
 void mxb_gl_clear_frame(MXBGLSurface *s);
+int mxb_gl_depth_enable(MXBGLSurface *s,int enabled);
+int mxb_gl_depth_mask(MXBGLSurface *s,unsigned enabled);
+int mxb_gl_depth_func(MXBGLSurface *s,unsigned func);
+size_t mxb_gl_batch_count(const MXBGLSurface *s);
+const MXBGLDrawBatch *mxb_gl_batches(const MXBGLSurface *s);
 int mxb_gl_matrix_mode(MXBGLSurface *s,unsigned mode);
 int mxb_gl_load_identity(MXBGLSurface *s);
+int mxb_gl_push_matrix(MXBGLSurface *s);
+int mxb_gl_pop_matrix(MXBGLSurface *s);
 int mxb_gl_translatef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_scalef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_ortho(MXBGLSurface *s,float l,float r,float b,float t,float n,float f);

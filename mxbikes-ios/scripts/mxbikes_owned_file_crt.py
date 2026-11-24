@@ -16,6 +16,7 @@ MAX_READ=8*1024*1024
 MAX_TOTAL_READ=64*1024*1024
 MAX_CSTRING=256
 FILE_HANDLE=0x730050000
+CORE_INI_HANDLE=0x730060000
 
 
 class GuestServiceBlocked(Exception):
@@ -26,18 +27,24 @@ class GuestServiceBlocked(Exception):
 class OwnedReadOnlyFile:
     content: bytes
     handle: int=FILE_HANDLE
+    filename: str="steam_api64.dll"
     cursor: int=0
     open: bool=True
     total_read: int=0
 
     @classmethod
-    def from_private_path(cls, path, expected_size):
+    def from_private_path(cls, path, expected_size, *, filename="steam_api64.dll",
+                          handle=FILE_HANDLE, initially_open=True):
         p=Path(path)
         if (not isinstance(expected_size,int) or
             not 0<expected_size<=MAX_OWNED_FILE or
-            not p.is_file() or p.stat().st_size!=expected_size):
+            p.is_symlink() or not p.is_file() or
+            p.stat().st_size!=expected_size):
             raise GuestServiceBlocked("owned_file_missing_or_size_mismatch")
-        return cls(p.read_bytes())
+        if (not isinstance(filename,str) or not filename
+            or not isinstance(handle,int) or handle<=0):
+            raise GuestServiceBlocked("invalid_owned_stream_identity")
+        return cls(p.read_bytes(),handle=handle,filename=filename,open=initially_open)
 
     def require_handle(self, handle):
         if not self.open or handle!=self.handle:
@@ -91,7 +98,7 @@ class OwnedReadOnlyFile:
         return 0
 
     def reopen(self, filename, mode):
-        if filename!="steam_api64.dll" or mode!="rb" or self.open:
+        if filename!=self.filename or mode!="rb" or self.open:
             raise GuestServiceBlocked("unproven_file_open_or_second_stream")
         self.cursor=0
         self.open=True
@@ -127,8 +134,15 @@ class ReadOnlyCRT:
     SUPPORTED=frozenset(("fopen","fseek","ftell","fread","fclose",
                         "rewind","fgetc","feof"))
 
-    def __init__(self,file):
+    def __init__(self,file,extra_files=None):
         self.file=file
+        self.extra_files=dict(extra_files or {})
+        seen={file.handle}
+        for name,extra in self.extra_files.items():
+            if (name!=extra.filename or extra.handle in seen
+                or extra.open or name=="steam_api64.dll"):
+                raise GuestServiceBlocked("invalid_extra_owned_stream_identity")
+            seen.add(extra.handle)
         self.calls={}
         self.bytes_returned=0
 
@@ -137,11 +151,22 @@ class ReadOnlyCRT:
         if name not in self.SUPPORTED:
             raise GuestServiceBlocked("unimplemented_import")
         self.calls[name]=self.calls.get(name,0)+1
-        stream=self.file
         if name=="fopen":
             name_arg=read_guest_cstring(uc,rcx)
             mode_arg=read_guest_cstring(uc,rdx)
-            return stream.reopen(name_arg,mode_arg)
+            if name_arg==self.file.filename:
+                return self.file.reopen(name_arg,mode_arg)
+            if name_arg in self.extra_files:
+                return self.extra_files[name_arg].reopen(name_arg,mode_arg)
+            raise GuestServiceBlocked("unproven_file_open_or_second_stream")
+        guest_handle=r9 if name=="fread" else rcx
+        if guest_handle==self.file.handle:
+            stream=self.file
+        else:
+            stream=next((value for value in self.extra_files.values()
+                         if value.handle==guest_handle),None)
+            if stream is None:
+                raise GuestServiceBlocked("unknown_original_guest_FILE_handle")
         if name=="fseek":
             return stream.seek(rcx,signed32(rdx),r8&0xffffffff)
         if name=="ftell":
