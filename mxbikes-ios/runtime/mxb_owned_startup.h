@@ -11,7 +11,7 @@ typedef struct {
     uint32_t file_modes[2];
     uint64_t exit_bounds[2], exception_filter, first_exit_handler;
     uint32_t argument_count;
-    uint8_t argument_block[40], argument_globals[24], object_header[24], subobjects[0x400];
+    uint8_t argument_block[40], argument_globals[24], object_header[24], subobjects[0x4a0];
     uint64_t crt_lock;
     uint32_t crt_phase;
     uint64_t thread_environment[8];
