@@ -139,6 +139,22 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt=write(ins,op[0],value)
         elif mn=="lea" and len(op)==2 and op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM:
             stmt=write(ins,op[0],addr(ins,op[1]))
+        elif mn in ("inc","dec") and len(op)==1 and op[0].type==CS_OP_MEM and op[0].size in (4,8):
+            n=op[0].size;address=addr(ins,op[0]);operation="add" if mn=="inc" else "sub"
+            stmt=(f"{{uint64_t ea={address};"
+                  f"if(!mxb_guest_check(&s->memory,ea,{n},MXB_MEM_READ|MXB_MEM_WRITE))"
+                  "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
+                  f"uint64_t v=load(s,ea,{n}),carry=s->flags&1u;"
+                  f"v={operation}_flags(s,v,1,{n*8}u);"
+                  "s->flags=(s->flags&~UINT64_C(1))|carry;"
+                  f"store(s,ea,v,{n});}}")
+        elif mn in ("add","sub") and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size in (4,8) and op[1].type==CS_OP_IMM:
+            n=op[0].size;address=addr(ins,op[0]);operand=u(op[1].imm)
+            stmt=(f"{{uint64_t ea={address};"
+                  f"if(!mxb_guest_check(&s->memory,ea,{n},MXB_MEM_READ|MXB_MEM_WRITE))"
+                  "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
+                  f"uint64_t v=load(s,ea,{n});v={mn}_flags(s,v,{operand},{n*8}u);"
+                  f"store(s,ea,v,{n});}}")
         elif mn=="and" and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size==4 and op[1].type==CS_OP_IMM:
             address=addr(ins,op[0])
             stmt=("{uint64_t v=load(s,%s,4);if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
