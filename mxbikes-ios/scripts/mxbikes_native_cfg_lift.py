@@ -210,9 +210,10 @@ def synthetic_input():
     b=bytes.fromhex("53 89cb 01d8 83eb01 75f9 5b c3")
     return [(base,a),(base+0x100,b)],base,base+len(a)
 
-def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=None,crt_case=None):
+def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=None,crt_case=None,image_pages=None,page_permissions=None):
     imports=imports or {};iat=iat or {}
     regs,flags,data=initial(seed,pages)
+    data.update(image_pages or {});page_permissions=page_permissions or {}
     if synthetic:regs[1]=[0,1,2,3,5,8,0xffffffff,0x80000000][seed-1]
     if crt_case:
         name,n=crt_case;heap=0x730000000
@@ -228,7 +229,9 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
             if p not in mapped:cpu.mem_map(p,PAGE);mapped.add(p)
         cpu.mem_write(a,blob)
     if mapped.intersection(pages):raise ValueError("Code/data overlap")
-    for p in pages:cpu.mem_map(p,PAGE);cpu.mem_write(p,data[p])
+    for p in pages:
+        cpu.mem_map(p,PAGE);cpu.mem_write(p,data[p])
+        if p in page_permissions:cpu.mem_protect(p,PAGE,page_permissions[p])
     for r,v in zip(UC_REG,regs):cpu.reg_write(r,v)
     cpu.reg_write(x.UC_X86_REG_EFLAGS,flags)
     trace=[]; invalid=[]; import_events=[]
@@ -321,7 +324,8 @@ def owned_crt_input(path,kind):
     windows=[(base+call_rva,original_call),(thunk,jump),(target,b"\xc3")]
     return windows,base+call_rva,ret,[0x730000000,0x730001000],{target:kind},{slot:(target,ret)},(kind,n)
 
-def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None):
+def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None,original_image_data=False):
+    if original_image_data and (not path or not original_loop):raise ValueError('Actual image data requires owned loop') 
     imports={};iat={};crt_case=None
     if original_crt:
         if not path or original_loop or original_return or imports_fixture:raise ValueError("Owned CRT fixture requires owned executable")
@@ -341,22 +345,37 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
     code,static_pages,nodes=decode_cfg(windows,entry,stop,imports,iat)
     pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
-    parts=[MEMORY_RUNTIME,EXTRA,code,"int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke()||!mxb_pe_guest_smoke())return 95;"]
+    parts=[MEMORY_RUNTIME,EXTRA,code]
+    native_pages={};reference_pages={};page_permissions={}
+    if original_image_data:
+        from mxbikes_pe_guest_owned_test import run as map_original_image
+        native_pages,reference_pages,page_permissions=map_original_image(path,[p for p in pages if p!=STACK],False)
+        # Private data is compiled only in temporary files. Never emit or log it.
+        for i,p in enumerate(pages):
+            if p in native_pages:
+                parts.append("static const uint8_t image_page_%d[4096]={"%i)
+                data=native_pages[p]
+                for start in range(0,len(data),32):
+                    parts.append(",".join(str(b) for b in data[start:start+32])+",")
+                parts.append("};")
+    parts.extend(["int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke()||!mxb_pe_guest_smoke())return 95;"])
     lengths=[];covered=set()
     for seed in range(1,9):
-        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case)
+        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions)
         lengths.append(len(trace));covered.update(trace)
         parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
         parts.append("s.flags=%s;"%u(flags))
         for i,p in enumerate(pages):
-            parts.append("for(unsigned j=0;j<4096u;j++)backing[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
+            if p in native_pages:
+                parts.append("__builtin_memcpy(backing[%d],image_page_%d,4096u);"%(i,i))
+            else:parts.append("for(unsigned j=0;j<4096u;j++)backing[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
             for slot,(target,_) in iat.items():
                 if slot&~(PAGE-1)==p:
                     off=slot-p
                     for k,b in enumerate(struct.pack("<Q",target)):
                         parts.append("backing[%d][%d]=%du;"%(i,off+k,b))
-            perm=1 if any(slot&~(PAGE-1)==p for slot in iat) else 3
+            perm=1 if any(slot&~(PAGE-1)==p for slot in iat) else page_permissions.get(p,3)
             parts.append("if(!mxb_guest_map(&s.memory,%s,backing[%d],4096u,%du))return 96;"%(u(p),i,perm))
         # Vary the pause interval, including very short boundaries inside calls.
         quota=1+seed*19
@@ -392,11 +411,11 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
         compile_native("\n".join(negative),RUNTIME_SOURCES)
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
-    compile_native("\n".join(parts),RUNTIME_SOURCES)
-    print(json.dumps({"mode":"private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
+    compile_native("\n".join(parts),RUNTIME_SOURCES,redact_diagnostics=original_image_data)
+    print(json.dumps({"mode":"private_owned_original_loop_actual_image_data" if original_image_data else "private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes)-len(imports),"modeled_import_nodes":len(imports),"original_iat_provenance":bool(iat),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
-        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"registers":16,
+        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"original_image_seed_pages":len(native_pages),"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
         "original_game_booted":False},indent=2))
 
@@ -421,10 +440,11 @@ if __name__=="__main__":
     p.add_argument('--imports-fixture',action='store_true')
     p.add_argument('--original-return',action='store_true')
     p.add_argument('--original-crt',choices=['memcpy','memset'])
+    p.add_argument('--original-image-data',action='store_true')
     p.add_argument('--emit-module',type=Path)
     args=p.parse_args()
     if args.emit_module:
-        if not args.source_only or not args.imports_fixture or args.original_loop or args.original_return or args.original_crt:
+        if not args.source_only or not args.imports_fixture or args.original_loop or args.original_return or args.original_crt or args.original_image_data:
             p.error('Only the public synthetic imports fixture can be emitted')
         emit_public_module(args.emit_module)
-    else:run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt)
+    else:run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt,args.original_image_data)

@@ -24,7 +24,7 @@ class Plan(C.Structure):
         ("image_size","header_size","header_mapped_size","entry_rva","section_count")]+[
         ("sections",Section*48)]
 
-def run(path):
+def run(path, requested_pages=(), emit_report=True):
     raw=path.read_bytes()
     if hashlib.sha256(raw).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
     pe=PE(path)
@@ -83,11 +83,32 @@ def run(path):
             if bool(lib.mxb_guest_write(C.byref(mem),base+rva,C.byref(b),1))!=bool(perm&2):
                 raise ValueError("Native section write permission mismatch")
             permission_checks+=1
-        print(json.dumps({"mode":"private_actual_pe_native_mapping","sha_pinned":True,
+        native_pages={};reference_pages={};page_permissions={}
+        for address in requested_pages:
+            rva=address-base
+            if address%4096:raise ValueError("Requested page is not aligned")
+            candidates=[(v,rv,n,off,flags) for _,v,rv,n,off,flags in pe.sections
+                        if rv<=rva and rva+4096<=rv+((max(v,n)+alignment-1)&~(alignment-1))]
+            if len(candidates)!=1:raise ValueError("Requested data page not uniquely mapped")
+            v,rv,n,off,flags=candidates[0]
+            perm=((flags>>30)&1)|(((flags>>31)&1)<<1)|(((flags>>29)&1)<<2)
+            if not perm&1 or perm&4:raise ValueError("Only readable non-code seed pages allowed")
+            buf=(C.c_uint8*4096)()
+            if not lib.mxb_guest_read(C.byref(mem),address,buf,4096):
+                raise ValueError("Native PE data page read failed")
+            native_pages[address]=bytes(buf)
+            delta=rva-rv
+            count=max(0,min(4096,n-delta))
+            reference_pages[address]=raw[off+delta:off+delta+count]+bytes(4096-count)
+            if native_pages[address]!=reference_pages[address]:
+                raise ValueError("Independent original PE page seed mismatch")
+            page_permissions[address]=perm
+        if emit_report:print(json.dumps({"mode":"private_actual_pe_native_mapping","sha_pinned":True,
             "image_base":hex(base),"image_bytes":size,"mapped_regions":mem.count,
             "sections_verified":plan.section_count,"original_raw_bytes_compared":raw_bytes,
             "zero_fill_bytes_compared":zero_bytes,"permission_checks":permission_checks,
             "entry_is_executable_guest_data":bool(lib.mxb_guest_check(C.byref(mem),base+plan.entry_rva,1,4)),
             "original_code_executed":False,"host":"pass"},indent=2))
+        return native_pages,reference_pages,page_permissions
 if __name__=="__main__":
     p=argparse.ArgumentParser();p.add_argument("--owned-exe",type=Path,required=True);run(p.parse_args().owned_exe)
