@@ -220,6 +220,18 @@ jobs:
             }
           echo "Unsigned iPhone device-target app compiled with Swift/C post-Steam bridge." >> "$GITHUB_STEP_SUMMARY"
           echo "No Apple signature, physical iPhone test, original game engine or original game frame." >> "$GITHUB_STEP_SUMMARY"
+      - name: Package the unsigned device prototype
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxb-ipa/Payload"
+          ditto "$RUNNER_TEMP/mxb-ios-device-build/Build/Products/Debug-iphoneos/MXBViewportPrototype.app" "$RUNNER_TEMP/mxb-ipa/Payload/MXBViewportPrototype.app"
+          cd "$RUNNER_TEMP/mxb-ipa"
+          ditto -c -k --keepParent Payload "$RUNNER_TEMP/MXBViewportPrototype-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MXBViewportPrototype-unsigned
+          path: ${{ runner.temp }}/MXBViewportPrototype-unsigned.ipa
+          if-no-files-found: error
       - name: Execute linked native runtime on an actual iOS Simulator when available
         timeout-minutes: 12
         shell: bash

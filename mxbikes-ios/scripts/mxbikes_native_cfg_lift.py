@@ -183,7 +183,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=()):
     for target,name in imports.items():
         continuations=sorted(import_returns[target])
         if not continuations:continue
-        if name not in ("memset","memcpy","memmove","malloc","free"):raise ValueError("Unsupported native import")
+        if name not in ("memset","memcpy","memmove","malloc","free","strcpy","strrchr"):raise ValueError("Unsupported native import")
         guard="||".join("next=="+u(a) for a in continuations)
         stmt=("next=load(s,s->r[4],8u);if(s->fault||!(%s))return 97;"
               'if(mxb_guest_crt_call(s,"MSVCR90.dll","%s",next)!=MXB_CRT_OK)return 98;'
@@ -261,7 +261,20 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
             if sp%16!=8:raise ValueError("Reference Win64 ABI alignment")
             dst=uc.reg_read(x.UC_X86_REG_RCX);src=uc.reg_read(x.UC_X86_REG_RDX)
             name=imports[pc]
-            if name=="malloc":
+            if name in ("strcpy","strrchr"):
+                address=src if name=="strcpy" else dst
+                string=bytearray()
+                while len(string)<65536:
+                    string.extend(uc.mem_read(address+len(string),1))
+                    if string[-1]==0:break
+                else:raise ValueError("Unterminated reference string")
+                if name=="strcpy":
+                    uc.mem_write(dst,bytes(string));result=dst
+                else:
+                    index=string.rfind(bytes([src & 255]))
+                    result=dst+index if index>=0 else 0
+                uc.reg_write(x.UC_X86_REG_RAX,result)
+            elif name=="malloc":
                 # Scripted independent contract for the public sequence. The
                 # second allocation fits the released first extent.
                 expected_size = 9600 if crt_case else (32 if not import_events else 16)
@@ -280,15 +293,17 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=Non
     cpu.emu_start(entry,stop,count=MAX_DYNAMIC,timeout=2_000_000)
     final_pc=cpu.reg_read(x.UC_X86_REG_RIP)
     if invalid or final_pc not in {stop,*alternate_stops}:raise ValueError("Reference did not reach frontier")
-    if filename_case:
-        path=FILENAME_CASES[seed-1];last=max(path.rfind(b"/"),path.rfind(bytes([92])))
-        if last>=0:
-            if final_pc!=stop or cpu.reg_read(x.UC_X86_REG_RAX)!=FILENAME_GLOBAL or cpu.reg_read(x.UC_X86_REG_RSP)!=RSP+0x40:
-                raise ValueError("Original filename helper return contract")
-            if bytes(cpu.mem_read(FILENAME_GLOBAL,last+2))!=path[:last+1]+bytes([0]):
-                raise ValueError("Original directory truncation mismatch")
-        elif final_pc not in alternate_stops:raise ValueError("Original no-separator frontier mismatch")
     expected_imports = ["malloc","memset","free","malloc","memcpy","memset","memmove"]
+    if filename_case:
+        path=FILENAME_CASES[seed-1]
+        last=max(path.rfind(b"/"),path.rfind(bytes([92])))
+        colon=path.rfind(b":")
+        expected=path[:last+1] if last>=0 else path[:colon+1]+bytes([92]) if colon>=0 else b""
+        expected_imports=["strcpy"] if last>=0 else ["strcpy","strrchr"]
+        if final_pc!=stop or cpu.reg_read(x.UC_X86_REG_RAX)!=FILENAME_GLOBAL or cpu.reg_read(x.UC_X86_REG_RSP)!=RSP:
+            raise ValueError("Original filename helper return contract")
+        if bytes(cpu.mem_read(FILENAME_GLOBAL,len(expected)+1))!=expected+b"\x00":
+            raise ValueError("Original directory selection mismatch")
     if crt_case:
         expected_imports = ["malloc","memset"] if crt_case[0]=="heap-init" else [crt_case[0]]
     if imports and import_events!=expected_imports:raise ValueError("Reference import sequence")
@@ -395,22 +410,29 @@ def owned_crt_input(path,kind):
 
 FILENAME_GLOBAL=0x1403968a0
 FILENAME_CASES=(b"C:\\games\\mxbikes.exe",b"/tmp/mxbikes.exe",b"mixed\\dir/file.exe",
-                b"mxbikes.exe",b"C:"+bytes([92]),b"/",b"",b"high"+bytes([128])+b"/dir/file.exe")
+                b"mxbikes.exe",b"C:relative.exe",b"a:b:tail",b"",b"high"+bytes([128])+b"/dir/file.exe")
 def owned_filename_input(path):
     from tools.pe_probe import PE
     if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
     pe=PE(path);base=pe.u64(pe.opt+24)
     if base!=0x140000000:raise ValueError("Unexpected image base")
-    spans=((0x15b7aa,0x15b81b),(0x15b862,0x15b867))
+    from mxbikes_first_callee_emu import import_slots
+    slots={base+r:(lib.lower(),symbol) for r,lib,symbol in import_slots(pe)}
+    spans=((0x13675c,0x136769),(0x15b790,0x15b867))
     windows=[(base+a,pe.read_rva(a,b-a)) for a,b in spans]
-    return windows,base+0x15b7aa,base+0x136769,[FILENAME_GLOBAL&~(PAGE-1)],(base+0x15b81b,)
+    imports={};iat={}
+    for i,(site,name) in enumerate(((0x15b7a5,"strcpy"),(0x15b827,"strrchr"))):
+        target=0x750000000+i*16
+        pieces,slot,ret=owned_import_site(pe,base,slots,site,name,target)
+        windows.extend(pieces);imports[target]=name;iat[slot]=(target,ret)
+    return windows,base+0x13675c,base+0x136769,[FILENAME_GLOBAL&~(PAGE-1)],imports,iat
 
 def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None,original_image_data=False,split_modules=False,original_filename=False):
     if original_image_data and (not path or not original_loop):raise ValueError('Actual image data requires owned loop') 
     imports={};iat={};crt_case=None;alternate_stops=()
     if original_filename:
         if not path or original_loop or original_return or original_crt or imports_fixture or split_modules:raise ValueError('Owned filename fixture requires owned executable')
-        windows,entry,stop,extra,alternate_stops=owned_filename_input(path)
+        windows,entry,stop,extra,imports,iat=owned_filename_input(path)
     elif original_crt:
         if not path or original_loop or original_return or imports_fixture:raise ValueError("Owned CRT fixture requires owned executable")
         windows,entry,stop,extra,imports,iat,crt_case=owned_crt_input(path,original_crt)
@@ -469,7 +491,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
     lengths=[];covered=set();case_parts=[];endpoints=[];prefix_length=len(parts)
     for seed in range(1,9):
         case_start=len(parts)
-        patches={RSP+0x38:struct.pack("<Q",stop),FILENAME_GLOBAL:FILENAME_CASES[seed-1]+bytes([0])} if original_filename else {}
+        patches={RSP+0x140:FILENAME_CASES[seed-1]+bytes([0])} if original_filename else {}
         regs,flags,out,of,hashes,th,trace,endpoint=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions,alternate_stops,patches,original_filename)
         endpoints.append(endpoint)
         lengths.append(len(trace));covered.update(trace)
@@ -528,6 +550,7 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
                   "return 0;}",
                   "#ifdef HOST\nint main(void){return smoke();}\n#endif"]
         compile_native("\n".join(negative),RUNTIME_SOURCES)
+    if original_filename and covered!=nodes:raise ValueError("Filename helper coverage incomplete")
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
     if original_image_data:

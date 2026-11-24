@@ -46,6 +46,7 @@ struct MXBViewportPrototypeApp: App {
                 NativeMetalSurface().ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Native Metal surface").font(.headline)
+                    OwnedImageView()
                     Text("Original MX Bikes engine not connected").font(.caption)
                     Text(mxb_poststeam_joined_synthetic_smoke() == 1
                          ? "Native timer → helper entry: synthetic check passed"

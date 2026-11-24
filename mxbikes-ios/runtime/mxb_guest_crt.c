@@ -43,6 +43,20 @@ static int heap_release(MXBGuestHeap *heap,uint64_t pointer){
  return 0;
 }
 
+/* Scan the complete source before a copy can alter guest bytes. Including
+ * the terminator also gives strrchr(s, 0) its required result. */
+static int scan_string(const MXBGuestMemory *memory,uint64_t start,uint8_t key,
+                       size_t *length,uint64_t *match){
+ *match=0;
+ for(size_t i=0;i<65536u;i++){
+  uint8_t byte;
+  if(i>UINT64_MAX-start || !mxb_guest_read(memory,start+i,&byte,1))return 0;
+  if(byte==key)*match=start+i;
+  if(!byte){*length=i+1;return 1;}
+ }
+ return 0;
+}
+
 enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
  const char*name,uint64_t expected_return){
  if(!s||s->fault)return MXB_CRT_BAD_ARGUMENT;
@@ -50,7 +64,8 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
   return MXB_CRT_UNSUPPORTED;
  int fill=same(name,"memset"),copy=same(name,"memcpy"),move=same(name,"memmove");
  int allocate=same(name,"malloc"),release=same(name,"free");
- if(!fill&&!copy&&!move&&!allocate&&!release)return MXB_CRT_UNSUPPORTED;
+ int string_copy=same(name,"strcpy"),find_last=same(name,"strrchr");
+ if(!fill&&!copy&&!move&&!allocate&&!release&&!string_copy&&!find_last)return MXB_CRT_UNSUPPORTED;
  uint64_t sp=s->r[MXB_RSP],n=s->r[MXB_R8],dst=s->r[MXB_RCX],src=s->r[MXB_RDX];
  if(!sp||(sp&15u)!=8u||sp>UINT64_MAX-40u||!expected_return)
   return MXB_CRT_BAD_STACK;
@@ -65,6 +80,16 @@ enum MXBGuestCRTStatus mxb_guest_crt_call(MXBGuestState*s,const char*library,
   else if(!heap_release(&s->heap,dst))return MXB_CRT_BAD_ARGUMENT;
   s->r[MXB_RSP]=sp+8u;
   return MXB_CRT_OK;
+ }
+ if(string_copy || find_last){
+  size_t length;uint64_t match;
+  if(!scan_string(&s->memory,string_copy?src:dst,(uint8_t)src,&length,&match))
+   return MXB_CRT_BAD_MEMORY;
+  if(find_last){
+   s->r[MXB_RAX]=match;s->r[MXB_RSP]=sp+8u;
+   return MXB_CRT_OK;
+  }
+  n=length;copy=1;
  }
  if(n>MXB_MEM_MAX_TRANSFER||n>UINT64_MAX-dst)return MXB_CRT_BAD_ARGUMENT;
  /* Do not let a modeled call alter its own return slot. */
@@ -107,5 +132,41 @@ int mxb_guest_crt_smoke(void){
  s.r[MXB_RCX]=UINT64_MAX;s.r[MXB_RDX]=0;s.r[MXB_R8]=0;
  if(mxb_guest_crt_call(&s,"MSVCR90.dll","memmove",resume)!=MXB_CRT_OK||
     s.r[MXB_RAX]!=UINT64_MAX)return 0;
+ /* Copy a terminated string across two guest mappings, then find its
+  * last character and terminator. Failed calls leave the return slot live. */
+ a[30]='x';a[31]='y';b[0]='x';b[1]=0;
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=base+9;s.r[MXB_RDX]=base+30;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","strcpy",resume)!=MXB_CRT_OK ||
+    a[9]!='x' || a[10]!='y' || a[11]!='x' || a[12])return 0;
+ for(unsigned i=0;i<3;i++){
+  const unsigned keys[3]={'x',0,'z'};
+  const uint64_t expected[3]={base+11,base+12,0};
+  s.r[MXB_RSP]=sp;s.r[MXB_RDX]=keys[i];
+  if(mxb_guest_crt_call(&s,"MSVCR90.dll","strrchr",resume)!=MXB_CRT_OK ||
+     s.r[MXB_RAX]!=expected[i])return 0;
+ }
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=base+9;s.r[MXB_RDX]=base+63;b[31]='x';
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","strcpy",resume)!=MXB_CRT_BAD_MEMORY ||
+    s.r[MXB_RSP]!=sp || a[9]!='x')return 0;
+ uint8_t arena[64];
+ if(!mxb_guest_heap_init(&s,base+64,arena,sizeof(arena)) ||
+    mxb_guest_heap_init(&s,base+128,arena,sizeof(arena)))return 0;
+ const uint64_t sizes[]={0,17,16,1,UINT64_MAX};
+ const uint64_t pointers[]={base+64,base+80,base+112,0,0};
+ for(unsigned i=0;i<5;i++){
+  s.r[MXB_RSP]=sp;s.r[MXB_RCX]=sizes[i];
+  if(mxb_guest_crt_call(&s,"MSVCR90.dll","malloc",resume)!=MXB_CRT_OK ||
+     s.r[MXB_RAX]!=pointers[i])return 0;
+ }
+ s.r[MXB_RSP]=sp;s.r[MXB_RCX]=base+81;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","free",resume)!=MXB_CRT_BAD_ARGUMENT ||
+    s.heap.count!=3 || s.r[MXB_RSP]!=sp)return 0;
+ s.r[MXB_RCX]=base+80;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","free",resume)!=MXB_CRT_OK)return 0;
+ s.r[MXB_RSP]=sp;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","free",resume)!=MXB_CRT_BAD_ARGUMENT)return 0;
+ s.r[MXB_RCX]=32;
+ if(mxb_guest_crt_call(&s,"MSVCR90.dll","malloc",resume)!=MXB_CRT_OK ||
+    s.r[MXB_RAX]!=base+80)return 0;
  return 1;
 }
