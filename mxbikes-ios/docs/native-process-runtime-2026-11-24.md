@@ -157,9 +157,12 @@ Verified later checkpoint from source commit `f4b17efb460bf1e59c5d14a468adf62e2f
 - Eight independent original-x64/native ARM64 cases match all 16 GPRs,
   all 16 complete 128-bit XMM registers, flags, stack and 1,184 object/global bytes.
 - [Native AArch64 hardware differential and four discovery regressions](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45434998371).
+- [Installed iOS Simulator launch and unsigned iPhone build](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45435007169).
 - Candidate continuation `93127b9343bd8bbe0a51beb468658211cc02853d` resolves the original
   read-only vtable entry and requires the genuine virtual function return.
-  It is not a verified checkpoint until private differential and iOS tests pass.
+  The initial candidate resolved the genuine virtual target, but translation stopped at an
+  unsupported narrow TEST instruction. Follow-up source commit `4818711b96256917702615ac19b47a51bb1adc30`
+  adds narrow operand semantics; its private tests must pass before claiming the new return.
 
 These are original startup instructions, not a rendered menu. Steam authorization,
 remaining native translation, host services and original rendering are still unresolved.
