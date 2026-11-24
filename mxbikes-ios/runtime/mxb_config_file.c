@@ -17,7 +17,7 @@ int mxb_config_file_call(MXBGuestState*s,MXBConfigFile*f,const char*symbol,uint6
   uint64_t creation,flags,templ;
   if(f->open||s->r[MXB_RDX]!=0x80000000||s->r[MXB_R8]!=1||s->r[MXB_R9]||
      !read64(&s->memory,sp+0x28,&creation)||!read64(&s->memory,sp+0x30,&flags)||
-     !read64(&s->memory,sp+0x38,&templ)||creation!=3||flags||templ||
+     !read64(&s->memory,sp+0x38,&templ)||(uint32_t)creation!=3||(uint32_t)flags||templ||
      !mxb_guest_read(&s->memory,s->r[MXB_RCX],path,sizeof(path))||
      memcmp(path,"core.ini",sizeof(path)))return 0;
   f->open=1;f->opens++;result=MXB_CONFIG_HANDLE;
