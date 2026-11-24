@@ -2,6 +2,11 @@
 #define _GNU_SOURCE
 #endif
 #include "mxb_owned_startup.h"
+#include <stdlib.h>
+void mxb_owned_startup_dispose(MXBOwnedStartup *p){
+    if(!p)return;
+    free(p->image_backing);p->image_backing=NULL;p->cpu.memory.count=0;
+}
 #if __has_include("private/mxb_private_startup.c")
 #include "../../runtime/mx_import_registry.h"
 #include <pthread.h>
@@ -38,7 +43,7 @@ int mxb_owned_startup(MXBOwnedStartup *p,const MXBGuestMemory *image,uint64_t en
     p->cpu.memory=*image;
     const uint64_t stack_base=UINT64_C(0x720000000);
     if(!mxb_guest_map(&p->cpu.memory,stack_base,p->stack,sizeof(p->stack),MXB_MEM_READ|MXB_MEM_WRITE))return 0;
-    p->pc=entry;p->cpu.r[MXB_RSP]=stack_base+0xc08u;p->cpu.flags=0x202;
+    p->pc=entry;p->cpu.r[MXB_RSP]=stack_base+MXB_STARTUP_STACK_OFFSET;p->cpu.flags=0x202;
     int clock_failed=0;
     const mx_clock_source clock={&clock_failed,monotonic_ns,realtime_ns,NULL};
     mx_import_runtime runtime={&clock,write_guest,&p->cpu.memory,NULL,process_id,thread_id};

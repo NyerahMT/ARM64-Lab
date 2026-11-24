@@ -28,6 +28,25 @@ int mxb_guest_map(MXBGuestMemory*m,uint64_t base,uint8_t*bytes,size_t length,uns
  m->regions[at]=(MXBGuestRegion){base,(uint64_t)length,bytes,p};m->count++;
  return 1;
 }
+int mxb_guest_map_gaps(MXBGuestMemory*m,uint64_t base,uint8_t*bytes,size_t length,unsigned p){
+ if(!m||!bytes||!length||m->count>MXB_MEM_MAX_REGIONS||
+    (p!=MXB_MEM_READ&&p!=(MXB_MEM_READ|MXB_MEM_WRITE))||
+    (uint64_t)length>UINT64_MAX-base||length>UINTPTR_MAX-(uintptr_t)bytes)return 0;
+ MXBGuestMemory staged=*m;
+ uint64_t at=base,end=base+(uint64_t)length;
+ for(unsigned i=0;i<m->count;i++){
+  const MXBGuestRegion*r=&m->regions[i];
+  uint64_t limit=r->base+r->length;
+  if(limit<=base||r->base>=end)continue;
+  /* A preexisting region must be wholly inside this image segment and no
+   * more permissive than it; a cross-section alias is not an overlay. */
+  if(r->base<at||limit>end||(r->permissions&~p))return 0;
+  if(r->base>at&&!mxb_guest_map(&staged,at,bytes+(size_t)(at-base),(size_t)(r->base-at),p))return 0;
+  at=limit;
+ }
+ if(at<end&&!mxb_guest_map(&staged,at,bytes+(size_t)(at-base),(size_t)(end-at),p))return 0;
+ *m=staged;return 1;
+}
 int mxb_guest_unmap(MXBGuestMemory*m,uint64_t base){
  if(!m||m->count>MXB_MEM_MAX_REGIONS)return 0;
  for(unsigned i=0;i<m->count;i++)if(m->regions[i].base==base){
@@ -125,5 +144,22 @@ int mxb_guest_memory_smoke(void){
  if(mxb_guest_move(&m,base+60,base,8)||b[28]!=out[56])return 0;
  if(!mxb_guest_unmap(&m,base+32)||mxb_guest_read(&m,base+31,out,2))return 0;
  if(!mxb_guest_read(&m,UINT64_MAX,0,0)||mxb_guest_read(&m,UINT64_MAX, out,1))return 0;
+ /* Map a whole data section around a persistent writable and a read-only
+  * overlay. Preserve their original backing and stricter permissions. */
+ MXBGuestMemory gaps={0};uint8_t section[64],overlay[8],strict[4];
+ for(unsigned i=0;i<64;i++)section[i]=(uint8_t)i;
+ for(unsigned i=0;i<8;i++)overlay[i]=0x91;
+ for(unsigned i=0;i<4;i++)strict[i]=0x72;
+ if(!mxb_guest_map(&gaps,base+8,overlay,8,3)||
+    !mxb_guest_map(&gaps,base+24,strict,4,1)||
+    !mxb_guest_map_gaps(&gaps,base,section,sizeof(section),3)||gaps.count!=5||
+    !mxb_guest_read(&gaps,base,out,64))return 0;
+ for(unsigned i=0;i<64;i++)if(out[i]!=(i>=8&&i<16?0x91:i>=24&&i<28?0x72:i))return 0;
+ if(mxb_guest_fill(&gaps,base+22,0,8)||strict[0]!=0x72||section[22]!=22)return 0;
+ if(!mxb_guest_fill(&gaps,base+6,0x23,12)||overlay[0]!=0x23||section[6]!=0x23)return 0;
+ unsigned old_count=gaps.count;
+ if(mxb_guest_map_gaps(&gaps,base+2,section+2,32,3)||gaps.count!=old_count||
+    mxb_guest_map_gaps(&gaps,base,section,64,5)||gaps.count!=old_count||
+    mxb_guest_map_gaps(&gaps,base,section,64,1)||gaps.count!=old_count)return 0;
  return 1;
 }

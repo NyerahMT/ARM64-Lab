@@ -15,6 +15,7 @@ final class NativeSession {
     var services: UInt32 { state.pointee.services }
 
     deinit {
+        mxb_owned_startup_dispose(state)
         state.deinitialize(count: 1)
         state.deallocate()
     }

@@ -8,7 +8,7 @@ extern "C" {
 /* Persistent guest virtual memory. All backing bytes are caller-owned.
  * Single-threaded guest execution; mappings may only change between steps.
  * A guest address is never cast to a host pointer. */
-#define MXB_MEM_MAX_REGIONS 64u
+#define MXB_MEM_MAX_REGIONS 256u
 #define MXB_MEM_MAX_TRANSFER (16u*1024u*1024u)
 enum { MXB_MEM_READ=1u, MXB_MEM_WRITE=2u, MXB_MEM_EXEC=4u };
 typedef struct {
@@ -40,6 +40,10 @@ enum { MXB_RAX=0, MXB_RCX=1, MXB_RDX=2, MXB_RBX=3, MXB_RSP=4,
  MXB_RBP=5, MXB_RSI=6, MXB_RDI=7, MXB_R8=8, MXB_R9=9 };
 void mxb_guest_memory_init(MXBGuestMemory *m);
 int mxb_guest_map(MXBGuestMemory *m,uint64_t base,uint8_t *bytes,size_t length,unsigned permissions);
+/* Fill previously unmapped portions of one non-executable image segment.
+ * Existing narrower-permission overlays are retained. The entire operation
+ * commits atomically, or leaves the original mapping table unchanged. */
+int mxb_guest_map_gaps(MXBGuestMemory *m,uint64_t base,uint8_t *bytes,size_t length,unsigned permissions);
 int mxb_guest_unmap(MXBGuestMemory *m,uint64_t base);
 int mxb_guest_check(const MXBGuestMemory *m,uint64_t address,size_t n,unsigned permission);
 int mxb_guest_read(const MXBGuestMemory *m,uint64_t address,void *out,size_t n);

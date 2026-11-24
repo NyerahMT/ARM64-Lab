@@ -1,9 +1,12 @@
 #ifndef MXB_OWNED_STARTUP_H
 #define MXB_OWNED_STARTUP_H
 #include "mxb_guest_memory.h"
+#define MXB_STARTUP_STACK_SIZE (128u*1024u)
+#define MXB_STARTUP_STACK_OFFSET (MXB_STARTUP_STACK_SIZE-0x3f8u)
 typedef struct {
     MXBGuestState cpu;
-    uint8_t stack[4096];
+    uint8_t stack[MXB_STARTUP_STACK_SIZE];
+    uint8_t *image_backing;
     uint8_t initial_globals[16];
     uint64_t import_values[6];
     uint64_t callback_metadata[48];
@@ -24,4 +27,6 @@ typedef struct {
 /* Zero-initialized, caller-owned process state. -1 means source-only build. */
 int mxb_owned_startup(MXBOwnedStartup *process,const MXBGuestMemory *image,uint64_t entry);
 int mxb_native_launch(MXBOwnedStartup *process);
+/* Invalidate guest mappings and release private image data on session end. */
+void mxb_owned_startup_dispose(MXBOwnedStartup *process);
 #endif
