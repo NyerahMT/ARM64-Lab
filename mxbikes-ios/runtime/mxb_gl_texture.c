@@ -182,7 +182,7 @@ enum MXBGLGuestStatus mxb_tex_dispatch_win64(
      !g->r9||g->r9>MXB_GL_MAX_TEX_DIM||
      !height||height>MXB_GL_MAX_TEX_DIM||border!=0||
      (format!=MXB_GL_RGB&&format!=MXB_GL_RGBA)||
-     type!=MXB_GL_UNSIGNED_BYTE||!pixels||!t->current)
+     type!=MXB_GL_UNSIGNED_BYTE||!t->current)
    return MXB_GL_GUEST_UNSUPPORTED;
   Texture*x=find(t,t->current);
   if(!x)return MXB_GL_GUEST_RENDER_REJECTED;
@@ -193,7 +193,9 @@ enum MXBGLGuestStatus mxb_tex_dispatch_win64(
    return MXB_GL_GUEST_RENDER_REJECTED;
   uint8_t*rgba=(uint8_t*)calloc(1,bytes);
   if(!rgba)return MXB_GL_GUEST_RENDER_REJECTED;
-  if(!copy_pixels(read,ctx,pixels,w,h,bpp,t->unpack_alignment,rgba)){
+  /* GL permits null data to allocate storage with unspecified contents.
+   * Choose deterministic zero initialization for this bounded bridge. */
+  if(pixels&&!copy_pixels(read,ctx,pixels,w,h,bpp,t->unpack_alignment,rgba)){
    free(rgba);return MXB_GL_GUEST_UNMAPPED_POINTER;
   }
   free(x->rgba);
