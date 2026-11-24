@@ -382,8 +382,9 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
                     parts.append(",".join(str(b) for b in data[start:start+32])+",")
                 parts.append("};")
     parts.extend(["int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke()||!mxb_pe_guest_smoke())return 95;"])
-    lengths=[];covered=set()
+    lengths=[];covered=set();case_parts=[];prefix_length=len(parts)
     for seed in range(1,9):
+        case_start=len(parts)
         regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case,reference_pages,page_permissions)
         lengths.append(len(trace));covered.update(trace)
         parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
@@ -408,8 +409,9 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
         for i,v in enumerate(out):parts.append("if(s.r[%d]!=%s)return %d;"%(i,u(v),10+i))
         parts.append("if((s.flags&%s)!=%s)return 40;"%(u(CMP_FLAGS),u(of&CMP_FLAGS)))
         for i,h in enumerate(hashes):parts.append("if(hash_page(backing[%d])!=%s)return %d;"%(i,u(h),50+i))
-        parts.append("}")
-    parts.append("return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif")
+        parts.append("}");case_parts.append(parts[case_start:])
+    footer="return 0;}\n#ifdef HOST\nint main(void){return smoke();}\n#endif"
+    parts.append(footer)
     if not path and not imports_fixture:
         # Bad decode targets must never compile into a purported native success.
         base=0x10000000
@@ -434,11 +436,18 @@ static int lifted_resume(State*s,Cursor*c,unsigned quota){
         compile_native("\n".join(negative),RUNTIME_SOURCES)
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
-    compile_native("\n".join(parts),RUNTIME_SOURCES,redact_diagnostics=original_image_data)
+    if original_image_data:
+        # Actual image-page seeds cost more instructions in the independent
+        # AArch64 runner. Keep the existing hard ceiling per run, partition
+        # the eight cases into two bounded four-case ELF executions.
+        for start in range(0,len(case_parts),4):
+            batch=parts[:prefix_length]+[line for case in case_parts[start:start+4] for line in case]+[footer]
+            compile_native("\n".join(batch),RUNTIME_SOURCES,redact_diagnostics=True)
+    else:compile_native("\n".join(parts),RUNTIME_SOURCES)
     print(json.dumps({"mode":"private_owned_original_loop_actual_image_data" if original_image_data else "private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
         "static_instructions":len(nodes)-len(imports),"modeled_import_nodes":len(imports),"original_iat_provenance":bool(iat),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
-        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"original_image_seed_pages":len(native_pages),"independent_translation_units":2 if split_modules else 1,"registers":16,
+        "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"original_image_seed_pages":len(native_pages),"native_execution_batches":2 if original_image_data else 1,"independent_translation_units":2 if split_modules else 1,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
         "original_game_booted":False},indent=2))
 
