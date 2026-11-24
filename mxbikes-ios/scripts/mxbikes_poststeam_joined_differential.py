@@ -295,13 +295,16 @@ def compile_and_run_native(expected):
                         "-o",str(host)],check=True,capture_output=True,text=True)
         subprocess.run([str(host)],check=True,capture_output=True,text=True)
         elf=p/"joined_arm64.elf"
-        subprocess.run([
+        compile_result=subprocess.run([
             "clang","--target=aarch64-unknown-linux-gnu","-fuse-ld=lld",
             "-nostdlib","-static","-ffreestanding",
             "-fno-builtin","-fno-stack-protector",*flags,
             "-Wl,-e,smoke","-Wl,-z,max-page-size=4096",
             "-Wl,--build-id=none",str(source),*map(str,native),"-o",str(elf)
-        ],check=True,capture_output=True,text=True)
+        ],capture_output=True,text=True)
+        if compile_result.returncode:
+            raise RuntimeError("Original joined AArch64 compile/link rejected: "+
+                               compile_result.stderr[-5000:])
         arm=execute_arm64_elf(elf,instruction_budget=500000,timeout_us=5_000_000)
         return bool(arm["return_to_sentinel"])
 
