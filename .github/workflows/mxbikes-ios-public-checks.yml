@@ -72,3 +72,40 @@ jobs:
             readelf -h "/tmp/${name}-aarch64.o" | grep -q AArch64
           done
           echo "Source-only ARM64/Win64 graphics tests passed. No original game code or assets were used." >> "$GITHUB_STEP_SUMMARY"
+
+  native-arm64-graphics:
+    # Execute on an actual ARM64 runner; cross-compilation alone proves no runtime behavior.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mxbikes-ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify host architecture and execute renderer smoke tests
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_surface.c tests/mxb_gl_surface_smoke.c \
+            -lm -o /tmp/mxb-arm64-surface
+          /tmp/mxb-arm64-surface
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_surface.c runtime/mxb_gl_win64_abi.c \
+            tests/mxb_gl_win64_abi_smoke.c \
+            -lm -o /tmp/mxb-arm64-abi
+          readelf -h /tmp/mxb-arm64-abi | grep -q AArch64
+          /tmp/mxb-arm64-abi
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_surface.c runtime/mxb_gl_win64_abi.c \
+            runtime/mxb_gl_indexed_probe.c tests/mxb_gl_indexed_fixture_smoke.c \
+            -lm -o /tmp/mxb-arm64-indexed
+          /tmp/mxb-arm64-indexed
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_texture.c runtime/mxb_gl_texture_probe.c \
+            tests/mxb_gl_texture_batch_smoke.c \
+            -o /tmp/mxb-arm64-texture
+          /tmp/mxb-arm64-texture
+          echo "Native AArch64 renderer tests passed with synthetic fixture data only." >> "$GITHUB_STEP_SUMMARY"
