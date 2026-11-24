@@ -17,7 +17,7 @@ BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x2d2b6a
+FRONTIER=BASE+0x2bbd90
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -225,7 +225,7 @@ def run(path):
                     result={"GetCurrentThreadId":tid,"GetCurrentProcessId":pid,"GetTickCount":mono//1000000 & 0xffffffff}
                     uc.reg_write(x.UC_X86_REG_RAX,result[name])
             cpu.hook_add(UC_HOOK_CODE,service)
-            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=1100)
+            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=1700)
             expected=[cpu.reg_read(reg) for reg in UC_REG]+[
                 cpu.reg_read(x.UC_X86_REG_EFLAGS),cpu.reg_read(x.UC_X86_REG_RIP),len(visited),len(called),
                 *struct.unpack("<QQ",cpu.mem_read(COOKIE,16)),
