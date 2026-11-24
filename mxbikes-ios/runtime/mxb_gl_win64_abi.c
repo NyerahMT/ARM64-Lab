@@ -154,6 +154,18 @@ enum MXBGLGuestStatus mxb_gl_dispatch_win64(
     (unsigned)g->rcx,(unsigned)g->rdx,(unsigned)g->r8,g->r9));
  if(same(name,"glDrawElements")||same(name,"glDrawArrays"))
   return draw_elements(s,g,read_guest,ctx,same(name,"glDrawElements"));
+ if(same(name,"glVertex2fv")){
+  float xy[2];
+  if(!readable(read_guest,ctx,g->rcx,xy,sizeof(xy)))
+   return MXB_GL_GUEST_UNMAPPED_POINTER;
+  return rendered(mxb_gl_vertex3f(s,xy[0],xy[1],0.0f));
+ }
+ if(same(name,"glColor4fv")){
+  float rgba[4];
+  if(!readable(read_guest,ctx,g->rcx,rgba,sizeof(rgba)))
+   return MXB_GL_GUEST_UNMAPPED_POINTER;
+  return rendered(mxb_gl_color4f(s,rgba[0],rgba[1],rgba[2],rgba[3]));
+ }
  if(same(name,"glTexCoord2fv")){
   float uv[2];
   if(!readable(read_guest,ctx,g->rcx,uv,sizeof(uv)))
@@ -162,12 +174,16 @@ enum MXBGLGuestStatus mxb_gl_dispatch_win64(
  }
  if(same(name,"glBegin")||same(name,"glMatrixMode"))
   return rendered(mxb_gl_dispatch_import(s,library,name,(unsigned)g->rcx,0,0));
- if(same(name,"glEnd")||same(name,"glLoadIdentity"))
+ if(same(name,"glEnd")||same(name,"glLoadIdentity")||
+    same(name,"glPushMatrix")||same(name,"glPopMatrix"))
   return rendered(mxb_gl_dispatch_import(s,library,name,0,0,0));
 
- if(same(name,"glVertex3f")||same(name,"glColor3f")||same(name,"glColor4f")){
+ if(same(name,"glVertex3f")||same(name,"glColor3f")||same(name,"glColor4f")||
+    same(name,"glTranslatef")||same(name,"glScalef")||
+    same(name,"glTexCoord2f")||same(name,"glVertex2f")){
   float args[4]={0.0f,0.0f,0.0f,0.0f};
-  size_t count=same(name,"glColor4f")?4u:3u;
+  size_t count=same(name,"glColor4f")?4u:
+   (same(name,"glTexCoord2f")||same(name,"glVertex2f"))?2u:3u;
   for(size_t i=0;i<count;i++)args[i]=xmm_float(g->xmm_low64[i]);
   return rendered(mxb_gl_dispatch_import(s,library,name,0,args,count));
  }
