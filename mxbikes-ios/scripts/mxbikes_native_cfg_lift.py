@@ -98,16 +98,23 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
         if (gs_base is not None and ins.reg_name(m.segment)=="gs" and not m.index
                 and not m.base and m.disp==0x30 and ins.mnemonic=="mov" and op.size==8):
             return u(gs_base+m.disp)
-        if m.segment or m.index or not m.base:raise ValueError("Unsupported memory addressing")
-        base=ins.reg_name(m.base)
+        if m.segment or (not m.base and not m.index):raise ValueError("Unsupported memory addressing")
+        base=ins.reg_name(m.base) if m.base else None
+        index=ins.reg_name(m.index) if m.index else None
         if base=="rip":
+            if index:raise ValueError("Invalid RIP index")
             a=(ins.address+ins.size+m.disp)&MASK
             if ins.mnemonic!="lea":
                 if a%PAGE+op.size>PAGE:raise ValueError("Cross-page static data")
                 pages.add(a&~(PAGE-1))
             return u(a)
-        if base not in REGS:raise ValueError("Invalid base register")
-        return "(s->r[%d]+%s)"%(REGS.index(base),u(m.disp))
+        if base is not None and base not in REGS:raise ValueError("Invalid base register")
+        if index is not None and (index not in REGS or m.scale not in (1,2,4,8)):
+            raise ValueError("Invalid index register")
+        terms=[u(m.disp)]
+        if base is not None:terms.append(f"s->r[{REGS.index(base)}]")
+        if index is not None:terms.append(f"s->r[{REGS.index(index)}]*{m.scale}u")
+        return "("+"+".join(terms)+")"
     # Legacy 8/16-bit register aliases preserve the other bits of the GPR.
     partial={}
     for i,name in enumerate(("ax","cx","dx","bx","sp","bp","si","di",*(f"r{i}w" for i in range(8,16)))):
@@ -162,6 +169,17 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
                 dst,src=xmm(ins,op[0]),xmm(ins,op[1])
                 stmt=f"s->xmm[{dst}][0]=(s->xmm[{dst}][0]&UINT64_C(0xffffffff00000000))|(s->xmm[{src}][0]&UINT64_C(0xffffffff));"
             else:raise ValueError("Unsupported scalar SSE move at "+hex(pc))
+        elif mn=="not" and len(op)==1 and op[0].type==CS_OP_REG:
+            stmt=write(ins,op[0],"~"+read(ins,op[0]))
+        elif mn in ("repne scasb","repnz scasb") and len(op)==2:
+            # One bounded string instruction; preserve direction, final
+            # arithmetic flags and the remaining original count.
+            stmt=("{unsigned budget=65536u;while(s->r[1]){"
+                  "if(!budget--)return MXB_NATIVE_BUDGET;"
+                  "uint64_t value=load(s,s->r[7],1);if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
+                  "(void)sub_flags(s,s->r[0]&255u,value,8u);"
+                  "s->r[7]+=(s->flags&0x400u)?UINT64_MAX:1u;s->r[1]--;"
+                  "if(s->flags&0x40u)break;}}")
         elif mn in ("mov","movabs") and len(op)==2:
             stmt=write(ins,op[0],read(ins,op[1]))
         elif mn in ("movsx","movsxd","movzx") and len(op)==2 and op[0].type==CS_OP_REG:
