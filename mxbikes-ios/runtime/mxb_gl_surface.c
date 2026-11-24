@@ -8,6 +8,9 @@ struct MXBGLSurface {
  MXBGLVertex frame[MXB_GL_MAX_OUTPUT],working[MXB_GL_MAX_INPUT];
  size_t frame_len,working_len;
  float modelview[16],projection[16],current_color[4],current_uv[2];
+ /* OpenGL minimum stack depths: modelview 32, projection 2, including current. */
+ float modelview_stack[31][16],projection_stack[1][16];
+ unsigned modelview_saved,projection_saved;
  unsigned current_matrix,begin_mode,faults;
  MXBGLClientArray vertex_array,color_array,texcoord_array;
  int building;
@@ -47,6 +50,30 @@ int mxb_gl_load_identity(MXBGLSurface*s){
  if(!s)return 0;
  if(s->building)return fail(s);
  identity(selected(s));return 1;
+}
+int mxb_gl_push_matrix(MXBGLSurface*s){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ if(s->current_matrix==MXB_GL_PROJECTION){
+  if(s->projection_saved>=1u)return fail(s);
+  __builtin_memcpy(s->projection_stack[s->projection_saved++],s->projection,16u*sizeof(float));
+ }else{
+  if(s->modelview_saved>=31u)return fail(s);
+  __builtin_memcpy(s->modelview_stack[s->modelview_saved++],s->modelview,16u*sizeof(float));
+ }
+ return 1;
+}
+int mxb_gl_pop_matrix(MXBGLSurface*s){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ if(s->current_matrix==MXB_GL_PROJECTION){
+  if(!s->projection_saved)return fail(s);
+  __builtin_memcpy(s->projection,s->projection_stack[--s->projection_saved],16u*sizeof(float));
+ }else{
+  if(!s->modelview_saved)return fail(s);
+  __builtin_memcpy(s->modelview,s->modelview_stack[--s->modelview_saved],16u*sizeof(float));
+ }
+ return 1;
 }
 int mxb_gl_translatef(MXBGLSurface*s,float x,float y,float z){
  if(!s)return 0;
@@ -187,6 +214,12 @@ int mxb_gl_dispatch_import(MXBGLSurface*s,const char*lib,const char*name,
  if(sym_eq(name,"glEnd"))return mxb_gl_end(s);
  if(sym_eq(name,"glMatrixMode"))return mxb_gl_matrix_mode(s,word);
  if(sym_eq(name,"glLoadIdentity"))return mxb_gl_load_identity(s);
+ if(sym_eq(name,"glPushMatrix"))return mxb_gl_push_matrix(s);
+ if(sym_eq(name,"glPopMatrix"))return mxb_gl_pop_matrix(s);
+ if(sym_eq(name,"glTranslatef"))return (n==3u&&a)?mxb_gl_translatef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glScalef"))return (n==3u&&a)?mxb_gl_scalef(s,a[0],a[1],a[2]):fail(s);
+ if(sym_eq(name,"glTexCoord2f"))return (n==2u&&a)?mxb_gl_tex_coord2f(s,a[0],a[1]):fail(s);
+ if(sym_eq(name,"glVertex2f"))return (n==2u&&a)?mxb_gl_vertex3f(s,a[0],a[1],0.0f):fail(s);
  if(sym_eq(name,"glVertex3f")||sym_eq(name,"glVertex3fv"))
   return (n==3u&&a)?mxb_gl_vertex3fv(s,a):fail(s);
  if(sym_eq(name,"glColor3f")||sym_eq(name,"glColor3fv"))
