@@ -17,7 +17,7 @@ BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x2e84c0
+FRONTIER=BASE+0x2d2ad6
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -47,7 +47,7 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
     uint32_t inputs[2]={(uint32_t)vals[5],(uint32_t)vals[6]};
     if(!mxb_guest_write(&p.cpu.memory,0x1403d85bcULL,inputs,4) ||
        !mxb_guest_write(&p.cpu.memory,0x1403d85b8ULL,inputs+1,4))goto done;
-    uint8_t initial[0x248];
+    uint8_t initial[0x400];
     for(unsigned i=0;i<sizeof(initial);i++)initial[i]=(uint8_t)(i+vals[6]);
     if(!mxb_guest_write(&p.cpu.memory,0x1403de328ULL,initial,sizeof(initial)))goto done;
     p.exception_filter=vals[7];
@@ -70,7 +70,7 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
        !mxb_guest_read(&p.cpu.memory,0x1403d8020ULL,regs+33,24) ||
        !mxb_guest_read(&p.cpu.memory,0x1403d9b10ULL,regs+36,24) ||
        !mxb_guest_read(&p.cpu.memory,0x760002000ULL,regs+39,40) ||
-       !mxb_guest_read(&p.cpu.memory,0x1403de328ULL,regs+44,0x248))goto done;
+       !mxb_guest_read(&p.cpu.memory,0x1403de328ULL,regs+44,0x400))goto done;
     for(unsigned i=0;i<sizeof(p.stack);i++)stack[i]=p.stack[i];
     ok=1;
 done:
@@ -115,7 +115,7 @@ def run(path):
             regs=[((seed+1)*(i+3)*0x1010101010101)&MASK for i in range(16)]
             regs[4]=STACK+0xc08
             flags=0x202 | (0x8d5 if seed%2 else 0)
-            state=(C.c_uint64*117)(*regs,flags)
+            state=(C.c_uint64*172)(*regs,flags)
             vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
             stack=(C.c_uint8*4096)()
             if not replay(raw,len(raw),vals,state,stack):raise ValueError("Native entry failed")
@@ -130,7 +130,7 @@ def run(path):
             cpu.mem_map(STACK,4096)
             cpu.mem_write(BASE+0x3d85bc,struct.pack("<I",vals[5]))
             cpu.mem_write(BASE+0x3d85b8,struct.pack("<I",vals[6]))
-            cpu.mem_write(BASE+0x3de328,bytes((i+vals[6])&255 for i in range(0x248)))
+            cpu.mem_write(BASE+0x3de328,bytes((i+vals[6])&255 for i in range(0x400)))
             cpu.mem_write(COOKIE,struct.pack("<Q",cookie))
             for reg,value in zip(UC_REG,regs):cpu.reg_write(reg,value)
             cpu.reg_write(x.UC_X86_REG_EFLAGS,flags)
@@ -225,7 +225,7 @@ def run(path):
                     result={"GetCurrentThreadId":tid,"GetCurrentProcessId":pid,"GetTickCount":mono//1000000 & 0xffffffff}
                     uc.reg_write(x.UC_X86_REG_RAX,result[name])
             cpu.hook_add(UC_HOOK_CODE,service)
-            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=650)
+            cpu.emu_start(BASE+pe.OPTIONAL_HEADER.AddressOfEntryPoint,FRONTIER,count=1100)
             expected=[cpu.reg_read(reg) for reg in UC_REG]+[
                 cpu.reg_read(x.UC_X86_REG_EFLAGS),cpu.reg_read(x.UC_X86_REG_RIP),len(visited),len(called),
                 *struct.unpack("<QQ",cpu.mem_read(COOKIE,16)),
@@ -233,11 +233,13 @@ def run(path):
                 *struct.unpack("<QQ",cpu.mem_read(BASE+0xe4adb0,16)),*struct.unpack("<II",cpu.mem_read(0x760001000,8)),exception_filter,*handlers,
                 *struct.unpack("<I",cpu.mem_read(BASE+0x3d8018,4)),*struct.unpack("<3Q",cpu.mem_read(BASE+0x3d8020,24)),
                 *struct.unpack("<3Q",cpu.mem_read(BASE+0x3d9b10,24)),*struct.unpack("<5Q",cpu.mem_read(0x760002000,40)),
-                *struct.unpack("<73Q",cpu.mem_read(BASE+0x3de328,0x248))]
+                *struct.unpack("<128Q",cpu.mem_read(BASE+0x3de328,0x400))]
             if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,4096)):
-                raise ValueError(f"Original/native process state mismatch in case {seed}")
+                differing=[i for i,(actual,wanted) in enumerate(zip(state,expected)) if actual!=wanted]
+                stack_diff=sum(a!=b for a,b in zip(stack,cpu.mem_read(STACK,4096)))
+                raise ValueError(f"Original/native process state mismatch case {seed}; fields={differing}; stack bytes={stack_diff}")
             if seed==7 and state[20]!=DEFAULT+1:raise ValueError("Collision path missed")
-    print("PASS: 8 original-entry cases, 16 registers, defined flags, stack, lock, phase, cookies, exit bounds, modes, filter, service and instruction counts")
+    print(f"PASS: 8 original-entry cases; frontier={hex(FRONTIER)}; last case instructions={state[18]}; services={state[19]}; 1024 object bytes; all registers, flags and stack matched")
 
 
 if __name__=="__main__":
