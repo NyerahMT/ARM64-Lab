@@ -58,4 +58,7 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--owned-exe",required=True,type=Path)
     args=parser.parse_args()
-    prepare(args.owned_exe,Path(__file__).resolve().parents[1]/"runtime"/"private")
+    from mxbikes_private_apple_startup import prepare_startup
+    destination=Path(__file__).resolve().parents[1]/"runtime"/"private"
+    prepare(args.owned_exe,destination)
+    prepare_startup(args.owned_exe,destination)

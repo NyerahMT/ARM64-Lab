@@ -20,6 +20,10 @@ targets:
       - path: runtime/mxb_native_dispatch.c
       - path: runtime/mxb_native_dispatch.h
         buildPhase: headers
+      - path: ../runtime/mx_time_compat.c
+      - path: ../runtime/mx_guest_imports.c
+      - path: ../runtime/mx_import_registry.c
+      - path: runtime/mxb_owned_startup.c
       - path: runtime/private
         optional: true
       - path: runtime/mxb_owned_directory.c
@@ -61,6 +65,7 @@ targets:
       path: ios/MXBViewportPrototype/Info.plist
     settings:
       base:
+        HEADER_SEARCH_PATHS: ["$(inherited)", "$(SRCROOT)/runtime", "$(SRCROOT)/../runtime"]
         PRODUCT_BUNDLE_IDENTIFIER: com.nyerahworks.mxbviewportprototype
         SWIFT_OBJC_BRIDGING_HEADER: ios/MXBViewportPrototype/Bridge.h
         CODE_SIGNING_ALLOWED: "NO"

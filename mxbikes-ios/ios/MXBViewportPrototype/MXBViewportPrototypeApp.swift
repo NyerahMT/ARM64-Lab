@@ -33,7 +33,8 @@ struct MXBViewportPrototypeApp: App {
             let marker = docs.appendingPathComponent("mxb-owned-result.txt")
             do {
                 let image = try OwnedImage.read(docs.appendingPathComponent("mxbikes.exe"))
-                let passed = image.directory == "C:\\MX Bikes\\" && image.plan.section_count == 7
+                let passed = image.directory == "C:\\MX Bikes\\" && image.plan.section_count == 7 &&
+                    image.startupPC == 0x1402ab02c && image.startupServices == 5 && image.startupSteps == 40
                 try Data((passed ? "PASS" : "FAIL").utf8).write(to: marker, options: .atomic)
             } catch {
                 try? Data("FAIL".utf8).write(to: marker, options: .atomic)

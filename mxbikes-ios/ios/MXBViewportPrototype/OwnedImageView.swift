@@ -7,7 +7,11 @@ final class OwnedImage {
     static let fileSize = 4_113_408
     static let digest = "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
     let memory: MXBGuestMemory
+    private let process: UnsafeMutablePointer<MXBOwnedStartup>
     let directory: String?
+    var startupPC: UInt64 { process.pointee.pc }
+    var startupServices: UInt32 { process.pointee.services }
+    var startupSteps: UInt32 { process.pointee.instructions }
     let plan: MXBPEImage
     private let backing: UnsafeMutablePointer<UInt8>
 
@@ -31,23 +35,33 @@ final class OwnedImage {
             }
             return bytes
         }
+        let state = UnsafeMutablePointer<MXBOwnedStartup>.allocate(capacity: 1)
+        state.initialize(to: MXBOwnedStartup())
+        let started = mxb_owned_startup(state, &mapped, layout.image_base + UInt64(layout.entry_rva))
         var result = [CChar](repeating: 0, count: 262)
         let resolved = ("C:\\MX Bikes\\" + filename).withCString { path in
             result.withUnsafeMutableBufferPointer { buffer in
                 mxb_owned_directory(&mapped, path, buffer.baseAddress, buffer.count)
             }
         }
-        if resolved == 0 {
+        if started == 0 || resolved == 0 {
+            state.deinitialize(count: 1)
+            state.deallocate()
             storage.deallocate()
-            throw LoadError.directory
+            throw started == 0 ? LoadError.startup : LoadError.directory
         }
         directory = resolved == 1 ? String(cString: result) : nil
+        process = state
         backing = storage
         memory = mapped
         plan = layout
     }
 
-    deinit { backing.deallocate() }
+    deinit {
+        process.deinitialize(count: 1)
+        process.deallocate()
+        backing.deallocate()
+    }
 
     static func read(_ url: URL) throws -> OwnedImage {
         let scoped = url.startAccessingSecurityScopedResource()
@@ -67,10 +81,11 @@ final class OwnedImage {
     }
 
     enum LoadError: LocalizedError {
-        case wrongBuild, mapping, directory
+        case wrongBuild, mapping, directory, startup
         var errorDescription: String? {
             switch self {
             case .wrongBuild: return "This file differs from the MX Bikes build verified by the port."
+            case .startup: return "The original startup routine stopped before the second CRT stage."
             case .directory: return "The original directory routine stopped before returning."
             case .mapping: return "The native loader could not map this executable."
             }
@@ -91,6 +106,10 @@ struct OwnedImageView: View {
                 .disabled(loading)
             if let image = loaded {
                 Text("Mapped \(image.plan.section_count) sections · \(image.plan.image_size) bytes")
+                if image.startupSteps > 0 {
+                    Text("Startup paused at " + String(format: "0x%llX", image.startupPC))
+                    Text("\(image.startupSteps) guest instructions · \(image.startupServices) host service calls")
+                }
                 if let directory = image.directory { Text("Game directory " + directory) }
                 Text("Game entry " + String(format: "0x%llX", image.plan.image_base + UInt64(image.plan.entry_rva)))
             }

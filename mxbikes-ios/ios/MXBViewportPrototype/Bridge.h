@@ -2,6 +2,7 @@
 #define MXB_VIEWPORT_BRIDGE_H
 #include "../../runtime/mxb_guest_memory.h"
 #include "../../runtime/mxb_owned_directory.h"
+#include "../../runtime/mxb_owned_startup.h"
 #include "../../runtime/mxb_guest_crt.h"
 #include "../../runtime/mxb_pe_guest_image.h"
 #include "../../runtime/mxb_native_exec.h"
