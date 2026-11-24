@@ -28,6 +28,17 @@ struct MXBViewportPrototypeApp: App {
     init() {
         // Explicit CI-only runtime marker: a successful simulator launch must
         // actually call the linked generated native module, not merely build.
+        if ProcessInfo.processInfo.arguments.contains("--owned-directory-selftest"),
+           let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let marker = docs.appendingPathComponent("mxb-owned-result.txt")
+            do {
+                let image = try OwnedImage.read(docs.appendingPathComponent("mxbikes.exe"))
+                let passed = image.directory == "C:\\MX Bikes\\" && image.plan.section_count == 7
+                try Data((passed ? "PASS" : "FAIL").utf8).write(to: marker, options: .atomic)
+            } catch {
+                try? Data("FAIL".utf8).write(to: marker, options: .atomic)
+            }
+        }
         if ProcessInfo.processInfo.arguments.contains("--native-selftest") {
             let passed = mxb_native_probe_smoke() == 1 &&
                          mxb_poststeam_joined_synthetic_smoke() == 1 &&

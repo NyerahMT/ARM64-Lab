@@ -74,7 +74,7 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=()):
+def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None):
     imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
     frontiers={stop,*alternate_stops}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
@@ -168,7 +168,9 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=()):
                 raise ValueError("Unapproved IAT slot")
             target,continuation=iat[slot]
             pages.add(slot&~(PAGE-1));import_returns[target].add(continuation)
-            stmt="next=load(s,%s,8u);if(s->fault||next!=%s)return 97;"%(u(slot),u(target))
+            slot_value=target if disk_imports is None else disk_imports[slot]
+            stmt="next=load(s,%s,8u);if(s->fault||next!=%s)return 97;"%(u(slot),u(slot_value))
+            if disk_imports is not None:stmt+="next=%s;"%u(target)
             edges=[target];next_pc="next"
         elif mn in CONDS and len(op)==1 and op[0].type==CS_OP_IMM:
             edges=[nxt,op[0].imm]

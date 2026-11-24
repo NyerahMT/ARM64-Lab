@@ -20,6 +20,9 @@ targets:
       - path: runtime/mxb_native_dispatch.c
       - path: runtime/mxb_native_dispatch.h
         buildPhase: headers
+      - path: runtime/private
+        optional: true
+      - path: runtime/mxb_owned_directory.c
       - path: runtime/generated/mxb_native_probe.c
       - path: runtime/mxb_native_probe_smoke.c
       - path: runtime/mxb_native_exec.h

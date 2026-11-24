@@ -3,21 +3,22 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Owns the backing store for the lifetime of the guest mappings.
-private final class OwnedImage {
+final class OwnedImage {
     static let fileSize = 4_113_408
     static let digest = "4ae7de3854b4d0a18271679fb57a1f2fdf0b21804417b85dd82055078ea123b6"
     let memory: MXBGuestMemory
+    let directory: String?
     let plan: MXBPEImage
     private let backing: UnsafeMutablePointer<UInt8>
 
-    init(data: Data) throws {
+    init(data: Data, filename: String) throws {
         guard data.count == Self.fileSize,
               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == Self.digest else {
             throw LoadError.wrongBuild
         }
         var mapped = MXBGuestMemory()
         var layout = MXBPEImage()
-        backing = try data.withUnsafeBytes { raw in
+        let storage = try data.withUnsafeBytes { raw in
             let file = raw.bindMemory(to: UInt8.self)
             guard mxb_pe_plan(file.baseAddress, file.count, &layout) == 1 else {
                 throw LoadError.mapping
@@ -30,6 +31,18 @@ private final class OwnedImage {
             }
             return bytes
         }
+        var result = [CChar](repeating: 0, count: 262)
+        let resolved = ("C:\\MX Bikes\\" + filename).withCString { path in
+            result.withUnsafeMutableBufferPointer { buffer in
+                mxb_owned_directory(&mapped, path, buffer.baseAddress, buffer.count)
+            }
+        }
+        if resolved == 0 {
+            storage.deallocate()
+            throw LoadError.directory
+        }
+        directory = resolved == 1 ? String(cString: result) : nil
+        backing = storage
         memory = mapped
         plan = layout
     }
@@ -50,14 +63,15 @@ private final class OwnedImage {
             }
             data.append(block)
         }
-        return try OwnedImage(data: data)
+        return try OwnedImage(data: data, filename: url.lastPathComponent)
     }
 
     enum LoadError: LocalizedError {
-        case wrongBuild, mapping
+        case wrongBuild, mapping, directory
         var errorDescription: String? {
             switch self {
             case .wrongBuild: return "This file differs from the MX Bikes build verified by the port."
+            case .directory: return "The original directory routine stopped before returning."
             case .mapping: return "The native loader could not map this executable."
             }
         }
@@ -77,6 +91,7 @@ struct OwnedImageView: View {
                 .disabled(loading)
             if let image = loaded {
                 Text("Mapped \(image.plan.section_count) sections · \(image.plan.image_size) bytes")
+                if let directory = image.directory { Text("Game directory " + directory) }
                 Text("Game entry " + String(format: "0x%llX", image.plan.image_base + UInt64(image.plan.entry_rva)))
             }
             if let failure { Text(failure) }
