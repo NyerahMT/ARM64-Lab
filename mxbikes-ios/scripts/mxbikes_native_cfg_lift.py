@@ -71,8 +71,8 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None):
-    imports=imports or {}; import_returns={a:set() for a in imports}
+def decode_cfg(windows,entry,stop,imports=None,iat=None):
+    imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
     nodes={}; pages=set(); pending=[entry]; ranges=[(a,a+len(b)) for a,b in windows]
     def in_code(pc):return any(a<=pc<b for a,b in ranges)
@@ -118,7 +118,7 @@ def decode_cfg(windows,entry,stop,imports=None):
             raise ValueError("Overlapping instruction boundaries")
         op=ins.operands;mn=ins.mnemonic;nxt=pc+ins.size
         edges=[nxt];next_pc=u(nxt);stmt=""
-        if mn=="mov" and len(op)==2:
+        if mn in ("mov","movabs") and len(op)==2:
             stmt=write(ins,op[0],read(ins,op[1]))
         elif mn=="lea" and len(op)==2 and op[0].type==CS_OP_REG and op[1].type==CS_OP_MEM:
             stmt=write(ins,op[0],addr(ins,op[1]))
@@ -146,6 +146,17 @@ def decode_cfg(windows,entry,stop,imports=None):
             next_pc="next";edges=[]
         elif mn=="jmp" and len(op)==1 and op[0].type==CS_OP_IMM:
             edges=[op[0].imm];next_pc=u(op[0].imm)
+        elif mn=="jmp" and len(op)==1 and op[0].type==CS_OP_MEM:
+            mem=op[0].mem
+            if ins.reg_name(mem.base)!="rip" or mem.index or mem.segment or op[0].size!=8:
+                raise ValueError("Unsupported indirect jump")
+            slot=pc+ins.size+mem.disp
+            if slot not in iat or iat[slot][0] not in imports:
+                raise ValueError("Unapproved IAT slot")
+            target,continuation=iat[slot]
+            pages.add(slot&~(PAGE-1));import_returns[target].add(continuation)
+            stmt="next=load(s,%s,8u);if(s->fault||next!=%s)return 97;"%(u(slot),u(target))
+            edges=[target];next_pc="next"
         elif mn in CONDS and len(op)==1 and op[0].type==CS_OP_IMM:
             edges=[nxt,op[0].imm]
             stmt="{unsigned c=(s->flags&1)!=0,p=(s->flags&4)!=0,z=(s->flags&0x40)!=0,sign=(s->flags&0x80)!=0,o=(s->flags&0x800)!=0;(void)c;(void)p;(void)z;(void)sign;(void)o;next=(%s)?%s:%s;}"%(CONDS[mn],u(op[0].imm),u(nxt))
@@ -197,10 +208,18 @@ def synthetic_input():
     b=bytes.fromhex("53 89cb 01d8 83eb01 75f9 5b c3")
     return [(base,a),(base+0x100,b)],base,base+len(a)
 
-def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None):
-    imports=imports or {}
+def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None,iat=None,crt_case=None):
+    imports=imports or {};iat=iat or {}
     regs,flags,data=initial(seed,pages)
     if synthetic:regs[1]=[0,1,2,3,5,8,0xffffffff,0x80000000][seed-1]
+    if crt_case:
+        name,n=crt_case;heap=0x730000000
+        regs[1]=heap+4094 if name=='memcpy' else heap+128
+        regs[2]=heap+32 if name=='memcpy' else seed*19
+        regs[8]=n
+    for slot,(target,_) in iat.items():
+        page=slot&~(PAGE-1);off=slot-page
+        buf=bytearray(data[page]);buf[off:off+8]=struct.pack('<Q',target);data[page]=bytes(buf)
     cpu=Uc(UC_ARCH_X86,UC_MODE_64);mapped=set()
     for a,blob in windows:
         for p in range(a&~(PAGE-1),(a+len(blob)+PAGE-1)&~(PAGE-1),PAGE):
@@ -221,7 +240,7 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None):
             if sp%16!=8:raise ValueError("Reference Win64 ABI alignment")
             dst=uc.reg_read(x.UC_X86_REG_RCX);src=uc.reg_read(x.UC_X86_REG_RDX)
             n=uc.reg_read(x.UC_X86_REG_R8)
-            if n>4096:raise ValueError("Reference CRT fixture size")
+            if n>16384:raise ValueError("Reference CRT fixture size")
             name=imports[pc]
             if name=="memcpy" and n and abs(dst-src)<n:raise ValueError("Reference overlapping memcpy")
             data=bytes([src&255])*n if name=="memset" else bytes(uc.mem_read(src,n))
@@ -230,7 +249,7 @@ def reference(windows,entry,stop,pages,nodes,seed,synthetic,imports=None):
     cpu.hook_add(UC_HOOK_CODE,hook)
     cpu.emu_start(entry,stop,count=MAX_DYNAMIC,timeout=2_000_000)
     if invalid or cpu.reg_read(x.UC_X86_REG_RIP)!=stop:raise ValueError("Reference did not reach frontier")
-    if imports and import_events!=["memcpy","memset","memmove"]:raise ValueError("Reference import sequence")
+    if imports and import_events!=([crt_case[0]] if crt_case else ["memcpy","memset","memmove"]):raise ValueError("Reference import sequence")
     th=TRACE_INIT
     for pc in trace:th=((th^pc)*TRACE_PRIME)&MASK
     return regs,flags,[cpu.reg_read(r) for r in UC_REG],cpu.reg_read(x.UC_X86_REG_EFLAGS),[hash_page(cpu.mem_read(p,PAGE)) for p in pages],th,trace
@@ -279,9 +298,33 @@ def owned_return_input(path):
     spans=((0x28394a,0x283951),(0x2838e0,0x2838e7))
     return [(base+a,pe.read_rva(a,b-a)) for a,b in spans],base+0x28394a,base+0x283951
 
-def run(path=None,original_loop=False,imports_fixture=False,original_return=False):
-    imports={}
-    if imports_fixture:
+def owned_crt_input(path,kind):
+    from tools.pe_probe import PE
+    from mxbikes_first_callee_emu import import_slots
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=SHA:raise ValueError("Wrong owned executable")
+    pe=PE(path);base=pe.u64(pe.opt+24)
+    if base!=0x140000000:raise ValueError("Unexpected image base")
+    call_rva,n={"memcpy":(0x1599df,4),"memset":(0x15c1f2,296)}[kind]
+    original_call=pe.read_rva(call_rva,5)
+    if original_call[0]!=0xe8:raise ValueError("Expected original E8 CALL")
+    ret=base+call_rva+5
+    thunk=ret+struct.unpack_from("<i",original_call,1)[0]
+    jump=pe.read_rva(thunk-base,6)
+    if jump[:2]!=b"\xff\x25":raise ValueError("Expected original FF25 import thunk")
+    slot=thunk+6+struct.unpack_from("<i",jump,2)[0]
+    slots={base+r:(lib.lower(),symbol) for r,lib,symbol in import_slots(pe)}
+    if slots.get(slot)!=("msvcr90.dll",kind):raise ValueError("Original import provenance mismatch")
+    if slot%PAGE>PAGE-8:raise ValueError("Cross-page IAT slot")
+    target=0x740000000
+    windows=[(base+call_rva,original_call),(thunk,jump),(target,b"\xc3")]
+    return windows,base+call_rva,ret,[0x730000000,0x730001000],{target:kind},{slot:(target,ret)},(kind,n)
+
+def run(path=None,original_loop=False,imports_fixture=False,original_return=False,original_crt=None):
+    imports={};iat={};crt_case=None
+    if original_crt:
+        if not path or original_loop or original_return or imports_fixture:raise ValueError("Owned CRT fixture requires owned executable")
+        windows,entry,stop,extra,imports,iat,crt_case=owned_crt_input(path,original_crt)
+    elif imports_fixture:
         if path or original_loop or original_return:raise ValueError("Synthetic imports only")
         windows,entry,stop,extra,imports=imports_input()
     elif original_return:
@@ -293,20 +336,26 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
     else:
         windows,entry,stop=owned_input(path) if path else synthetic_input()
         extra=[]
-    code,static_pages,nodes=decode_cfg(windows,entry,stop,imports)
+    code,static_pages,nodes=decode_cfg(windows,entry,stop,imports,iat)
     pages=sorted(set(static_pages+[STACK]+extra))
     if len(pages)>16:raise ValueError("Data page budget")
     parts=[MEMORY_RUNTIME,EXTRA,code,"int smoke(void){","if(!mxb_guest_memory_smoke()||!mxb_guest_crt_smoke())return 95;"]
     lengths=[];covered=set()
     for seed in range(1,9):
-        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports)
+        regs,flags,out,of,hashes,th,trace=reference(windows,entry,stop,pages,nodes,seed,not path and not imports_fixture,imports,iat,crt_case)
         lengths.append(len(trace));covered.update(trace)
         parts.append("{State s={0};uint8_t backing[%du][4096];Cursor cursor=lifted_begin();unsigned slices=0;"%len(pages))
         for i,v in enumerate(regs):parts.append("s.r[%d]=%s;"%(i,u(v)))
         parts.append("s.flags=%s;"%u(flags))
         for i,p in enumerate(pages):
             parts.append("for(unsigned j=0;j<4096u;j++)backing[%d][j]=(uint8_t)(j*17u+%du+%s);"%(i,seed*31,u(p>>12)))
-            parts.append("if(!mxb_guest_map(&s.memory,%s,backing[%d],4096u,3u))return 96;"%(u(p),i))
+            for slot,(target,_) in iat.items():
+                if slot&~(PAGE-1)==p:
+                    off=slot-p
+                    for k,b in enumerate(struct.pack("<Q",target)):
+                        parts.append("backing[%d][%d]=%du;"%(i,off+k,b))
+            perm=1 if any(slot&~(PAGE-1)==p for slot in iat) else 3
+            parts.append("if(!mxb_guest_map(&s.memory,%s,backing[%d],4096u,%du))return 96;"%(u(p),i,perm))
         # Vary the pause interval, including very short boundaries inside calls.
         quota=1+seed*19
         parts.append("int rc;do{rc=lifted_resume(&s,&cursor,%du);slices++;if(slices>8193u)return 94;}while(rc==93);if(rc)return rc;"%quota)
@@ -342,8 +391,8 @@ def run(path=None,original_loop=False,imports_fixture=False,original_return=Fals
     if original_loop and (min(lengths)<4000 or len(covered)!=len(nodes)):
         raise ValueError("Original loop coverage incomplete")
     compile_native("\n".join(parts),RUNTIME_SOURCES)
-    print(json.dumps({"mode":"public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
-        "static_instructions":len(nodes)-len(imports),"synthetic_import_nodes":len(imports),"covered_unique":len(covered),
+    print(json.dumps({"mode":"private_owned_original_crt_"+original_crt if original_crt else "public_synthetic_crt_calls" if imports_fixture else "private_owned_original_return" if original_return else "private_owned_original_loop" if original_loop else "private_owned_original_cfg" if path else "public_synthetic_cfg",
+        "static_instructions":len(nodes)-len(imports),"modeled_import_nodes":len(imports),"original_iat_provenance":bool(iat),"covered_unique":len(covered),
         "dynamic_instructions_per_case":lengths,"cases":8,
         "pc_trace_hash_and_length_matched":True,"resumable_instruction_batches":True,"persistent_guest_memory":True,"registers":16,
         "bytes_hashed_per_case":len(pages)*PAGE,"host":"pass","arm64":"pass","ios_object":"pass",
@@ -355,4 +404,5 @@ if __name__=="__main__":
     p.add_argument('--original-loop',action='store_true')
     p.add_argument('--imports-fixture',action='store_true')
     p.add_argument('--original-return',action='store_true')
-    args=p.parse_args();run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return)
+    p.add_argument('--original-crt',choices=['memcpy','memset'])
+    args=p.parse_args();run(args.owned_exe,args.original_loop,args.imports_fixture,args.original_return,args.original_crt)
