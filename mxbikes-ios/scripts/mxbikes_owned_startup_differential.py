@@ -57,7 +57,10 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
     for(unsigned i=0;i<16;i++){p.cpu.xmm[i][0]=regs[192+2*i];p.cpu.xmm[i][1]=regs[193+2*i];}
     const mx_clock_source clock={vals,mono,wall,NULL};
     const mx_import_runtime runtime={&clock,write_bytes,&p.cpu.memory,vals,pid,tid};
-    if(!mxb_private_startup(&p,&runtime))goto done;
+    if(!mxb_private_startup(&p,&runtime)){
+        regs[17]=p.pc;regs[18]=p.instructions;regs[19]=p.services;
+        regs[16]=p.cpu.fault;regs[4]=p.cpu.r[MXB_RSP];goto done;
+    }
     for(unsigned i=0;i<16;i++)regs[i]=p.cpu.r[i];
     regs[16]=p.cpu.flags;regs[17]=p.pc;regs[18]=p.instructions;regs[19]=p.services;
     if(!mxb_guest_read(&p.cpu.memory,0x1403928a0ULL,regs+20,16))goto done;
@@ -122,7 +125,7 @@ def run(path):
             for i,value in enumerate(vectors):state[192+i]=value
             vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
             stack=(C.c_uint8*4096)()
-            if not replay(raw,len(raw),vals,state,stack):raise ValueError("Native entry failed")
+            if not replay(raw,len(raw),vals,state,stack):raise ValueError(f"Native entry failed at {hex(state[17])}; steps={state[18]}, services={state[19]}, fault={state[16]}, guest rsp={hex(state[4])}")
             cpu=Uc(UC_ARCH_X86,UC_MODE_64)
             cpu.mem_map(BASE,pe.OPTIONAL_HEADER.SizeOfImage)
             cpu.mem_write(BASE,mapped)
