@@ -167,6 +167,7 @@ def prepare_startup(executable: Path, destination: Path):
     next_windows=discover_pe(pe,base,base+0x2d2b6a,base+0x2bbd90,max_nodes=256)
     next_code,_,_=decode_cfg(next_windows,base+0x2d2b6a,base+0x2bbd90)
     next_constructor=next_code.replace("lifted_begin","next_constructor_begin").replace("lifted_resume","next_constructor_resume")
+    final_prefix=region("final_prefix",((0x2bbd90,0x2bbdcc),),0x2bbd90,base+0x2bbdcc)
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -363,6 +364,9 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=next_constructor_begin();
     if(next_constructor_resume(&p->cpu,&c,512)!=0 || c.pc!=NEXT_CONSTRUCTOR_END || p->cpu.fault)return 0;
     p->pc=c.pc;p->instructions+=c.steps;
+    c=final_prefix_begin();
+    if(final_prefix_resume(&p->cpu,&c,32)!=0 || c.pc!=FINAL_PREFIX_END || p->cpu.fault)return 0;
+    p->pc=c.pc;p->instructions+=c.steps;
     return 1;
 }
 """
@@ -380,10 +384,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90)
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc)
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
