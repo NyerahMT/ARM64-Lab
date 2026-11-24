@@ -12,7 +12,7 @@ typedef struct {
     uint64_t exit_bounds[2], exception_filter, first_exit_handler, other_exit_handlers[2];
     uint32_t argument_count;
     uint8_t argument_block[40], argument_globals[24], object_header[24], subobjects[0x4a0];
-    uint64_t crt_lock;
+    uint64_t crt_lock, tls_callback, command_line_ptr;
     uint32_t crt_phase;
     uint64_t thread_environment[8];
     uint64_t pc;

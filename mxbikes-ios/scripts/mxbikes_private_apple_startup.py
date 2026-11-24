@@ -92,6 +92,7 @@ def prepare_startup(executable: Path, destination: Path):
     data_maps=[]
     def map_value(rva,data):
         index=len(data_maps)
+        if index>=32 or not 1<=len(data)<=8:raise ValueError('Startup metadata capacity')
         value=int.from_bytes(data,"little")
         data_maps.append(f"p->callback_metadata[{index}]={u(value)}; "
                          f"if(!mxb_guest_map(&memory,{u(base+rva)},(uint8_t *)&p->callback_metadata[{index}],{len(data)},1))return 0;")
@@ -203,6 +204,29 @@ def prepare_startup(executable: Path, destination: Path):
                       0x320790,base+0x2ab744)
     second_exit_return=region("second_exit_return",((0x2ab7ed,0x2ab7fb),),0x2ab7ed,0x75000110e)
     third_exit_return=region("third_exit_return",((0x2ab7ed,0x2ab7fb),),0x2ab7ed,0x750001114)
+    # Finish the genuine CRT startup lock/state transition. A non-null TLS
+    # callback requires an adapter and stops at its original branch.
+    tls_addr=base+0xe4adc8
+    if not zero_fill(tls_addr,8):raise ValueError("Unexpected TLS initializer pointer")
+    release=region("release",((0x2ab0f1,0x2ab112),),0x2ab0f1,base+0x2ab131,(0x2ab112,))
+    acmd=next(decoder.disasm(pe.read_rva(0x2ab131,7),0x2ab131))
+    cmd_slot=acmd.address+acmd.size+acmd.operands[1].mem.disp
+    if (acmd.mnemonic!="mov" or acmd.size!=7 or acmd.reg_name(acmd.operands[1].mem.base)!="rip"
+            or cmd_slot!=0x3214d0 or slots[cmd_slot][0].lower()!="msvcr90.dll"
+            or slots[cmd_slot][1]!="_acmdln"):
+        raise ValueError("Unexpected original command-line data import")
+    ascii_slot=check_import(0x2ab1ce,"call","_ismbblead")
+    cmd_ptr=0x760003000
+    map_value(cmd_slot,struct.pack("<Q",cmd_ptr))
+    map_value(ascii_slot,pe.read_rva(ascii_slot,8))
+    # Compile every local parser branch. Pause at the original CRT call and
+    # resume at its actual return PC using the same persistent cursor.
+    scan_windows=[(base+a,pe.read_rva(a,b-a)) for a,b in
+                  ((0x2ab131,0x2ab18b),(0x2ab1b9,0x2ab1ce),(0x2ab1d4,0x2ab1ea))]
+    scan_code,_,_=decode_cfg(scan_windows,base+0x2ab131,base+0x136710,
+                            alternate_stops=(base+0x2ab1ce,),
+                            additional_entries=(base+0x2ab1d4,))
+    scan=scan_code.replace("lifted_begin","scan_begin").replace("lifted_resume","scan_resume")
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -452,7 +476,36 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     if(load(&p->cpu,sp,8)!=PLAIN_TABLE_PC+5||p->cpu.fault)return 0;
     p->cpu.r[MXB_RSP]=sp+8;
     p->pc=PLAIN_TABLE_PC+5;p->services++;
-    return 1;
+    c=release_begin();
+    continuation_status=release_resume(&p->cpu,&c,32);p->pc=c.pc;
+    if(continuation_status||c.pc!=CMDLINE_PC||p->cpu.fault)return 0;
+    p->instructions+=c.steps;
+    p->command_line_ptr=ARGS_VA+24;
+    if(!mxb_guest_map(&p->cpu.memory,CMD_PTR_VA,(uint8_t *)&p->command_line_ptr,8,1))return 0;
+    c=scan_begin();
+    for(unsigned calls=0;calls<128;calls++){
+        int rc=scan_resume(&p->cpu,&c,1024);p->pc=c.pc;
+        if(rc||p->cpu.fault)return 0;
+        if(c.pc==WINMAIN_PC){
+            p->instructions+=c.steps;
+            return p->cpu.r[MXB_RCX]==IMAGE_BASE &&
+                   p->cpu.r[MXB_RDX]==0 && p->cpu.r[MXB_R8]==ARGS_VA+35 &&
+                   p->cpu.r[MXB_R9]==10;
+        }
+        if(c.pc!=ASCII_CALL||load(&p->cpu,ASCII_SLOT,8)!=ASCII_VALUE||
+           p->cpu.fault||p->cpu.r[MXB_RCX]>127)return 0;
+        /* C-locale ASCII characters are not multibyte lead bytes. No unknown
+         * non-ASCII code page is silently accepted. The original CALL/RET
+         * return slot is retained in guest stack memory. */
+        sp=p->cpu.r[MXB_RSP];
+        if((sp&15u)||sp<8||!mxb_guest_check(&p->cpu.memory,sp-8,40,MXB_MEM_WRITE))return 0;
+        store(&p->cpu,sp-8,ASCII_RETURN,8);
+        if(p->cpu.fault)return 0;
+        p->cpu.r[MXB_RAX]=0;
+        p->instructions++;p->services++;
+        c.pc=ASCII_RETURN;
+    }
+    return 0;
 }
 """
     fields={"STARTUP_INFO_PC":base+startup_info_site,"STARTUP_RESUME":base+resume,"CRT_LOCK_VA":lock,"INIT_TABLE_PC":base+0x2ab0b6,"TEB_VA":teb,"LOCK_PC":base+0x2ab05b,"ENTRY_PC":base+entry,"CHILD_PC":base+callee,"RETURN_PC":base+entry+9,
@@ -469,10 +522,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780)
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780,CMDLINE_PC=base+0x2ab131,CMD_PTR_VA=cmd_ptr,WINMAIN_PC=base+0x136710,IMAGE_BASE=base,ASCII_CALL=base+0x2ab1ce,ASCII_RETURN=base+0x2ab1d4,ASCII_SLOT=base+ascii_slot,ASCII_VALUE=int.from_bytes(pe.read_rva(ascii_slot,8),'little'))
     runner=re.sub(r'\b(?:'+ '|'.join(map(re.escape,fields)) + r')\b',lambda m:u(fields[m[0]]),runner)
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+release+scan+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
@@ -484,6 +537,7 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
         f"if(!mxb_guest_map(&memory,{u(base+0x3928a0)},p->initial_globals,16,MXB_MEM_READ|MXB_MEM_WRITE))return 0;",
         f"if(!mxb_guest_map(&memory,{u(lock)},(uint8_t *)&p->crt_lock,8,3))return 0;",
         f"if(!mxb_guest_map(&memory,{u(state_addr)},(uint8_t *)&p->crt_phase,4,3))return 0;",
+        f"if(!mxb_guest_map(&memory,{u(tls_addr)},(uint8_t *)&p->tls_callback,8,3))return 0;",
         *mappings,*data_maps,
         *[f"if(!mxb_guest_map(&memory,{u(base+addr)},(uint8_t *){ptr},{size},3))return 0;"
           for addr,ptr,size in ((0x3d8018,"&p->argument_count",4),(0x3d8020,"p->argument_globals",24),

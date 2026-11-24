@@ -17,7 +17,7 @@ BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x2ab0f1
+FRONTIER=BASE+0x136710
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -44,6 +44,7 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
     uint64_t *fmode=(uint64_t *)((uint8_t *)backing+0x321500);
     uint64_t *commode=(uint64_t *)((uint8_t *)backing+0x3214f8);
     *fmode=0x760001000ULL;*commode=*fmode+4;
+    *(uint64_t *)((uint8_t *)backing+0x3214d0)=0x760003000ULL;
     uint32_t inputs[2]={(uint32_t)vals[5],(uint32_t)vals[6]};
     if(!mxb_guest_write(&p.cpu.memory,0x1403d85bcULL,inputs,4) ||
        !mxb_guest_write(&p.cpu.memory,0x1403d85b8ULL,inputs+1,4))goto done;
@@ -164,6 +165,8 @@ def run(path):
             cpu.mem_write(iterator+8,bytes.fromhex("ff15 72000000 488d642428 c3"))
             cpu.mem_map(0x760001000,4096)
             cpu.mem_write(0x760001000,struct.pack("<II",0x11223344,0x55667788))
+            cpu.mem_map(0x760003000,4096)
+            cpu.mem_write(0x760003000,struct.pack("<Q",0x760002018))
             plain_iterator=iterator+0x100
             cpu.mem_write(plain_iterator,bytes.fromhex("488d6424d8 ff5108"))
             cpu.mem_write(plain_iterator+8,bytes.fromhex("ff15 72000000 ff15 74000000 488d642428 c3"))
@@ -173,12 +176,13 @@ def run(path):
                 for symbol in dll.imports:
                     name=(symbol.name or b"").decode("ascii")
                     if dll.dll.lower()==b"msvcr90.dll":
+                        if name=="_acmdln":cpu.mem_write(symbol.address,struct.pack("<Q",0x760003000))
                         if name=="_initterm":cpu.mem_write(symbol.address,struct.pack("<Q",plain_iterator))
                         if name=="_initterm_e":
                             cpu.mem_write(symbol.address,struct.pack("<Q",iterator))
                         if name in ("_fmode","_commode"):
                             cpu.mem_write(symbol.address,struct.pack("<Q",0x760001000+(4 if name=="_commode" else 0)))
-                    if (dll.dll.lower(),name) in ((b"msvcr90.dll","__getmainargs"),(b"msvcr90.dll","_decode_pointer"),(b"msvcr90.dll","_onexit"),(b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
+                    if (dll.dll.lower(),name) in ((b"msvcr90.dll","_ismbblead"),(b"msvcr90.dll","__getmainargs"),(b"msvcr90.dll","_decode_pointer"),(b"msvcr90.dll","_onexit"),(b"msvcr90.dll","__set_app_type"),(b"msvcr90.dll","_encode_pointer"),(b"kernel32.dll","SetUnhandledExceptionFilter")):
                         pc=service_page+16*len(services)
                         services[pc]=name;cpu.mem_write(pc,b"\xc3")
                         cpu.mem_write(symbol.address,struct.pack("<Q",pc))
@@ -220,6 +224,9 @@ def run(path):
                     uc.mem_write(uc.reg_read(x.UC_X86_REG_RDX),struct.pack("<Q",block))
                     uc.mem_write(uc.reg_read(x.UC_X86_REG_R8),struct.pack("<Q",block+16))
                     uc.reg_write(x.UC_X86_REG_RAX,0)
+                elif name=="_ismbblead":
+                    if dest>127:raise ValueError("Non-ASCII command line outside modeled C locale")
+                    uc.reg_write(x.UC_X86_REG_RAX,0)
                 elif name=="_decode_pointer":
                     key=struct.unpack("<Q",uc.mem_read(COOKIE,8))[0]
                     uc.reg_write(x.UC_X86_REG_RAX,(((dest>>17)|(dest<<47))&MASK)^key)
@@ -247,6 +254,8 @@ def run(path):
             for i in range(16):
                 vector=cpu.reg_read(getattr(x,f"UC_X86_REG_XMM{i}"));expected.extend((vector&MASK,vector>>64))
             if len(handlers)!=3:raise ValueError('Incomplete original exit-handler registration')
+            if expected[1]!=BASE or expected[2]!=0 or expected[8]!=0x760002023 or expected[9]!=10 or expected[17]!=FRONTIER:
+                raise ValueError('Original WinMain argument contract changed')
             expected.extend(handlers[1:])
             if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,4096)):
                 differing=[i for i,(actual,wanted) in enumerate(zip(state,expected)) if actual!=wanted]

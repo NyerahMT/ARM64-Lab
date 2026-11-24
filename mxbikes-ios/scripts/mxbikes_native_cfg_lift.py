@@ -74,11 +74,11 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None,register_calls=None):
+def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None,register_calls=None,additional_entries=()):
     imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
     frontiers={stop,*alternate_stops}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
-    nodes={}; pages=set(); pending=[entry]; ranges=[(a,a+len(b)) for a,b in windows]
+    nodes={}; pages=set(); pending=[entry,*additional_entries]; ranges=[(a,a+len(b)) for a,b in windows]
     def in_code(pc):return any(a<=pc<b for a,b in ranges)
     def reg(ins,op):
         name=ins.reg_name(op.reg)
@@ -215,6 +215,26 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt="(void)sub_flags(s,%s,s->r[0],16u);"%read(ins,op[0])
         elif mn=="setne" and len(op)==1 and op[0].type==CS_OP_REG and ins.reg_name(op[0].reg)=="al":
             stmt="s->r[0]=(s->r[0]&~UINT64_C(255))|((s->flags&0x40u)==0);"
+        elif mn.startswith("set") and "j"+mn[3:] in CONDS and len(op)==1 and op[0].size==1:
+            cond=CONDS["j"+mn[3:]]
+            stmt=("{unsigned c=(s->flags&1)!=0,p=(s->flags&4)!=0,z=(s->flags&0x40)!=0,sign=(s->flags&0x80)!=0,o=(s->flags&0x800)!=0;"
+                  "(void)c;(void)p;(void)z;(void)sign;(void)o;"+write(ins,op[0],f"({cond})?1u:0u")+"}")
+        elif mn.startswith("cmov") and "j"+mn[4:] in CONDS and len(op)==2 and op[0].type==CS_OP_REG and op[0].size in (4,8):
+            cond=CONDS["j"+mn[4:]];width=op[0].size*8
+            stmt=("{unsigned c=(s->flags&1)!=0,p=(s->flags&4)!=0,z=(s->flags&0x40)!=0,sign=(s->flags&0x80)!=0,o=(s->flags&0x800)!=0;"
+                  "(void)c;(void)p;(void)z;(void)sign;(void)o;"
+                  f"uint64_t v={read(ins,op[1])};if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
+                  +write(ins,op[0],f"({cond})?v:{read(ins,op[0])}")+"}")
+        elif mn=="xchg" and len(op)==2 and op[0].type==CS_OP_MEM and op[1].type==CS_OP_REG and op[0].size==op[1].size and op[0].size in (4,8):
+            n=op[0].size;address=addr(ins,op[0])
+            # Guest runtime is single-threaded; the implicit locked operation
+            # checks the complete writable span before changing either operand.
+            stmt=(f"{{uint64_t ea={address};"
+                  f"if(!mxb_guest_check(&s->memory,ea,{n},MXB_MEM_READ|MXB_MEM_WRITE))"
+                  "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
+                  f"uint64_t old=load(s,ea,{n}),value={read(ins,op[1])};"
+                  f"store(s,ea,value,{n});if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
+                  +write(ins,op[1],"old")+"}")
         elif mn in ("cmp","test") and len(op)==2 and op[0].size in (1,2,4,8):
             width=op[0].size*8;a=read(ins,op[0]);b=read(ins,op[1])
             if mn=="cmp":stmt="(void)sub_flags(s,%s,%s,%du);"%(a,b,width)
