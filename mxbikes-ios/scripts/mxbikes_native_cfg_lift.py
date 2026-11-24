@@ -74,7 +74,7 @@ static uint64_t logic_flags(State*s,uint64_t v,unsigned width){
  s->flags=(s->flags&~UINT64_C(0x8c5))|common_flags(v,width);return v;
 }
 """
-def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None):
+def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_imports=None,gs_base=None,register_calls=None):
     imports=imports or {};iat=iat or {};import_returns={a:set() for a in imports}
     frontiers={stop,*alternate_stops}
     decoder=Cs(CS_ARCH_X86,CS_MODE_64);decoder.detail=True
@@ -102,6 +102,7 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
         if base not in REGS:raise ValueError("Invalid base register")
         return "(s->r[%d]+%s)"%(REGS.index(base),u(m.disp))
     def read(ins,op):
+        if op.type==CS_OP_REG and ins.reg_name(op.reg)=="al":return "(s->r[0]&255u)"
         if op.type==CS_OP_REG:
             i,w=reg(ins,op);return "(s->r[%d]&%s)"%(i,u((1<<w)-1))
         if op.type==CS_OP_IMM:return u(op.imm)
@@ -147,12 +148,13 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             v=("%s_flags(s,%s,%s,%du)"%(mn,a,b,width) if mn in ("xor","sub","add")
                else "logic_flags(s,%s%s%s,%du)"%(a,"&" if mn=="and" else "|",b,width))
             stmt=write(ins,op[0],v)
-        elif mn in ("neg","dec") and len(op)==1 and op[0].type==CS_OP_REG and op[0].size in (4,8):
+        elif mn in ("neg","dec","inc") and len(op)==1 and op[0].type==CS_OP_REG and op[0].size in (4,8):
             width=op[0].size*8
             source=read(ins,op[0])
             if mn=="neg":stmt=write(ins,op[0],f"sub_flags(s,0,{source},{width}u)")
             else:
-                stmt="{uint64_t carry=s->flags&1u;"+write(ins,op[0],f"sub_flags(s,{source},1,{width}u)")+"s->flags=(s->flags&~UINT64_C(1))|carry;}"
+                operation="add" if mn=="inc" else "sub"
+                stmt="{uint64_t carry=s->flags&1u;"+write(ins,op[0],f"{operation}_flags(s,{source},1,{width}u)")+"s->flags=(s->flags&~UINT64_C(1))|carry;}"
         elif mn=="sbb" and len(op)==2 and op[0].type==op[1].type==CS_OP_REG and op[0].reg==op[1].reg and op[0].size in (4,8):
             # x - x - CF has the same result and arithmetic flags as 0 - CF.
             stmt=write(ins,op[0],f"sub_flags(s,0,s->flags&1u,{op[0].size*8}u)")
@@ -168,6 +170,11 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt="{uint64_t value=%s;s->r[4]-=8u;store(s,s->r[4],value,8u);}"%read(ins,op[0])
         elif mn=="pop" and len(op)==1 and op[0].type==CS_OP_REG and op[0].size==8 and reg(ins,op[0])[0]!=4:
             stmt=write(ins,op[0],"load(s,s->r[4],8u)")+"s->r[4]+=8u;"
+        elif mn=="call" and len(op)==1 and op[0].type==CS_OP_REG and pc in (register_calls or {}):
+            target=register_calls[pc]
+            stmt=(f"if({read(ins,op[0])}!={u(target)})return MXB_NATIVE_UNKNOWN_PC;"
+                  f"s->r[4]-=8u;store(s,s->r[4],{u(nxt)},8u);")
+            next_pc=u(target);edges=[target,nxt]
         elif mn=="call" and len(op)==1 and op[0].type==CS_OP_IMM:
             target=op[0].imm
             stmt="s->r[4]-=8u;store(s,s->r[4],%s,8u);"%u(nxt)

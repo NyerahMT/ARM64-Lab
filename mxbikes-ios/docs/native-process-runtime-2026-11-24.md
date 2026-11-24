@@ -122,10 +122,12 @@ the compiled original startup code automatically.
    registers its exit handler, and supplies one virtual process argument and
    an empty environment using the process CRT adapter. The second callback
    enters the original constructor and writes its initial 24-byte object header.
-   The current stop is its first subobject constructor, RVA `0x3042B0`.
-   The default path takes 191 original instructions and 13 completed services.
+   Three subobject constructors now return, including a three-element array
+   with a checked indirect constructor call. The next constructor starts at RVA `0x2E84C0`.
+   The default path takes 365 original instructions and 13 completed services.
    Eight original x64 comparisons cover the complete stack, argument vectors,
-   registered handler, and object header at that boundary.
+   registered handler, object header, and 584 bytes of subobject storage seeded
+   with distinct patterns across cases at that boundary.
 2. Connect native units from more original control-flow regions to a common
    image-backed process state and route actual original imports to verified
    native adapters; don't silently treat unresolved imports as success.
