@@ -2,6 +2,7 @@
 #define MXB_VIEWPORT_BRIDGE_H
 #include "../../runtime/mxb_guest_memory.h"
 #include "../../runtime/mxb_guest_crt.h"
+#include "../../runtime/mxb_pe_guest_image.h"
 #include "../../runtime/mxb_gl_surface.h"
 #include "../../runtime/mxb_poststeam_timer_native.h"
 #include "../../runtime/mxb_poststeam_helper_entry_native.h"
