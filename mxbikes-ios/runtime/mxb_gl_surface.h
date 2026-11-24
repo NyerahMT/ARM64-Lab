@@ -32,6 +32,8 @@ void mxb_gl_reset(MXBGLSurface *s);
 void mxb_gl_clear_frame(MXBGLSurface *s);
 int mxb_gl_matrix_mode(MXBGLSurface *s,unsigned mode);
 int mxb_gl_load_identity(MXBGLSurface *s);
+int mxb_gl_push_matrix(MXBGLSurface *s);
+int mxb_gl_pop_matrix(MXBGLSurface *s);
 int mxb_gl_translatef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_scalef(MXBGLSurface *s,float x,float y,float z);
 int mxb_gl_ortho(MXBGLSurface *s,float l,float r,float b,float t,float n,float f);
