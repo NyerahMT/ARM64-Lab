@@ -242,6 +242,16 @@ def generated_native_test(expected):
       index," &&\n            ".join(expected_checks),index+10))
     return """#include <stdint.h>
 #include "mxb_poststeam_helper_entry_native.h"
+/* Test-only freestanding runtime: Clang emits a memset libcall for the
+ * deliberately large synthetic 1024-byte guest-state stack. Production
+ * iOS links against its normal C runtime; the shim is NOT in the app. */
+#ifndef HOST
+void *memset(void *target, int byte, unsigned long count) {
+    volatile unsigned char *p=(volatile unsigned char *)target;
+    for (unsigned long i=0;i<count;++i)p[i]=(unsigned char)byte;
+    return target;
+}
+#endif
 static uint64_t guest_u64(const mxb_poststeam_joined_guest *s,uint64_t addr) {
     uint64_t out=0;
     uint64_t off=addr-s->stack_base;
