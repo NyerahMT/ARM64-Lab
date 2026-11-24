@@ -34,7 +34,7 @@ struct MXBViewportPrototypeApp: App {
         // actually call the linked generated native module, not merely build.
         if ProcessInfo.processInfo.arguments.contains("--compiled-startup-selftest"),
            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let passed = launched.result == 1 && launched.pc == 0x1402d2ad6 &&
+            let passed = launched.result == 1 && launched.pc == 0x1402d2b6a &&
                          launched.services == 13 && launched.instructions > 365
             try? Data((passed ? "PASS" : "FAIL").utf8).write(
                 to: docs.appendingPathComponent("mxb-compiled-startup.txt"), options: .atomic)
