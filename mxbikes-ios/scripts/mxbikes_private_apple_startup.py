@@ -188,6 +188,11 @@ def prepare_startup(executable: Path, destination: Path):
     virtual_code,_,_=decode_cfg(virtual_windows,base+0x2bbdcc,base+0x2bbdcf,
                                register_calls={base+0x2bbdcc:target})
     virtual_body=virtual_code.replace("lifted_begin","virtual_body_begin").replace("lifted_resume","virtual_body_resume")
+    # Complete both authentic returns, including the initializer wrapper.
+    # The nonzero validation message path is an unresolved dependency, not
+    # forced to succeed; only the original zero result continues.
+    complete_second=region("complete_second",((0x2bbdcf,0x2bbdfc),(0x2d2bb9,0x2d2bcd),
+                            (0x320770,0x320780)),0x2bbdcf,0x75000110e,(0x2bf540,))
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -390,7 +395,15 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=virtual_body_begin();
     if(virtual_body_resume(&p->cpu,&c,512)!=0 || c.pc!=VIRTUAL_RETURN || p->cpu.fault)return 0;
     p->pc=c.pc;p->instructions+=c.steps;
-    return 1;
+    c=complete_second_begin();
+    if(complete_second_resume(&p->cpu,&c,128)!=0 || c.pc!=VOID_CONT+6 || p->cpu.fault)return 0;
+    p->instructions+=c.steps;p->pc=c.pc;
+    if(load(&p->cpu,VOID_BEGIN+24,8)!=THIRD_PC || p->cpu.fault)return 0;
+    sp=p->cpu.r[MXB_RSP];
+    if((sp&15u)||sp<8||!mxb_guest_check(&p->cpu.memory,sp-8,40,MXB_MEM_WRITE))return 0;
+    store(&p->cpu,sp-8,VOID_CONT+12,8);p->cpu.r[MXB_RSP]=sp-8;
+    p->pc=THIRD_PC;
+    return !p->cpu.fault;
 }
 """
     fields={"STARTUP_INFO_PC":base+startup_info_site,"STARTUP_RESUME":base+resume,"CRT_LOCK_VA":lock,"INIT_TABLE_PC":base+0x2ab0b6,"TEB_VA":teb,"LOCK_PC":base+0x2ab05b,"ENTRY_PC":base+entry,"CHILD_PC":base+callee,"RETURN_PC":base+entry+9,
@@ -407,10 +420,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf)
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3])
     for name,value in fields.items():runner=runner.replace(name,u(value))
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
