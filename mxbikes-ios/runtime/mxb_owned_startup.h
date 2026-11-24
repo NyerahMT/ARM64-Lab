@@ -6,6 +6,8 @@ typedef struct {
     uint8_t stack[4096];
     uint8_t initial_globals[16];
     uint64_t import_values[6];
+    uint64_t callback_metadata[12];
+    uint32_t managed_app, app_type;
     uint64_t crt_lock;
     uint32_t crt_phase;
     uint64_t thread_environment[8];

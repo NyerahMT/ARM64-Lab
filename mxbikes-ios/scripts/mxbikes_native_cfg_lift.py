@@ -147,6 +147,10 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             v=("%s_flags(s,%s,%s,%du)"%(mn,a,b,width) if mn in ("xor","sub","add")
                else "logic_flags(s,%s%s%s,%du)"%(a,"&" if mn=="and" else "|",b,width))
             stmt=write(ins,op[0],v)
+        elif mn=="cmp" and len(op)==2 and op[0].type==CS_OP_MEM and op[0].size==2 and op[1].type==CS_OP_REG and ins.reg_name(op[1].reg)=="ax":
+            stmt="(void)sub_flags(s,%s,s->r[0],16u);"%read(ins,op[0])
+        elif mn=="setne" and len(op)==1 and op[0].type==CS_OP_REG and ins.reg_name(op[0].reg)=="al":
+            stmt="s->r[0]=(s->r[0]&~UINT64_C(255))|((s->flags&0x40u)==0);"
         elif mn in ("cmp","test") and len(op)==2 and op[0].size in (4,8):
             width=op[0].size*8;a=read(ins,op[0]);b=read(ins,op[1])
             stmt=("(void)sub_flags(s,%s,%s,%du);"%(a,b,width) if mn=="cmp"

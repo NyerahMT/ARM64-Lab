@@ -125,7 +125,7 @@ static uint64_t xor_flags(State*s,uint64_t a,uint64_t b,unsigned width){
  return v;
 }
 static uint64_t sub_flags(State*s,uint64_t a,uint64_t b,unsigned width){
- uint64_t mask=width==32u?UINT64_C(0xffffffff):UINT64_MAX;
+ uint64_t mask=UINT64_MAX>>(64u-width);
  a&=mask;b&=mask;uint64_t v=(a-b)&mask;
  s->flags=(s->flags&~UINT64_C(0x8d5))|common_flags(v,width)|
    (a<b?1u:0u)|((a^b^v)&0x10u)|((((a^b)&(a^v))>>(width-1u))&1u?0x800u:0u);
