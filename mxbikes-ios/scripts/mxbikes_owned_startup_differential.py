@@ -17,7 +17,7 @@ BASE=0x140000000
 COOKIE=BASE+0x3928a0
 DEFAULT=0x2b992ddfa232
 MASK=(1<<64)-1
-FRONTIER=BASE+0x320790
+FRONTIER=BASE+0x2ab0f1
 
 # The C bridge keeps the C process layout authoritative. Only the normalized
 # register/stack snapshot and caller-owned input file cross the Python ABI.
@@ -76,6 +76,7 @@ int replay(const uint8_t *file,size_t n,uint64_t *vals,uint64_t *regs,uint8_t *s
        !mxb_guest_read(&p.cpu.memory,0x760002000ULL,regs+39,40) ||
        !mxb_guest_read(&p.cpu.memory,0x1403de328ULL,regs+44,0x4a0))goto done;
     for(unsigned i=0;i<16;i++){regs[192+2*i]=p.cpu.xmm[i][0];regs[193+2*i]=p.cpu.xmm[i][1];}
+    regs[224]=p.other_exit_handlers[0];regs[225]=p.other_exit_handlers[1];
     for(unsigned i=0;i<sizeof(p.stack);i++)stack[i]=p.stack[i];
     ok=1;
 done:
@@ -120,7 +121,7 @@ def run(path):
             regs=[((seed+1)*(i+3)*0x1010101010101)&MASK for i in range(16)]
             regs[4]=STACK+0xc08
             flags=0x202 | (0x8d5 if seed%2 else 0)
-            state=(C.c_uint64*224)(*regs,flags)
+            state=(C.c_uint64*226)(*regs,flags)
             vectors=[((0x102030405060708*(i+1)*(seed+1))&MASK) for i in range(32)]
             for i,value in enumerate(vectors):state[192+i]=value
             vals=(C.c_uint64*8)(mono,wall,pid,tid,cookie,seed*31,seed*17,seed*0x10000)
@@ -165,7 +166,7 @@ def run(path):
             cpu.mem_write(0x760001000,struct.pack("<II",0x11223344,0x55667788))
             plain_iterator=iterator+0x100
             cpu.mem_write(plain_iterator,bytes.fromhex("488d6424d8 ff5108"))
-            cpu.mem_write(plain_iterator+8,bytes.fromhex("ff15 72000000 ff15 74000000"))
+            cpu.mem_write(plain_iterator+8,bytes.fromhex("ff15 72000000 ff15 74000000 488d642428 c3"))
             handlers=[]
             app_type=0;exception_filter=vals[7]
             for dll in pe.DIRECTORY_ENTRY_IMPORT:
@@ -184,7 +185,8 @@ def run(path):
             visited=[];called=[]
             def service(uc,pc,size,context):
                 nonlocal app_type,exception_filter
-                if pc in (plain_iterator,plain_iterator+5,plain_iterator+8,plain_iterator+14):
+                if pc in (plain_iterator,plain_iterator+5,plain_iterator+8,plain_iterator+14,plain_iterator+20,plain_iterator+25):
+                    if pc==plain_iterator+20:called.append('_initterm')
                     if pc==plain_iterator:
                         begin=uc.reg_read(x.UC_X86_REG_RCX);end=uc.reg_read(x.UC_X86_REG_RDX)
                         if end-begin!=32 or struct.unpack("<4Q",uc.mem_read(begin,32))!=(0,BASE+0x2aafc4,BASE+0x320770,BASE+0x320790):
@@ -238,12 +240,14 @@ def run(path):
                 cpu.reg_read(x.UC_X86_REG_EFLAGS),cpu.reg_read(x.UC_X86_REG_RIP),len(visited),len(called),
                 *struct.unpack("<QQ",cpu.mem_read(COOKIE,16)),
                 *struct.unpack("<Q",cpu.mem_read(BASE+0xe4ada8,8)),*struct.unpack("<I",cpu.mem_read(BASE+0xe4ada0,4)),app_type,*struct.unpack("<I",cpu.mem_read(BASE+0x3d801c,4)),
-                *struct.unpack("<QQ",cpu.mem_read(BASE+0xe4adb0,16)),*struct.unpack("<II",cpu.mem_read(0x760001000,8)),exception_filter,*handlers,
+                *struct.unpack("<QQ",cpu.mem_read(BASE+0xe4adb0,16)),*struct.unpack("<II",cpu.mem_read(0x760001000,8)),exception_filter,handlers[0],
                 *struct.unpack("<I",cpu.mem_read(BASE+0x3d8018,4)),*struct.unpack("<3Q",cpu.mem_read(BASE+0x3d8020,24)),
                 *struct.unpack("<3Q",cpu.mem_read(BASE+0x3d9b10,24)),*struct.unpack("<5Q",cpu.mem_read(0x760002000,40)),
                 *struct.unpack("<148Q",cpu.mem_read(BASE+0x3de328,0x4a0))]
             for i in range(16):
                 vector=cpu.reg_read(getattr(x,f"UC_X86_REG_XMM{i}"));expected.extend((vector&MASK,vector>>64))
+            if len(handlers)!=3:raise ValueError('Incomplete original exit-handler registration')
+            expected.extend(handlers[1:])
             if list(state)!=expected or bytes(stack)!=bytes(cpu.mem_read(STACK,4096)):
                 differing=[i for i,(actual,wanted) in enumerate(zip(state,expected)) if actual!=wanted]
                 stack_diff=sum(a!=b for a,b in zip(stack,cpu.mem_read(STACK,4096)))

@@ -1,5 +1,6 @@
 """Generate a private Apple native entry wrapper and first CRT initializer."""
 import hashlib
+import re
 import struct
 from pathlib import Path
 
@@ -193,7 +194,15 @@ def prepare_startup(executable: Path, destination: Path):
     # forced to succeed; only the original zero result continues.
     complete_second=region("complete_second",((0x2bbdcf,0x2bbdfc),),
                            0x2bbdcf,base+0x2d2bb9,(0x2bf540,))
-    parent_return=region("parent_return",((0x2d2bb9,0x2d2bcd),),0x2d2bb9,0x75000110e)
+    parent_return=region("parent_return",((0x2d2bb9,0x2d2bcd),),0x2d2bb9,base+0x320780)
+    # The second and third void initializers both register actual original
+    # destructor callbacks via the same onexit wrapper.
+    second_exit=region("second_exit",((0x320780,0x320790),(0x2ab7e4,0x2ab7ed),(0x2ab734,0x2ab744)),
+                       0x320780,base+0x2ab744)
+    third_exit=region("third_exit",((0x320790,0x32079c),(0x2ab7e4,0x2ab7ed),(0x2ab734,0x2ab744)),
+                      0x320790,base+0x2ab744)
+    second_exit_return=region("second_exit_return",((0x2ab7ed,0x2ab7fb),),0x2ab7ed,0x75000110e)
+    third_exit_return=region("third_exit_return",((0x2ab7ed,0x2ab7fb),),0x2ab7ed,0x750001114)
     for rva in (0x3d85bc,0x3d85b8):
         if not zero_fill(base+rva,4):raise ValueError("Unexpected file-mode initializer")
         map_value(rva,bytes(4))
@@ -404,14 +413,46 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     c=parent_return_begin();
     continuation_status=parent_return_resume(&p->cpu,&c,32);
     p->pc=c.pc;
-    if(continuation_status||c.pc!=VOID_CONT+6||p->cpu.fault)return 0;
+    if(continuation_status||c.pc!=SECOND_EXIT_PC||p->cpu.fault)return 0;
     p->instructions+=c.steps;
-    if(load(&p->cpu,VOID_BEGIN+24,8)!=THIRD_PC || p->cpu.fault)return 0;
-    sp=p->cpu.r[MXB_RSP];
-    if((sp&15u)||sp<8||!mxb_guest_check(&p->cpu.memory,sp-8,40,MXB_MEM_WRITE))return 0;
-    store(&p->cpu,sp-8,VOID_CONT+12,8);p->cpu.r[MXB_RSP]=sp-8;
-    p->pc=THIRD_PC;
-    return !p->cpu.fault;
+    for(unsigned index=0;index<2;index++){
+        c=index?third_exit_begin():second_exit_begin();
+        int rc=index?third_exit_resume(&p->cpu,&c,32):second_exit_resume(&p->cpu,&c,32);
+        p->pc=c.pc;
+        if(rc||c.pc!=DECODE_CALL||p->cpu.fault)return 0;
+        p->instructions+=c.steps;
+        if(load(&p->cpu,DECODE_SLOT,8)!=DECODE_VALUE||p->cpu.fault)return 0;
+        store(&p->cpu,p->cpu.r[MXB_RSP]-8,DECODE_CALL+6,8);
+        p->cpu.r[MXB_RAX]=mx_crt_decode_pointer(&crt,p->cpu.r[MXB_RCX]);
+        c=decoded_begin();
+        if(decoded_resume(&p->cpu,&c,16)!=0||c.pc!=ONEXIT_CALL||p->cpu.fault)return 0;
+        p->instructions+=1u+c.steps;p->services++;
+        if(load(&p->cpu,ONEXIT_SLOT,8)!=ONEXIT_VALUE||p->cpu.fault)return 0;
+        store(&p->cpu,p->cpu.r[MXB_RSP]-8,ONEXIT_CALL+6,8);
+        p->cpu.r[MXB_RAX]=mx_crt_service_onexit(&crt,p->cpu.r[MXB_RCX]);
+        if(crt.onexit_count!=index+2||p->cpu.fault)return 0;
+        p->other_exit_handlers[index]=crt.onexit[index+1];
+        c=registered_begin();
+        if(registered_resume(&p->cpu,&c,16)!=0||c.pc!=REGISTER_RETURN||p->cpu.fault)return 0;
+        p->instructions+=1u+c.steps;p->services++;
+        c=index?third_exit_return_begin():second_exit_return_begin();
+        rc=index?third_exit_return_resume(&p->cpu,&c,16):second_exit_return_resume(&p->cpu,&c,16);
+        p->pc=c.pc;
+        if(rc||c.pc!=VOID_CONT+6u*(index+1u)||p->cpu.fault)return 0;
+        p->instructions+=c.steps;
+        if(!index){
+            if(load(&p->cpu,VOID_BEGIN+24,8)!=THIRD_PC||p->cpu.fault)return 0;
+            sp=p->cpu.r[MXB_RSP];
+            if((sp&15u)||sp<8||!mxb_guest_check(&p->cpu.memory,sp-8,40,MXB_MEM_WRITE))return 0;
+            store(&p->cpu,sp-8,VOID_CONT+12,8);p->cpu.r[MXB_RSP]=sp-8;
+            p->pc=THIRD_PC;
+        }
+    }
+    sp=p->cpu.r[MXB_RSP]+40;
+    if(load(&p->cpu,sp,8)!=PLAIN_TABLE_PC+5||p->cpu.fault)return 0;
+    p->cpu.r[MXB_RSP]=sp+8;
+    p->pc=PLAIN_TABLE_PC+5;p->services++;
+    return 1;
 }
 """
     fields={"STARTUP_INFO_PC":base+startup_info_site,"STARTUP_RESUME":base+resume,"CRT_LOCK_VA":lock,"INIT_TABLE_PC":base+0x2ab0b6,"TEB_VA":teb,"LOCK_PC":base+0x2ab05b,"ENTRY_PC":base+entry,"CHILD_PC":base+callee,"RETURN_PC":base+entry+9,
@@ -428,10 +469,10 @@ int mxb_private_startup(MXBOwnedStartup *p,const mx_import_runtime *runtime){
     for name,slot in (("VOID_VALUE",plain_slot),("DECODE_VALUE",decode_slot),("ONEXIT_VALUE",onexit_slot)):
         fields[name]=int.from_bytes(pe.read_rva(slot,8),"little")
     fields.update(ARGS_CALL=base+0x2ab00a,ARGS_SLOT=base+args_slot,ARGS_VALUE=int.from_bytes(pe.read_rva(args_slot,8),"little"),
-                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9)
-    for name,value in fields.items():runner=runner.replace(name,u(value))
+                  ARGS_INFO=base+0x3d8034,ARGS_VA=0x760002000,SECOND_PC=plain_targets[2],SUBOBJECT_PC=base+0x2e84c0,FOURTH_RETURN=base+0x2d2ad6,PARENT_TAIL_END=base+0x2d2b6a,NEXT_CONSTRUCTOR_END=base+0x2bbd90,FINAL_PREFIX_END=base+0x2bbdcc,VIRTUAL_RETURN=base+0x2bbdcf,THIRD_PC=plain_targets[3],PARENT_RETURN_PC=base+0x2d2bb9,SECOND_EXIT_PC=base+0x320780)
+    runner=re.sub(r'\b(?:'+ '|'.join(map(re.escape,fields)) + r')\b',lambda m:u(fields[m[0]]),runner)
     runner=runner.replace("IAT_CHECKS","\n    ".join(checks))
-    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+child+runner)
+    (destination/"mxb_private_startup.c").write_text(MEMORY_RUNTIME+EXTRA+prefix+tail+prologue+thread+guard+callback+app_tail+finish+filter_entry+filter_exit+after_walk+plain_entry+decoded+registered+args_entry+args_setup+args_return+constructor+fourth+parent_tail+next_constructor+final_prefix+virtual_body+complete_second+parent_return+second_exit+third_exit+second_exit_return+third_exit_return+child+runner)
 
     values=",".join(str(b) for b in pe.read_rva(0x3928a0,16))
     launcher=[
