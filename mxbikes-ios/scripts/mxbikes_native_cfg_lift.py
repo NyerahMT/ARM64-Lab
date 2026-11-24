@@ -208,10 +208,15 @@ def decode_cfg(windows,entry,stop,imports=None,iat=None,alternate_stops=(),disk_
             stmt="{uint64_t value=%s;s->r[4]-=8u;store(s,s->r[4],value,8u);}"%read(ins,op[0])
         elif mn=="pop" and len(op)==1 and op[0].type==CS_OP_REG and op[0].size==8 and reg(ins,op[0])[0]!=4:
             stmt=write(ins,op[0],"load(s,s->r[4],8u)")+"s->r[4]+=8u;"
-        elif mn=="call" and len(op)==1 and op[0].type==CS_OP_REG and pc in (register_calls or {}):
+        elif mn=="call" and len(op)==1 and op[0].type in (CS_OP_REG,CS_OP_MEM) and pc in (register_calls or {}):
             target=register_calls[pc]
-            stmt=(f"if({read(ins,op[0])}!={u(target)})return MXB_NATIVE_UNKNOWN_PC;"
-                  f"s->r[4]-=8u;store(s,s->r[4],{u(nxt)},8u);")
+            if op[0].size!=8:raise ValueError("Indirect target must be Win64 pointer")
+            stmt=(f"{{uint64_t target={read(ins,op[0])};"
+                  "if(s->fault)return MXB_NATIVE_MEMORY_FAULT;"
+                  f"if(target!={u(target)})return MXB_NATIVE_UNKNOWN_PC;"
+                  f"if(s->r[4]<8u||!mxb_guest_check(&s->memory,s->r[4]-8u,8,MXB_MEM_WRITE))"
+                  "{s->fault=1;return MXB_NATIVE_MEMORY_FAULT;}"
+                  f"s->r[4]-=8u;store(s,s->r[4],{u(nxt)},8u);}}")
             next_pc=u(target);edges=[target,nxt]
         elif mn=="call" and len(op)==1 and op[0].type==CS_OP_IMM:
             target=op[0].imm
