@@ -44,6 +44,9 @@ typedef struct {
  */
 int mxb_poststeam_join_to_helper_entry(mxb_poststeam_joined_guest *guest);
 
+/* C-owned synthetic guest-state iOS UI smoke, NOT actual MX Bikes startup. */
+int mxb_poststeam_joined_synthetic_smoke(void);
+
 #ifdef __cplusplus
 }
 #endif
