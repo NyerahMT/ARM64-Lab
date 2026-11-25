@@ -166,6 +166,44 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(result["stop"]["status"],"execution_budget_or_timeout")
         self.assertEqual(result["original_x64_instruction_executions"],10)
 
+    def crt_fixture(self, values, first_status=0, last_status=0):
+        prefix=rip_op(b"\x48\x8d\x0d",4,DATA)+rip_op(b"\x48\x8d\x15",11,DATA+8*len(values))
+        expected=first_status or last_status
+        suffix=b"\x3d"+struct.pack("<I",expected)+b"\x74\x02\x0f\x0b"
+        code=call_code(prefix,suffix).ljust(0x100,b"\x90")
+        code+=b"\xb8"+struct.pack("<I",first_status)+b"\xc3"
+        code=code.ljust(0x110,b"\x90")+b"\xb8"+struct.pack("<I",last_status)+b"\xc3"
+        pe=FixturePE(code,symbol="_initterm_e",library="MSVCR90.dll")
+        table=b"".join(struct.pack("<Q",v) for v in values)
+        pe.b=pe.b[:0x800]+table+pe.b[0x800+len(table):]
+        pe.sections[1]=(".rdata",0x400,DATA,0x400,0x800,0x40000000)
+        return pe
+
+    def test_crt_executes_original_callbacks_in_order(self):
+        result=self.execute(self.crt_fixture([0,BASE+ENTRY+0x100,BASE+ENTRY+0x110],last_status=17),limit=250)
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        report=result["crt_initializer_tables"][0]
+        self.assertTrue(report["completed"])
+        self.assertEqual(report["callbacks_returned"],2)
+        self.assertEqual(report["return_status"],17)
+
+    def test_crt_stops_on_first_callback_error(self):
+        result=self.execute(self.crt_fixture([BASE+ENTRY+0x100,BASE+ENTRY+0x110],first_status=5),limit=250)
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        report=result["crt_initializer_tables"][0]
+        self.assertEqual(report["callbacks_returned"],1)
+        self.assertEqual(report["return_status"],5)
+
+    def test_crt_rejects_nonexecutable_callback(self):
+        result=self.execute(self.crt_fixture([BASE+DATA]))
+        self.assertEqual(result["stop"]["status"],"invalid_crt_initializer_callback")
+        self.assertEqual(result["serviced_environment_calls"],{})
+
+    def test_crt_empty_table(self):
+        result=self.execute(self.crt_fixture([]),limit=250)
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertEqual(result["crt_initializer_tables"][0]["return_status"],0)
+
     def test_sha_required(self):
         with self.assertRaisesRegex(ValueError,"SHA_mismatch"):
             runner.execute(FixturePE(b"\xc3"))

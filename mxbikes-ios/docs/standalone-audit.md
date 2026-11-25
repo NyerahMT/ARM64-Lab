@@ -50,3 +50,9 @@ downloads the public installer directly from its publisher, verifies the
 extracted executable's pinned SHA before execution, and deletes the temporary
 files. Only aggregate diagnostic metadata is emitted. It is still x64
 reference execution, not native ARM64 translation or a booted game.
+
+## Standalone reference frontier (November 25, 2026)
+
+The [official public demo reference run](https://github.com/NyerahMT/ARM64-Lab/actions/runs/45652227449) opened an actual MX Bikes window under Wine on x86-64 and captured two 1280x720 screenshots. It is a desktop compatibility reference, not the native ARM64/iOS port. The [bounded standalone startup run](https://github.com/NyerahMT/ARM64-Lab/actions/runs/45570595336) executed 64 original x64 instructions with six modeled Windows environment calls, then stopped at MSVCR90.dll!_initterm_e. Neither used a Steam client. The full licensed edition remains distinct from the demo.
+
+The next reference-runner implementation provides a bounded _initterm_e callback walker: an independently authored 48-byte Win64 guest routine calls original executable targets in table order, skips null pointers and returns the first nonzero callback result. Only immutable original image tables with executable targets and verified callsite provenance are accepted. Unsupported callbacks and dependencies remain fail-closed. Four native x86-64 Microsoft-ABI smoke cases passed locally for the walker; integrated Unicorn regressions and the actual beta21e callback trace are pending. This is not native ARM64 translation, a full CRT, or a license implementation.
