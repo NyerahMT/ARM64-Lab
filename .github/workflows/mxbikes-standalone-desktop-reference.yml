@@ -1,0 +1,76 @@
+name: MX Bikes — isolated official standalone desktop reference
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/mxb-demo-crt-startup-20261125]
+    paths: ['.github/workflows/mxbikes-standalone-desktop-reference.yml']
+permissions:
+  contents: read
+concurrency:
+  group: mxb-standalone-desktop-reference
+  cancel-in-progress: true
+jobs:
+  standalone-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Prepare disposable Wine and software OpenGL environment
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wine wine64 xvfb xauth xdotool innoextract mesa-utils libgl1-mesa-dri
+          mkdir -p "$RUNNER_TEMP/mxb-standalone-reference"
+      - name: Retrieve official public standalone installer
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mxb-standalone-reference"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --max-filesize 3000000000 --max-time 400 --retry 1 \
+            'https://www.mx-bikes.com/downloads/mxbikes-beta21e.exe' -o "$root/installer.exe"
+          innoextract --silent --output-dir "$root/extracted" "$root/installer.exe"
+          test "$(find "$root/extracted" -type f -iname mxbikes.exe | wc -l)" -eq 1
+      - name: Run genuine unmodified demo in isolated desktop session
+        env:
+          WINEDEBUG: "-all"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WINEARCH: win64
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mxb-standalone-reference"
+          export WINEPREFIX="$root/wine"
+          exe="$(find "$root/extracted" -type f -iname mxbikes.exe -print -quit)"
+          test "$(sha256sum "$exe" | cut -d ' ' -f 1)" = b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742
+          python mxbikes-ios/scripts/mxbikes_standalone_import_audit.py --standalone-exe "$exe" --out "$root/report"
+          export MXB_REFERENCE_EXE="$exe"
+          xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX' bash -c '
+            set -euo pipefail
+            timeout 90 wineboot -u >/dev/null 2>&1
+            glxinfo -B
+            cd "$(dirname "$MXB_REFERENCE_EXE")"
+            wine "$MXB_REFERENCE_EXE" >"$WINEPREFIX/game.log" 2>&1 &
+            game_pid=$!
+            trap "wineserver -k >/dev/null 2>&1 || true" EXIT
+            for second in $(seq 1 45); do
+              if ! kill -0 "$game_pid" 2>/dev/null; then
+                echo "STANDALONE_PROCESS_EXITED at $second seconds"
+                break
+              fi
+              if [ $((second % 5)) -eq 0 ]; then
+                echo "STANDALONE_WINDOW_SAMPLE $second seconds"
+                xdotool search --onlyvisible --name ".*" getwindowname %@ 2>/dev/null || true
+              fi
+              sleep 1
+            done
+            if kill -0 "$game_pid" 2>/dev/null; then
+              echo "STANDALONE_PROCESS_ALIVE"
+            fi
+            echo "STANDALONE_FINAL_VISIBLE_WINDOWS"
+            xdotool search --onlyvisible --name ".*" getwindowname %@ 2>/dev/null || true
+            echo "STANDALONE_REFERENCE_LOG_END"
+            tail -n 15 "$WINEPREFIX/game.log"
+          '
+      - name: Delete original binaries and disposable prefix
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mxb-standalone-reference"
