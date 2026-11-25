@@ -70,3 +70,18 @@ The standalone runner now separates four known MSVCR90 data imports from executa
 The standalone process data and three process services now have a portable C implementation in `runtime/mxb_standalone_crt.c` (relative to mxbikes-ios). It writes little-endian Win64 guest data, resolves exactly four typed MSVCR90 globals, checks the fifth stack argument, handles 32-bit scalar widths, and preflights all output spans before modifying guest memory. The caller must guarantee that writes to prevalidated spans cannot fail. It is not yet connected to the native game importer.
 
 Local verification: all 21 numbered smoke checkpoints returned success on x86-64 Linux, both optimized and UBSan-enabled. Both implementation and fixture compiled as arm64-apple-ios15.0 Mach-O objects; the freestanding AArch64 Linux smoke ELF linked successfully. ARM64 execution and actual game startup were not tested. No original game files or CI runs were used. Run the repeatable host/build tests with `python mxbikes-ios/tests/test_mxb_standalone_crt_native.py`.
+
+### Milestone: original standalone WinMain handoff (November 25, 2026)
+
+A local, SHA-pinned, single-stepped x86-64 CPU reference experiment (not an iOS launch) on the original beta21e executable reached the original WinMain entry, RVA 0x136c60, from the original PE entry after 977 original instructions. Both initializer tables completed: checked table 3 slots / 2 returned callbacks / status 0; void table 4 slots / 3 returned callbacks. argc=1, application type=GUI, three exit callbacks registered. No Steam services or licensing decisions were modeled. Execution stopped before the first WinMain instruction. The six initial Windows environment services and exception-filter registration were modeled; exception dispatch is not implemented.
+
+The native C service module now also handles reversible process-local pointer tokens (not Windows-compatible tokens), bounded exit registration (no execution at exit), and ASCII-only lead-byte checking in the modeled initial C locale. The native module passed 32 smoke checkpoints with optimized host and UBSan builds and both C sources compiled as iOS ARM64 Mach-O objects. Eight bridge tests passed locally, and the exact native host bridge was used in a second local 977-instruction trace.
+
+The repeatable Unicorn runner can now opt into the native C services and stop at the verified original WinMain call boundary:
+
+```sh
+cc -shared -fPIC -O2 mxbikes-ios/runtime/mxb_standalone_crt.c -o /tmp/mxb-crt.so
+python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/official/demo/mxbikes.exe --native-crt-library /tmp/mxb-crt.so --stop-at-winmain
+```
+
+The local single-step harness was experimental and is not distributed; the updated Unicorn runner has not yet been executed because Unicorn is unavailable locally. Neither this reference trace nor ARM64 compilation proves native ARM64 execution of the game. No original executable bytes or assets are committed. Next frontier: decode and translate the standalone WinMain body.

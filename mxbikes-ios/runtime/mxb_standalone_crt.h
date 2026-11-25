@@ -9,7 +9,7 @@
 #define MXB_CRT_ARGV (MXB_CRT_BASE+0x40u)
 #define MXB_CRT_ENVP (MXB_CRT_BASE+0x60u)
 #define MXB_CRT_ARGV0 (MXB_CRT_BASE+0x100u)
-typedef struct { uint32_t app_type, locale_mode; } mxb_crt_process;
+typedef struct { uint32_t app_type, locale_mode; uint64_t pointer_key; uint32_t exit_count; uint64_t exit_callbacks[32]; } mxb_crt_process;
 typedef struct {
     void *ctx;
     int (*read)(void *,uint64_t,uint8_t *,size_t);
@@ -17,6 +17,7 @@ typedef struct {
      * that writes to prevalidated ranges cannot fail or change mappings. */
     int (*writable)(void *,uint64_t,size_t);
     void (*write)(void *,uint64_t,const uint8_t *,size_t);
+    int (*executable)(void *,uint64_t);
 } mxb_crt_memory;
 typedef struct { uint64_t rcx,rdx,r8,r9,rsp,rax; } mxb_crt_regs;
 enum { MXB_CRT_UNSUPPORTED=0, MXB_CRT_HANDLED=1, MXB_CRT_INVALID=-1 };

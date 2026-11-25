@@ -8,9 +8,10 @@ static int valid(void *c,uint64_t a,size_t n){(void)c;return a>=B&&n<=sizeof(mem
 static int rd(void *c,uint64_t a,uint8_t *p,size_t n){if(!valid(c,a,n))return 0;for(size_t i=0;i<n;i++)p[i]=mem[a-B+i];return 1;}
 static void wr(void *c,uint64_t a,const uint8_t *p,size_t n){(void)c;writes++;for(size_t i=0;i<n;i++)mem[a-B+i]=p[i];}
 static int canwrite(void *c,uint64_t a,size_t n){return valid(c,a,n)&&a>=B+128;}
+static int canexec(void *c,uint64_t a){(void)c;return a>=B+0x1000&&a<B+0x1100;}
 int smoke(void){
     const uint8_t exe[]="mxbikes.exe";
-    mxb_crt_memory m={0,rd,canwrite,wr};mxb_crt_process p={0,2};
+    mxb_crt_memory m={0,rd,canwrite,wr,canexec};mxb_crt_process p={.locale_mode=2,.pointer_key=UINT64_C(0x7d91ca346f289b15)};
     mxb_crt_regs r={B+128,B+136,B+144,0,B+8,99};
     put(mem+48,B+80,8);
     if(mxb_crt_data_page(page,sizeof(page),B+1000,B+2000,exe,sizeof(exe))!=1)return 1;
@@ -41,6 +42,27 @@ int smoke(void){
     if(mxb_crt_dispatch(&p,&m,"other.dll","__set_app_type",&r)!=0||mxb_crt_dispatch(&p,&m,"MSVCR90.dll","unknown",&r)!=0)return 20;
     r.rsp=B+8;r.rcx=B+128;r.r9=UINT64_C(0xffff00000000);
     if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","__getmainargs",&r)!=1||writes!=6||r.rax)return 21;
+    r.rcx=UINT64_MAX;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_encode_pointer",&r)!=1||r.rax==UINT64_MAX)return 22;
+    r.rcx=r.rax;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_decode_pointer",&r)!=1||r.rax!=UINT64_MAX)return 23;
+    r.rcx=0;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_encode_pointer",&r)!=1||!r.rax)return 24;
+    r.rcx=r.rax;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_decode_pointer",&r)!=1||r.rax)return 25;
+    p.pointer_key=0;r.rcx=1;r.rax=77;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_encode_pointer",&r)!=-1||r.rax!=77)return 26;
+    r.rcx=B+0x1000;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_onexit",&r)!=1||r.rax!=r.rcx||p.exit_count!=1||p.exit_callbacks[0]!=r.rcx)return 27;
+    r.rcx=B+128;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_onexit",&r)!=-1||p.exit_count!=1)return 28;
+    for(unsigned i=1;i<32;i++){r.rcx=B+0x1000+i;if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_onexit",&r)!=1)return 29;}
+    r.rcx=B+0x1080;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_onexit",&r)!=-1||p.exit_count!=32)return 30;
+    r.rcx=UINT64_C(0xffff00000041);
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_ismbblead",&r)!=1||r.rax)return 31;
+    r.rcx=0x81;r.rax=77;
+    if(mxb_crt_dispatch(&p,&m,"MSVCR90.dll","_ismbblead",&r)!=-1||r.rax!=77)return 32;
     return 0;
 }
 #ifdef HOST

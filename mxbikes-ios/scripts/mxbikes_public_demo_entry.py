@@ -24,6 +24,7 @@ from mxb_gl_callsite import prove_callsite
 from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE, process_strings, process_service, PROCESS_ENVIRONMENT_APIS
 from mxb_demo_crt_process import CRT_DATA, data_address, data_page, Process, APIS as CRT_PROCESS_APIS
 from mxb_demo_win64_environment import COMMAND_LINE_A
+from mxb_demo_native_crt import NativeCRT, APIS as NATIVE_CRT_APIS
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_PROT_READ, UC_PROT_WRITE, UC_PROT_EXEC
 from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_GS_BASE, UC_X86_REG_RBX, UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_R9
 
@@ -49,18 +50,21 @@ CRT_VARIANTS={
 }
 MAX_IMAGE=128*1024*1024
 MAX_INSTRUCTIONS=250000
+WINMAIN_RVA=0x136c60
+WINMAIN_CALL_RVA=0x2ab666
 ENVIRONMENT={"getsystemtimeasfiletime","getcurrentthreadid","getcurrentprocessid",
              "queryperformancecounter","queryperformancefrequency","gettickcount","gettickcount64",
-             "getstartupinfoa"} | PROCESS_ENVIRONMENT_APIS
+             "getstartupinfoa","setunhandledexceptionfilter"} | PROCESS_ENVIRONMENT_APIS
 
 
 def align(n):
     return (n+PAGE-1)&~(PAGE-1)
 
 
-def execute(pe, limit=MAX_INSTRUCTIONS):
+def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain=False):
     if not 1<=limit<=MAX_INSTRUCTIONS:raise ValueError("invalid_instruction_budget")
     if hashlib.sha256(pe.b).hexdigest()!=DEMO_SHA:raise ValueError("public_demo_SHA_mismatch")
+    native=NativeCRT(native_crt_library) if native_crt_library is not None else None
     metadata=pe.inventory()
     if any(lib.lower() in ("steam_api.dll","steam_api64.dll") for lib in metadata["imports"]):
         raise ValueError("unexpected_Steam_import")
@@ -100,7 +104,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     iat={rva:(lib.lower(),name) for rva,lib,name in slots}
     for i,(rva,lib,name) in enumerate(slots):
         if rva+8>image_size:raise ValueError("invalid_IAT_RVA")
-        data_va=data_address(lib,name)
+        data_va=native.data_address(lib,name) if native else data_address(lib,name)
         if data_va is not None:
             u.mem_write(base+rva,struct.pack("<Q",data_va))
             typed_data_imports[lib+"!"+name]=hex(data_va-CRT_DATA)
@@ -131,9 +135,12 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     u.mem_write(PROCESS_STRINGS,strings)
     u.mem_protect(PROCESS_STRINGS,PAGE,UC_PROT_READ)
     u.mem_map(CRT_DATA,PAGE,UC_PROT_READ|UC_PROT_WRITE)
-    u.mem_write(CRT_DATA,data_page(PROCESS_STRINGS+a_off,PROCESS_STRINGS+w_off,COMMAND_LINE_A))
+    build_data=native.data_page if native else data_page
+    u.mem_write(CRT_DATA,build_data(PROCESS_STRINGS+a_off,PROCESS_STRINGS+w_off,COMMAND_LINE_A))
     writable.append((CRT_DATA,CRT_DATA+PAGE))
-    crt_process=Process()
+    crt_process=native if native else Process()
+    process_apis=NATIVE_CRT_APIS if native else CRT_PROCESS_APIS
+    exception_filter=0
     sp=STACK+STACK_SIZE-0x108
     u.mem_write(sp,struct.pack("<Q",END))
     u.reg_write(UC_X86_REG_RSP,sp)
@@ -152,7 +159,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     def write_qword(ptr,value):
         checked_write(u.mem_write,writable,ptr,struct.pack("<Q",value))
     def hook(cpu,pc,size,_):
-        nonlocal original,crt_active
+        nonlocal original,crt_active,exception_filter
         if CRT_WALK<=pc<CRT_WALK+PAGE:
             if crt_active is None:
                 halt("unexpected_crt_walker_entry");return
@@ -204,7 +211,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             key=lib+"!"+name
             counts[key]+=1
             is_crt=lib.lower()=="msvcr90.dll" and name in CRT_VARIANTS
-            is_crt_process=lib.lower()=="msvcr90.dll" and name in CRT_PROCESS_APIS
+            is_crt_process=lib.lower()=="msvcr90.dll" and name in process_apis
             supported=is_crt or is_crt_process or (lib.lower() in ("kernel32.dll","kernelbase.dll") and low in ENVIRONMENT)
             if not supported:
                 # Record proven import origin even for the next unsupported dependency.
@@ -253,13 +260,21 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
                     # The actual guest JMP and CALL instructions execute; no fabricated return.
                     return
                 if is_crt_process:
-                    value=crt_process.dispatch(name,(ptr,cpu.reg_read(UC_X86_REG_RDX),
-                        cpu.reg_read(UC_X86_REG_R8),cpu.reg_read(UC_X86_REG_R9)),
-                        read=cpu.mem_read,write=cpu.mem_write,writable=writable,rsp=rsp)
+                    args=(ptr,cpu.reg_read(UC_X86_REG_RDX),
+                          cpu.reg_read(UC_X86_REG_R8),cpu.reg_read(UC_X86_REG_R9))
+                    extra={"executable":executable,"rax":cpu.reg_read(UC_X86_REG_RAX)} if native else {}
+                    value=crt_process.dispatch(name,args,read=cpu.mem_read,
+                        write=cpu.mem_write,writable=writable,rsp=rsp,**extra)
                     if value is not None:cpu.reg_write(UC_X86_REG_RAX,value)
                 elif low in PROCESS_ENVIRONMENT_APIS:
                     value=process_service(low,(ptr,cpu.reg_read(UC_X86_REG_RDX),cpu.reg_read(UC_X86_REG_R8)),image_base=base,command_a=PROCESS_STRINGS+a_off,command_w=PROCESS_STRINGS+w_off,write=cpu.mem_write,writable=writable)
                     cpu.reg_write(UC_X86_REG_RAX,value)
+                elif low=="setunhandledexceptionfilter":
+                    # Registration only; never claim that exceptions are dispatched.
+                    if ptr and not any(lo<=ptr<hi for lo,hi in executable):
+                        halt("invalid_exception_filter_target",import_name=key);return
+                    cpu.reg_write(UC_X86_REG_RAX,exception_filter)
+                    exception_filter=ptr
                 elif low=="getstartupinfoa":checked_write(cpu.mem_write,writable,ptr,startup_info_a())
                 elif low=="getsystemtimeasfiletime":write_qword(ptr,116444736012345678)
                 elif low=="queryperformancecounter":write_qword(ptr,1234567890);cpu.reg_write(UC_X86_REG_RAX,1)
@@ -273,6 +288,18 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
         if not any(lo<=pc and pc+size<=hi for lo,hi in executable):
             halt("outside_original_executable_sections")
             return
+        if stop_at_winmain and pc==base+WINMAIN_RVA:
+            try:
+                call=pe.read_rva(WINMAIN_CALL_RVA,5)
+                ret=struct.unpack("<Q",cpu.mem_read(cpu.reg_read(UC_X86_REG_RSP),8))[0]
+                proof=(len(call)==5 and call[0]==0xe8 and
+                       WINMAIN_CALL_RVA+5+struct.unpack_from("<i",call,1)[0]==WINMAIN_RVA and
+                       bytes(cpu.mem_read(base+WINMAIN_CALL_RVA,5))==call and
+                       ret==base+WINMAIN_CALL_RVA+5)
+            except (ValueError,UcError,struct.error):proof=False
+            if not proof or crt_active is not None:
+                halt("unverified_winmain_handoff");return
+            halt("winmain_entry_reached",callsite_rva=hex(WINMAIN_CALL_RVA));return
         original+=1
         visits.add(pc-base)
         recent.append(hex(pc-base))
@@ -303,7 +330,12 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             "memory_fault":memory_fault or None,
             "crt_initializer_tables":crt_reports,
             "typed_crt_data_imports":typed_data_imports,
-            "crt_process_state":{"app_type":crt_process.app_type,"locale_mode":crt_process.locale_mode},
+            "crt_process_state":{"app_type":crt_process.app_type,"locale_mode":crt_process.locale_mode,
+                                 "exit_callbacks_registered":native.exit_count if native else 0},
+            "crt_backend":"native_c" if native else "python_reference",
+            "exception_filter_registered":bool(exception_filter),
+            "exception_dispatch_implemented":False,
+            "winmain_entry_reached":stop["status"]=="winmain_entry_reached",
             "tls_directory_present":bool(tls_rva and tls_size),
             "tls_callbacks_executed":False,
             "stop":stop,"environment_mode":"bounded_clock_process_identity_and_minimal_startup_environment",
@@ -315,10 +347,13 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--demo-exe",type=Path,required=True)
+    p.add_argument("--native-crt-library",type=Path,help="Locally compiled trusted native CRT shared library")
+    p.add_argument("--stop-at-winmain",action="store_true",help="Stop at the proven standalone WinMain call target")
     args=p.parse_args()
     if not args.demo_exe.is_file() or not 0<args.demo_exe.stat().st_size<=MAX_IMAGE:
         p.error("missing_or_oversized_demo")
-    result=execute(PE(args.demo_exe))
+    result=execute(PE(args.demo_exe),native_crt_library=args.native_crt_library,
+                   stop_at_winmain=args.stop_at_winmain)
     print(json.dumps(result,indent=2))
     if result["original_x64_instruction_executions"]<=0:
         raise SystemExit("No genuine demo instructions executed")

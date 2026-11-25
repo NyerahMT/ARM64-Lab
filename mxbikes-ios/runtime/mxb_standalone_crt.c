@@ -35,14 +35,31 @@ uint64_t mxb_crt_data_address(const char *library,const char *symbol){
     if(equal(symbol,"_commode",0))return MXB_CRT_BASE+20;
     return 0;
 }
+/* Reversible process-local pointer tokens; not Windows token compatibility. */
+static uint64_t rotate_left(uint64_t x,unsigned n){return (x<<n)|(x>>(64u-n));}
+static uint64_t rotate_right(uint64_t x,unsigned n){return (x>>n)|(x<<(64u-n));}
 int mxb_crt_dispatch(mxb_crt_process *p,const mxb_crt_memory *m,
                      const char *library,const char *symbol,mxb_crt_regs *r){
     if(!equal(library,"msvcr90.dll",1))return 0;
     int app=equal(symbol,"__set_app_type",0),locale=equal(symbol,"_configthreadlocale",0),
-        args=equal(symbol,"__getmainargs",0);
-    if(!app&&!locale&&!args)return 0;
+        args=equal(symbol,"__getmainargs",0),
+        encode=equal(symbol,"_encode_pointer",0),decode=equal(symbol,"_decode_pointer",0),onexit=equal(symbol,"_onexit",0),
+        lead=equal(symbol,"_ismbblead",0);
+    if(!app&&!locale&&!args&&!encode&&!decode&&!onexit&&!lead)return 0;
     if(!p||!r||!span(r->rsp,48)||(r->rsp&15u)!=8u)return -1;
+    if(encode||decode){
+        if(!p->pointer_key)return -1;
+        r->rax=encode?rotate_left(r->rcx^p->pointer_key,17u):
+                      rotate_right(r->rcx,17u)^p->pointer_key;
+        return 1;
+    }
+    if(onexit){
+        if(!m||!m->executable||!r->rcx||!m->executable(m->ctx,r->rcx)||p->exit_count>=32)return -1;
+        p->exit_callbacks[p->exit_count++]=r->rcx;r->rax=r->rcx;return 1;
+    }
     uint32_t a=(uint32_t)r->rcx;
+    /* Only ASCII under the modeled initial C locale; reject other bytes. */
+    if(lead){if(a>127u)return -1;r->rax=0;return 1;}
     if(app){if(a!=1&&a!=2)return -1;p->app_type=a;return 1;}
     if(locale){if(a>2||(p->locale_mode!=1&&p->locale_mode!=2))return -1;
         r->rax=p->locale_mode;if(a)p->locale_mode=a;return 1;}
