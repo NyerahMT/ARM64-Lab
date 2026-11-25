@@ -37,7 +37,11 @@ CRT_TRAMPOLINE_START = STUB_BASE + 0x9000
 MAX_SECONDS_MICRO = 120_000_000
 
 
-def run_frontier(executable, private_archive):
+def run_frontier(executable, private_archive, *, verified_rvas=()):
+    verified_rvas=frozenset(verified_rvas)
+    if len(verified_rvas)>4096 or any(not isinstance(r,int) or not 0<r<2**32 for r in verified_rvas):
+        raise ValueError('Unbounded native entry coverage inventory')
+    native_entry_hits=collections.Counter()
     # The DLL bytes remain in memory on the private Actions runner, and
     # are never written to the metadata artifact or printed in diagnostics.
     files = GuestFileBridge({"steam_api64.dll": load_startup_dll(private_archive)})
@@ -160,12 +164,11 @@ def run_frontier(executable, private_archive):
             dll, name = mapped[address]
             low = name.lower()
             calls[dll + "::" + name] += 1
-            if dll.lower() == "steam_api64.dll" and low == "steamapi_restartappifnecessary":
-                # Controlled test only: model Steam having launched the app
-                # already. Not a working Steam SDK or production integration.
-                emulator.reg_write(UC_X86_REG_RAX, 0)
-                trace["synthetic_import_returns"] += 1
-                trace["synthetic_steam_restart_checks"] += 1
+            if dll.lower() in ("steam_api64.dll","steam_api.dll"):
+                # Stop before ANY Steam service returns, preserving guest state.
+                trace["stop_reason"] = "unsupported_steam_service"
+                trace["unimplemented_import"] = dll + "::" + name
+                emulator.emu_stop()
                 return
             if dll.lower() == "msvcr90.dll" and low in {
                 "fopen", "fread", "fseek", "ftell", "fclose",
@@ -452,6 +455,8 @@ def run_frontier(executable, private_archive):
             return
         rva = address - IMAGE_BASE
         trace["original_instruction_count"] += 1
+        if rva in verified_rvas:
+            native_entry_hits[rva]+=1
         try:
             # Avoid decoding millions of repetitive CRC-like loop instructions.
             # Exact faulting instructions are still decoded in invalid_mem.
@@ -553,6 +558,9 @@ def run_frontier(executable, private_archive):
                          else "external_or_unmapped")
     trace["original_targets_visited"] = [hex(rva) for rva in reached]
     trace["windows_imports_called"] = dict(calls)
+    trace["verified_native_entries_observed"]={hex(r):n for r,n in native_entry_hits.items()}
+    trace["verified_native_entry_candidates"]=len(verified_rvas)
+    trace["steam_service_return_simulated"]=False
     trace["file_bridge"] = files.diagnostics()
     trace["mapped_crt_data_imports"] = data_imports
     trace["recent_original_instructions"] = list(recent)
