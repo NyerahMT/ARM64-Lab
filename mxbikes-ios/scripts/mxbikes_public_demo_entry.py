@@ -3,8 +3,8 @@
 
 This does not unlock the demo, change any licensing decision, start a game
 session, or translate x64 instructions to ARM64. Only basic Windows clock,
-process identity, bounded startup environment and one real callback-table
-walker are modeled. Everything else stops before return.
+process identity, bounded startup environment and both CRT callback-table
+walkers are modeled. Everything else stops before return.
 No executable bytes, memory contents or modified binaries are emitted.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from mxbikes_first_callee_emu import import_slots
 from mxb_gl_callsite import prove_callsite
 from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE, process_strings, process_service, PROCESS_ENVIRONMENT_APIS
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_PROT_READ, UC_PROT_WRITE, UC_PROT_EXEC
-from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_GS_BASE, UC_X86_REG_RBX
+from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_GS_BASE, UC_X86_REG_RBX, UC_X86_REG_RSI, UC_X86_REG_RDI
 
 DEMO_SHA="b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742"
 PAGE=4096
@@ -38,6 +38,13 @@ CRT_WALK=0x750000000
 # allocate 32-byte shadow space, call each non-null pointer, stop on nonzero EAX.
 # Offsets 0x20=CALL RBX, 0x22=callback return, 0x2f=RET.
 CRT_WALK_CODE=bytes.fromhex('5657534883ec204889ce4889d731c04839fe7314488b1e4883c6084885db74efffd385c07502ebe74883c4205b5f5ec3')
+# Void _initterm ignores callback EAX, unlike _initterm_e.
+CRT_VOID=CRT_WALK+0x100
+CRT_VOID_CODE=bytes.fromhex('5657534883ec204889ce4889d74839fe7310488b1e4883c6084885db74efffd3ebeb4883c4205b5f5ec3')
+CRT_VARIANTS={
+    "_initterm_e":(CRT_WALK,CRT_WALK_CODE,0x20,0x22,0x2f,True),
+    "_initterm":(CRT_VOID,CRT_VOID_CODE,0x1e,0x20,0x29,False),
+}
 MAX_IMAGE=128*1024*1024
 MAX_INSTRUCTIONS=250000
 ENVIRONMENT={"getsystemtimeasfiletime","getcurrentthreadid","getcurrentprocessid",
@@ -92,13 +99,14 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
         if rva+8>image_size:raise ValueError("invalid_IAT_RVA")
         addr=STUB+16*i
         targets[addr]=(lib,name)
-        if lib.lower()=="msvcr90.dll" and name=="_initterm_e":
-            u.mem_write(addr,b"\xe9"+struct.pack("<i",CRT_WALK-(addr+5)))
+        if lib.lower()=="msvcr90.dll" and name in CRT_VARIANTS:
+            u.mem_write(addr,b"\xe9"+struct.pack("<i",CRT_VARIANTS[name][0]-(addr+5)))
         else:u.mem_write(addr,b"\xc3")
         u.mem_write(base+rva,struct.pack("<Q",addr))
     u.mem_protect(STUB,align(16*len(slots)),UC_PROT_READ|UC_PROT_EXEC)
     u.mem_map(CRT_WALK,PAGE,UC_PROT_READ|UC_PROT_WRITE)
     u.mem_write(CRT_WALK,CRT_WALK_CODE)
+    u.mem_write(CRT_VOID,CRT_VOID_CODE)
     u.mem_protect(CRT_WALK,PAGE,UC_PROT_READ|UC_PROT_EXEC)
     for p in range(0,align(image_size),PAGE):
         prot=permissions.get(p,UC_PROT_READ)
@@ -134,34 +142,46 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     def hook(cpu,pc,size,_):
         nonlocal original,crt_active
         if CRT_WALK<=pc<CRT_WALK+PAGE:
-            if crt_active is None or pc+size>CRT_WALK+len(CRT_WALK_CODE):
+            if crt_active is None:
+                halt("unexpected_crt_walker_entry");return
+            start,code,call_off,return_off,ret_off,checked=crt_active["variant"]
+            if not start<=pc<pc+size<=start+len(code):
                 halt("unexpected_crt_walker_entry");return
             report=crt_active["report"]
-            offset=pc-CRT_WALK
-            if offset==0x20:
+            offset=pc-start
+            if offset==call_off:
                 n=report["callbacks_entered"]
                 callbacks=crt_active["callbacks"]
                 if (n>=len(callbacks) or cpu.reg_read(UC_X86_REG_RBX)!=callbacks[n]
-                        or cpu.reg_read(UC_X86_REG_RSP)&15):
+                        or cpu.reg_read(UC_X86_REG_RSP)!=crt_active["rsp"]-56
+                        or report["callbacks_entered"]!=report["callbacks_returned"]
+                        or (checked and report["last_callback_status"]!=0)):
                     halt("invalid_crt_callback_target_or_stack");return
+                crt_active["callback_registers"]=tuple(cpu.reg_read(r) for r in
+                    (UC_X86_REG_RBX,UC_X86_REG_RSI,UC_X86_REG_RDI))
                 report["callbacks_entered"]+=1
-            elif offset==0x22:
-                if report["callbacks_returned"]+1!=report["callbacks_entered"]:
+            elif offset==return_off:
+                if (report["callbacks_returned"]+1!=report["callbacks_entered"] or
+                        cpu.reg_read(UC_X86_REG_RSP)!=crt_active["rsp"]-56 or
+                        tuple(cpu.reg_read(r) for r in (UC_X86_REG_RBX,UC_X86_REG_RSI,UC_X86_REG_RDI))
+                        !=crt_active["callback_registers"]):
                     halt("invalid_crt_callback_return");return
                 report["callbacks_returned"]+=1
-                report["last_callback_status"]=cpu.reg_read(UC_X86_REG_RAX)&0xffffffff
-            elif offset==0x2f:
+                if checked:report["last_callback_status"]=cpu.reg_read(UC_X86_REG_RAX)&0xffffffff
+            elif offset==ret_off:
                 try:
                     rsp=cpu.reg_read(UC_X86_REG_RSP)
                     ret=struct.unpack("<Q",cpu.mem_read(rsp,8))[0]
                     status=cpu.reg_read(UC_X86_REG_RAX)&0xffffffff
                     if (rsp!=crt_active["rsp"] or ret!=crt_active["return"] or
                             report["callbacks_entered"]!=report["callbacks_returned"] or
-                            (status==0 and report["callbacks_returned"]!=len(crt_active["callbacks"])) or
-                            status!=report["last_callback_status"]):
+                            tuple(cpu.reg_read(r) for r in (UC_X86_REG_RBX,UC_X86_REG_RSI,UC_X86_REG_RDI))
+                            !=crt_active["entry_registers"] or
+                            ((not checked or status==0) and report["callbacks_returned"]!=len(crt_active["callbacks"])) or
+                            (checked and status!=report["last_callback_status"])):
                         halt("invalid_crt_walker_return");return
                     report["completed"]=True
-                    report["return_status"]=status
+                    report["return_status"]=status if checked else None
                     serviced[crt_active["key"]]+=1
                     crt_active=None
                 except (UcError,struct.error):halt("invalid_crt_walker_return")
@@ -171,9 +191,17 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             low=name.lower()
             key=lib+"!"+name
             counts[key]+=1
-            is_crt=lib.lower()=="msvcr90.dll" and name=="_initterm_e"
-            if not is_crt and (lib.lower() not in ("kernel32.dll","kernelbase.dll") or low not in ENVIRONMENT):
-                halt("unsupported_import",import_name=key)
+            is_crt=lib.lower()=="msvcr90.dll" and name in CRT_VARIANTS
+            supported=is_crt or (lib.lower() in ("kernel32.dll","kernelbase.dll") and low in ENVIRONMENT)
+            if not supported:
+                # Record proven import origin even for the next unsupported dependency.
+                try:
+                    rsp=cpu.reg_read(UC_X86_REG_RSP)
+                    ret=struct.unpack("<Q",cpu.mem_read(rsp,8))[0]
+                    evidence=prove_callsite(pe,iat,base,cpu.mem_read,ret,pc,lib,name)
+                except (ValueError,UcError,struct.error):
+                    evidence=None
+                halt("unsupported_import",import_name=key,callsite=evidence)
                 return
             if cpu.reg_read(UC_X86_REG_RSP)&15!=8:
                 halt("invalid_Win64_import_stack",import_name=key)
@@ -200,12 +228,15 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
                     callbacks=[value for (value,) in struct.iter_unpack("<Q",data) if value]
                     if any(not any(lo<=fn<hi for lo,hi in executable) for fn in callbacks):
                         halt("invalid_crt_initializer_callback",import_name=key);return
-                    report={"table_slots":len(data)//8,"nonnull_callbacks":len(callbacks),
+                    report={"import":key,"callsite":evidence,"table_rva":hex(ptr-base),
+                            "table_slots":len(data)//8,"nonnull_callbacks":len(callbacks),
                             "callbacks_entered":0,"callbacks_returned":0,
                             "last_callback_status":0,"completed":False}
                     crt_reports.append(report)
                     crt_active={"report":report,"callbacks":callbacks,"rsp":rsp,
-                                "return":return_va,"key":key}
+                                "return":return_va,"key":key,"variant":CRT_VARIANTS[name],
+                                "entry_registers":tuple(cpu.reg_read(r) for r in
+                                    (UC_X86_REG_RBX,UC_X86_REG_RSI,UC_X86_REG_RDI))}
                     # The actual guest JMP and CALL instructions execute; no fabricated return.
                     return
                 if low in PROCESS_ENVIRONMENT_APIS:
@@ -239,7 +270,11 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     except UcError as exc:
         if not stop:stop.update(status="guest_emulation_fault",reason=str(exc))
     pc=u.reg_read(UC_X86_REG_RIP)
-    if not stop:stop.update(status="entry_returned" if pc==END else "execution_budget_or_timeout")
+    if not stop:
+        stop.update(status=("incomplete_crt_initializer" if crt_active is not None and pc==END
+                            else "entry_returned" if pc==END else "execution_budget_or_timeout"))
+    if crt_active is not None:
+        stop["active_crt_initializer"]=crt_active["key"]
     stop["original_rva"]=hex(pc-base) if base<=pc<base+image_size else None
     tls_rva,tls_size=pe.directory(9)
     return {"target":"publisher_distributed_beta21e_demo","verified_sha256":DEMO_SHA,

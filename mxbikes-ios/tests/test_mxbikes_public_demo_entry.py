@@ -166,14 +166,15 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(result["stop"]["status"],"execution_budget_or_timeout")
         self.assertEqual(result["original_x64_instruction_executions"],10)
 
-    def crt_fixture(self, values, first_status=0, last_status=0):
+    def crt_fixture(self, values, first_status=0, last_status=0, symbol="_initterm_e"):
         prefix=rip_op(b"\x48\x8d\x0d",4,DATA)+rip_op(b"\x48\x8d\x15",11,DATA+8*len(values))
         expected=first_status or last_status
-        suffix=b"\x3d"+struct.pack("<I",expected)+b"\x74\x02\x0f\x0b"
+        suffix=(b"\x3d"+struct.pack("<I",expected)+b"\x74\x02\x0f\x0b"
+                if symbol=="_initterm_e" else b"")
         code=call_code(prefix,suffix).ljust(0x100,b"\x90")
         code+=b"\xb8"+struct.pack("<I",first_status)+b"\xc3"
         code=code.ljust(0x110,b"\x90")+b"\xb8"+struct.pack("<I",last_status)+b"\xc3"
-        pe=FixturePE(code,symbol="_initterm_e",library="MSVCR90.dll")
+        pe=FixturePE(code,symbol=symbol,library="MSVCR90.dll")
         table=b"".join(struct.pack("<Q",v) for v in values)
         pe.b=pe.b[:0x800]+table+pe.b[0x800+len(table):]
         pe.sections[1]=(".rdata",0x400,DATA,0x400,0x800,0x40000000)
@@ -203,6 +204,35 @@ class LoaderTests(unittest.TestCase):
         result=self.execute(self.crt_fixture([]),limit=250)
         self.assertEqual(result["stop"]["status"],"entry_returned")
         self.assertEqual(result["crt_initializer_tables"][0]["return_status"],0)
+
+    def test_void_crt_ignores_nonzero_callback_values(self):
+        result=self.execute(self.crt_fixture([BASE+ENTRY+0x100,0,BASE+ENTRY+0x110],
+                                            first_status=5,last_status=17,symbol="_initterm"),limit=250)
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        report=result["crt_initializer_tables"][0]
+        self.assertTrue(report["completed"])
+        self.assertEqual(report["callbacks_returned"],2)
+        self.assertIsNone(report["return_status"])
+        self.assertEqual(report["import"],"MSVCR90.dll!_initterm")
+
+    def test_void_crt_empty_table(self):
+        result=self.execute(self.crt_fixture([],symbol="_initterm"),limit=250)
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertIsNone(result["crt_initializer_tables"][0]["return_status"])
+
+    def test_crt_rejects_callback_that_corrupts_nonvolatile_register(self):
+        pe=self.crt_fixture([BASE+ENTRY+0x100])
+        # xor ebx,ebx; xor eax,eax; ret, violates callback Win64 ABI.
+        pe.b=pe.b[:0x500]+b"\x31\xdb\x31\xc0\xc3"+pe.b[0x505:]
+        result=self.execute(pe,limit=250)
+        self.assertEqual(result["stop"]["status"],"invalid_crt_callback_return")
+        self.assertFalse(result["crt_initializer_tables"][0]["completed"])
+
+    def test_unsupported_import_reports_verified_callsite(self):
+        result=self.execute(FixturePE(call_code(),symbol="GetProcAddress"))
+        evidence=result["stop"]["callsite"]
+        self.assertEqual(evidence["original_call_rva"],"0x1004")
+        self.assertEqual(evidence["original_iat_rva"],"0x2100")
 
     def test_sha_required(self):
         with self.assertRaisesRegex(ValueError,"SHA_mismatch"):
