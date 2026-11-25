@@ -542,6 +542,7 @@ typedef int(*worker)(struct cpu*,mx_cfg_memory*);
 static const worker workers[COUNT]={__WORKERS__};
 static const uint64_t originals[COUNT]={__STARTS__};
 int smoke(void){
+ (void)mx_cfg_vector_transfer;
  mx_cfg_region regions[]={{STACK,guest_memory,sizeof(guest_memory)},
   {UINT64_C(0x720000000),heap_memory,sizeof(heap_memory)}__STATIC_IMAGE_REGIONS__};
  mx_cfg_memory mem={regions,(uint32_t)(sizeof(regions)/sizeof(regions[0]))};
