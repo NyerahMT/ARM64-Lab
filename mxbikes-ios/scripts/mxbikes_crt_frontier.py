@@ -12,7 +12,7 @@ from pathlib import Path
 import struct
 import sys
 
-from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_INVALID, UC_MODE_64, Uc
+from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ, UC_HOOK_MEM_INVALID, UC_MODE_64, Uc
 from unicorn.x86_const import (
     UC_X86_REG_GS_BASE, UC_X86_REG_RAX, UC_X86_REG_RCX,
     UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_R9, UC_X86_REG_RDI, UC_X86_REG_RSI,
@@ -37,7 +37,7 @@ CRT_TRAMPOLINE_START = STUB_BASE + 0x9000
 MAX_SECONDS_MICRO = 120_000_000
 
 
-def run_frontier(executable, private_archive, *, verified_rvas=()):
+def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None):
     verified_rvas=frozenset(verified_rvas)
     if len(verified_rvas)>4096 or any(not isinstance(r,int) or not 0<r<2**32 for r in verified_rvas):
         raise ValueError('Unbounded native entry coverage inventory')
@@ -154,6 +154,8 @@ def run_frontier(executable, private_archive, *, verified_rvas=()):
     decoder = Cs(CS_ARCH_X86, CS_MODE_64)
 
     def code_hook(emulator, address, instr_size, _):
+        if observer is not None:
+            observer.on_code(emulator,address,instr_size)
         # Fail closed before any non-image code, except controlled import stubs.
         if any(lo <= address < hi for lo,hi in trampoline_ranges):
             trace["crt_trampoline_instructions"] += 1
@@ -518,6 +520,10 @@ def run_frontier(executable, private_archive, *, verified_rvas=()):
 
     uc.hook_add(UC_HOOK_CODE, code_hook)
     uc.hook_add(UC_HOOK_MEM_WRITE, write_hook)
+    if observer is not None:
+        def observe_memory(emu,access,address,length,value,_):
+            observer.on_memory(emu,address,length)
+        uc.hook_add(UC_HOOK_MEM_READ|UC_HOOK_MEM_WRITE,observe_memory)
     uc.hook_add(UC_HOOK_MEM_INVALID, invalid_mem)
     # Resume after constructing a real callback trampoline. Do not clear a
     # blocked dependency or skip any original initializer code.
