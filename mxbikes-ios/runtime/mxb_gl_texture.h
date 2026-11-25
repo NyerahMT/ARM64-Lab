@@ -14,8 +14,10 @@ extern "C" {
 #define MXB_GL_TEXTURE_MAG_FILTER 0x2800u
 #define MXB_GL_NEAREST 0x2600u
 #define MXB_GL_LINEAR 0x2601u
-#define MXB_GL_MAX_TEXTURES 8u
-#define MXB_GL_MAX_TEX_DIM 256u
+#define MXB_GL_MAX_TEXTURES 128u
+#define MXB_GL_MAX_TEXTURE_NAMES_PER_CALL 32u
+#define MXB_GL_MAX_TEX_DIM 2048u
+#define MXB_GL_MAX_TEX_BYTES (64u*1024u*1024u)
 typedef int (*MXBGLGuestWrite)(void *context,uint64_t guest_address,
                                 const void *input,size_t length);
 typedef struct MXBGLTextures MXBGLTextures;
@@ -23,6 +25,7 @@ MXBGLTextures *mxb_tex_create(void);
 void mxb_tex_destroy(MXBGLTextures *textures);
 void mxb_tex_reset(MXBGLTextures *textures);
 int mxb_tex_enabled(const MXBGLTextures *textures);
+size_t mxb_tex_storage_bytes(const MXBGLTextures *textures);
 /* Returns a fully copied RGBA8 owned upload only after successful guest read.
  * Pixel storage persists until next bind/upload/delete/reset. */
 const uint8_t *mxb_tex_current_rgba(const MXBGLTextures *textures,
