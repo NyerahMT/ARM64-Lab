@@ -9,10 +9,15 @@ typedef struct {
  uint32_t name;
  uint64_t stack[10];
  int blocked;
+ uint32_t names[32];
+ int virtual_pixels;
 } Memory;
 static int rd(void*ctx,uint64_t address,void*out,size_t n){
  Memory*m=(Memory*)ctx;
  if(m->blocked)return 0;
+ if(m->virtual_pixels&&address>=UINT64_C(0x900000000)&&address-UINT64_C(0x900000000)<UINT64_C(0x1000000)&&n<=UINT64_C(0x1000000)-(address-UINT64_C(0x900000000))){
+  memset(out,0x7a,n);return 1;
+ }
  if(address>=MEM&&address-MEM<=sizeof(*m)&&n<=sizeof(*m)-(size_t)(address-MEM)){
   memcpy(out,(const uint8_t*)m+(size_t)(address-MEM),n);return 1;
  }
@@ -67,13 +72,41 @@ int main(void){
  px=mxb_tex_current_rgba(t,&w,&h);
  if(!px||w!=3||px[12]!=32)return 10;
  m.blocked=0;
- if(invoke(t,&m,"glTexImage2D",MXB_GL_TEXTURE_2D,0,MXB_GL_RGBA,257)!=MXB_GL_GUEST_UNSUPPORTED)return 11;
+ if(invoke(t,&m,"glTexImage2D",MXB_GL_TEXTURE_2D,0,MXB_GL_RGBA,MXB_GL_MAX_TEX_DIM+1u)!=MXB_GL_GUEST_UNSUPPORTED)return 11;
  if(invoke(t,&m,"glTexParameteri",MXB_GL_TEXTURE_2D,MXB_GL_TEXTURE_MIN_FILTER,MXB_GL_LINEAR,0)!=MXB_GL_GUEST_UNSUPPORTED)return 12;
  if(invoke(t,&m,"glDisable",MXB_GL_TEXTURE_2D,0,0,0)!=MXB_GL_GUEST_OK||
     mxb_tex_current_rgba(t,&w,&h)!=0)return 13;
  if(invoke(t,&m,"glEnable",MXB_GL_TEXTURE_2D,0,0,0)!=MXB_GL_GUEST_OK)return 14;
  if(invoke(t,&m,"glDeleteTextures",1,MEM+offsetof(Memory,name),0,0)!=MXB_GL_GUEST_OK)return 15;
  if(mxb_tex_current_rgba(t,&w,&h)!=0)return 16;
+ if(mxb_tex_storage_bytes(t)!=16u)return 17;
+ /* A 512x512 atlas is larger than the previous implementation allowed. */
+ if(invoke(t,&m,"glBindTexture",UINT64_C(0xdeadbeef00000de1),UINT64_C(0xfeedface00000020),0,0)!=MXB_GL_GUEST_OK)return 18;
+ m.virtual_pixels=1;
+ m.stack[5]=UINT64_C(0xaaaaaaaa00000200);m.stack[6]=0;
+ m.stack[7]=MXB_GL_RGBA;m.stack[8]=MXB_GL_UNSIGNED_BYTE;m.stack[9]=UINT64_C(0x900000000);
+ if(invoke(t,&m,"glTexImage2D",MXB_GL_TEXTURE_2D,0,MXB_GL_RGBA,512)!=MXB_GL_GUEST_OK)return 19;
+ px=mxb_tex_current_rgba(t,&w,&h);
+ if(!px||w!=512||h!=512||px[0]!=0x7a||px[512u*512u*4u-1u]!=0x7a||
+    mxb_tex_storage_bytes(t)!=16u+512u*512u*4u)return 20;
+ /* Generate names until bank is nearly full, then request too many. The
+  * failed request must not reserve any partial names. */
+ mxb_tex_reset(t);
+ for(unsigned i=0;i<3u;i++)
+  if(invoke(t,&m,"glGenTextures",32,MEM+offsetof(Memory,names),0,0)!=MXB_GL_GUEST_OK)return 21;
+ if(invoke(t,&m,"glGenTextures",31,MEM+offsetof(Memory,names),0,0)!=MXB_GL_GUEST_OK)return 22;
+ if(invoke(t,&m,"glGenTextures",2,MEM+offsetof(Memory,names),0,0)!=MXB_GL_GUEST_RENDER_REJECTED)return 23;
+ if(invoke(t,&m,"glGenTextures",1,MEM+offsetof(Memory,name),0,0)!=MXB_GL_GUEST_OK||m.name!=128)return 24;
+ if(invoke(t,&m,"glDeleteTextures",2,MEM+sizeof(Memory)-4,0,0)!=MXB_GL_GUEST_UNMAPPED_POINTER)return 25;
+ if(invoke(t,&m,"glGenTextures",1,MEM+offsetof(Memory,name),0,0)!=MXB_GL_GUEST_RENDER_REJECTED)return 26;
+ if(invoke(t,&m,"glDeleteTextures",1,MEM+offsetof(Memory,name),0,0)!=MXB_GL_GUEST_OK)return 27;
+ m.blocked=1;
+ if(invoke(t,&m,"glGenTextures",1,MEM+offsetof(Memory,name),0,0)!=MXB_GL_GUEST_UNMAPPED_POINTER)return 28;
+ m.blocked=0;
+ if(invoke(t,&m,"glGenTextures",1,MEM+offsetof(Memory,name),0,0)!=MXB_GL_GUEST_OK||m.name!=129)return 29;
+ /* Reset releases all allocated storage. */
+ mxb_tex_reset(t);
+ if(mxb_tex_storage_bytes(t)!=0u)return 30;
  mxb_tex_destroy(t);
  return 0;
 }
