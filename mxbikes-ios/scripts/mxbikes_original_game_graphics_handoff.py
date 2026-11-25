@@ -35,7 +35,7 @@ LIBRARY=b"OPENGL32.dll"
 MASK=(1<<64)-1
 TEXTURE_NAMES={
     "glBindTexture","glGenTextures","glDeleteTextures","glTexImage2D",
-    "glTexParameteri","glPixelStorei","glEnable","glDisable"
+    "glTexParameteri","glPixelStorei"
 }
 
 class Registers(C.Structure):
@@ -141,7 +141,8 @@ class VerifiedGameGL:
         for i,register in enumerate((UC_X86_REG_XMM0,UC_X86_REG_XMM1,
                                      UC_X86_REG_XMM2,UC_X86_REG_XMM3)):
             regs.xmm_low64[i]=u.reg_read(register)&MASK
-        if symbol in TEXTURE_NAMES:
+        texture_capability = symbol in ("glEnable","glDisable") and (regs.rcx & 0xffffffff)==0x0de1
+        if symbol in TEXTURE_NAMES or texture_capability:
             status=self.lib.mxb_tex_dispatch_win64(
                 self.textures,LIBRARY,symbol.encode(),C.byref(regs),
                 self.reader_ptr,self.writer_ptr,None)
