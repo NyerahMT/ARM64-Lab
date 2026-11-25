@@ -1,5 +1,6 @@
 #include "mxb_standalone_imports.h"
 #include "mxb_standalone_memory.h"
+#include "mxb_standalone_format.h"
 static int eq(const char *a,const char *b,int fold){
     if(!a||!b)return 0;
     while(*a&&*b){unsigned x=(unsigned char)*a++,y=(unsigned char)*b++;
@@ -21,6 +22,7 @@ static int output(const mxb_crt_memory *m,uint64_t a,const uint8_t *s,size_t n){
     if(!span(a,n)||!m||!m->writable||!m->write||!m->writable(m->ctx,a,n))return 0;
     m->write(m->ctx,a,s,n);return 1;
 }
+size_t mxb_startup_size(void){return sizeof(mxb_startup_imports);}
 int mxb_startup_init(mxb_startup_imports *p,const uint8_t *root,size_t rn,
                      const uint8_t *path,size_t pn,uint64_t image,uint64_t ticks,uint64_t key){
     if(!p||!path||!pn||pn>MXB_PATH_CAP||!image||!key||path[pn-1])return 0;
@@ -32,10 +34,14 @@ int mxb_startup_init(mxb_startup_imports *p,const uint8_t *root,size_t rn,
 int mxb_startup_dispatch(mxb_startup_imports *p,const mxb_crt_memory *m,
                          const char *dll,const char *name,mxb_crt_regs *r){
     int crt=eq(dll,"msvcr90.dll",1),win=eq(dll,"kernel32.dll",1)||eq(dll,"kernelbase.dll",1),mm=eq(dll,"winmm.dll",1);
-    if(!crt&&!win&&!mm)return 0;
+    int ws=eq(dll,"ws2_32.dll",1);
+    if(!crt&&!win&&!mm&&!ws)return 0;
     if(!p||!r||(r->rsp&15)!=8||!span(r->rsp,48))return -1;
+    if(ws)return mxb_winsock_dispatch(&p->winsock,&p->heap,m,name,r);
     uint8_t buf[MXB_PATH_CAP];size_t n=0;uint32_t cap=(uint32_t)r->rdx;
     if(crt){
+        int file=mxb_files_dispatch(&p->files,m,name,r);if(file!=0)return file;
+        int fmt=mxb_format_dispatch(m,name,r);if(fmt!=0)return fmt;
         int memory=mxb_memory_dispatch(m,name,r);
         if(memory!=0)return memory;
         int heap=mxb_heap_dispatch(&p->heap,m,name,r);

@@ -3,6 +3,8 @@
 #include "mxb_standalone_platform.h"
 #include "mxb_standalone_crt.h"
 #include "mxb_standalone_heap.h"
+#include "mxb_standalone_winsock.h"
+#include "mxb_standalone_files.h"
 /* Native import dispatcher for the standalone startup model. Callsite and
  * guest region provenance must be established by the caller. */
 typedef struct {
@@ -11,7 +13,10 @@ typedef struct {
     uint8_t module_path[MXB_PATH_CAP];
     uint64_t image_base, exception_filter;
     mxb_heap heap;
+    mxb_winsock winsock;
+    mxb_files files;
 } mxb_startup_imports;
+size_t mxb_startup_size(void);
 int mxb_startup_init(mxb_startup_imports *,const uint8_t *,size_t,
                      const uint8_t *,size_t,uint64_t,uint64_t,uint64_t);
 int mxb_startup_dispatch(mxb_startup_imports *,const mxb_crt_memory *,

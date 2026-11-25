@@ -2,13 +2,14 @@
 import ctypes as C
 from mxb_demo_native_crt import NativeCRT, APIS, _Process, _Regs, _Memory, _Read, _Check, _Write, _Exec
 
-CRT_APIS=APIS|{"strcpy","strrchr","malloc","calloc","free","memset","memcpy","memmove","memcmp"}
+CRT_APIS=APIS|{"strcpy","strrchr","malloc","calloc","free","memset","memcpy","memmove","memcmp","sprintf","fopen","fread","fseek","ftell","fclose","feof","ferror","fgets"}
 HEAP_BASE=0x770000000
 HEAP_CAP=16*1024*1024
 WIN_APIS=frozenset({"GetTickCount","GetTickCount64","GetLastError","SetLastError",
                    "SetCurrentDirectoryA","GetCurrentDirectoryA","GetModuleFileNameA",
                    "SetUnhandledExceptionFilter"})
 MM_APIS=frozenset({"timeGetTime","timeBeginPeriod","timeEndPeriod"})
+WS_APIS=frozenset({"WSAStartup","WSACleanup","WSAGetLastError","WSASetLastError","htonl","ntohl","htons","ntohs","#115","#116","#111","#112","#8","#14","#9","#15","inet_pton","inet_ntop","getnameinfo","getaddrinfo","freeaddrinfo"})
 CLOCKS=frozenset({"GetTickCount","GetTickCount64","timeGetTime"})
 
 class _Platform(C.Structure):
@@ -21,14 +22,27 @@ class _Block(C.Structure):
 class _Heap(C.Structure):
     _fields_=[("blocks",_Block*256)]
 
+class _Winsock(C.Structure):
+    _fields_=[("refs",C.c_uint32),("last_error",C.c_uint32),("results",C.c_uint64*16)]
+
+class _Mount(C.Structure):
+    _fields_=[("name",C.c_char*128),("data",C.c_void_p),("size",C.c_uint64)]
+class _FileHandle(C.Structure):
+    _fields_=[("token",C.c_uint64),("pos",C.c_uint64),("mount",C.c_uint32),("eof",C.c_uint32)]
+class _Files(C.Structure):
+    _fields_=[("mounts",_Mount*16),("handles",_FileHandle*32),("generation",C.c_uint64)]
+
 class _Startup(C.Structure):
     _fields_=[("platform",_Platform),("crt",_Process),("module_path",C.c_uint8*260),
-              ("image_base",C.c_uint64),("exception_filter",C.c_uint64),("heap",_Heap)]
+              ("image_base",C.c_uint64),("exception_filter",C.c_uint64),("heap",_Heap),("winsock",_Winsock),("files",_Files)]
 
 class NativeStartup(NativeCRT):
     def __init__(self,path,image_base,root=b"C:\\MXBReference\0",
                  module=b"C:\\MXBReference\\mxbikes.exe\0",ticks=0x9abc):
         super().__init__(path)
+        self.lib.mxb_startup_size.argtypes=[]
+        self.lib.mxb_startup_size.restype=C.c_size_t
+        if self.lib.mxb_startup_size()!=C.sizeof(_Startup):raise ValueError("native_startup_abi_mismatch")
         self.lib.mxb_startup_init.argtypes=[C.POINTER(_Startup),C.c_char_p,C.c_size_t,
                   C.c_char_p,C.c_size_t,C.c_uint64,C.c_uint64,C.c_uint64]
         self.lib.mxb_startup_init.restype=C.c_int
@@ -43,13 +57,25 @@ class NativeStartup(NativeCRT):
             raise ValueError("invalid_native_startup_context")
         self.state=self.startup.crt
         self.clock_instruction=0
+        self.lib.mxb_files_mount.argtypes=[C.POINTER(_Files),C.c_char_p,C.c_void_p,C.c_uint64]
+        self.lib.mxb_files_mount.restype=C.c_int
+        self._mounted_buffers=[]
+
+    def mount_asset(self,name,data):
+        """Explicit caller-selected immutable asset, not guest-selected host path."""
+        if not isinstance(data,bytes) or len(data)>64*1024*1024:raise ValueError("invalid_asset_data")
+        buf=C.create_string_buffer(data)
+        if self.lib.mxb_files_mount(C.byref(self.startup.files),name.encode("ascii"),buf,len(data))!=1:
+            raise ValueError("invalid_asset_mount")
+        self._mounted_buffers.append(buf)
 
     @staticmethod
     def supports(dll,name):
         dll=dll.lower()
         return (dll=="msvcr90.dll" and name in CRT_APIS or
                 dll in ("kernel32.dll","kernelbase.dll") and name in WIN_APIS or
-                dll=="winmm.dll" and name in MM_APIS)
+                dll=="winmm.dll" and name in MM_APIS or
+                dll=="ws2_32.dll" and name in WS_APIS)
 
     def advance_to_instruction(self,count):
         # Deterministic test clock; not a physical time or performance estimate.

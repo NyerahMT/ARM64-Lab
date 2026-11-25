@@ -21,6 +21,7 @@ sys.path.insert(0,str(ROOT))
 from tools.pe_probe import PE
 from mxbikes_first_callee_emu import import_slots
 from mxb_gl_callsite import prove_callsite
+from mxb_demo_conditional_callsite import prove_conditional_callsite
 from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE, process_strings, process_service, PROCESS_ENVIRONMENT_APIS
 from mxb_demo_crt_process import CRT_DATA, data_address, data_page, Process, APIS as CRT_PROCESS_APIS
 from mxb_demo_win64_environment import COMMAND_LINE_A
@@ -63,7 +64,7 @@ def align(n):
 
 
 def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain=False,
-            native_startup_library=None):
+            native_startup_library=None, asset_paths=()):
     if not 1<=limit<=MAX_INSTRUCTIONS:raise ValueError("invalid_instruction_budget")
     if hashlib.sha256(pe.b).hexdigest()!=DEMO_SHA:raise ValueError("public_demo_SHA_mismatch")
     if native_crt_library is not None and native_startup_library is not None:
@@ -74,6 +75,13 @@ def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain
     base=int(metadata["image_base"],16)
     startup=NativeStartup(native_startup_library,base) if native_startup_library is not None else None
     native=startup if startup is not None else (NativeCRT(native_crt_library) if native_crt_library is not None else None)
+    if asset_paths and startup is None:raise ValueError("asset_mounts_require_native_startup")
+    if len(asset_paths)>16:raise ValueError("too_many_asset_mounts")
+    for path in asset_paths:
+        path=Path(path)
+        if not path.is_file():raise ValueError("asset_mount_not_regular_file")
+        with path.open("rb") as source:data=source.read(64*1024*1024+1)
+        startup.mount_asset(path.name,data)
     entry=int(metadata["entry_rva"],16)
     image_size=pe.u32(pe.opt+56)
     header_size=pe.u32(pe.opt+60)
@@ -167,6 +175,11 @@ def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain
         u.emu_stop()
     def write_qword(ptr,value):
         checked_write(u.mem_write,writable,ptr,struct.pack("<Q",value))
+    def prove_origin(cpu,return_va,pc,lib,name):
+        direct=prove_callsite(pe,iat,base,cpu.mem_read,return_va,pc,lib,name)
+        if direct is not None:return direct
+        return prove_conditional_callsite(pe,iat,base,cpu.mem_read,return_va,pc,lib,name,
+                                          [int(rva,16) for rva in recent])
     def hook(cpu,pc,size,_):
         nonlocal original,crt_active,exception_filter,winmain_reached
         if CRT_WALK<=pc<CRT_WALK+PAGE:
@@ -228,7 +241,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain
                 try:
                     rsp=cpu.reg_read(UC_X86_REG_RSP)
                     ret=struct.unpack("<Q",cpu.mem_read(rsp,8))[0]
-                    evidence=prove_callsite(pe,iat,base,cpu.mem_read,ret,pc,lib,name)
+                    evidence=prove_origin(cpu,ret,pc,lib,name)
                 except (ValueError,UcError,struct.error):
                     evidence=None
                 halt("unsupported_import",import_name=key,callsite=evidence)
@@ -239,7 +252,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain
             try:
                 rsp=cpu.reg_read(UC_X86_REG_RSP)
                 return_va=struct.unpack("<Q",cpu.mem_read(rsp,8))[0]
-                evidence=prove_callsite(pe,iat,base,cpu.mem_read,return_va,pc,lib,name)
+                evidence=prove_origin(cpu,return_va,pc,lib,name)
                 if evidence is None:
                     halt("unverified_environment_import_callsite",import_name=key)
                     return
@@ -354,6 +367,9 @@ def execute(pe, limit=MAX_INSTRUCTIONS, native_crt_library=None, stop_at_winmain
                                  "exit_callbacks_registered":native.exit_count if native else 0},
             "crt_backend":"native_startup_c" if startup else "native_c" if native else "python_reference",
             "native_startup_heap_mapped":startup is not None,
+            "native_asset_mount_count":len(asset_paths),
+            "native_winsock_initialization_refs":startup.startup.winsock.refs if startup else 0,
+            "network_transport_implemented":False,
             "native_heap_live_blocks":sum(bool(b.address) for b in startup.startup.heap.blocks) if startup else 0,
             "exception_filter_registered":bool(startup.startup.exception_filter if startup else exception_filter),
             "exception_dispatch_implemented":False,
@@ -373,13 +389,15 @@ def main():
     native_group.add_argument("--native-crt-library",type=Path,help="Locally compiled trusted native CRT shared library")
     native_group.add_argument("--native-startup-library",type=Path,help="Locally compiled trusted combined native startup library")
     p.add_argument("--instruction-limit",type=int,default=MAX_INSTRUCTIONS)
+    p.add_argument("--asset",type=Path,action="append",default=[],help="Explicit original read-only asset file; guest sees only its basename")
     p.add_argument("--stop-at-winmain",action="store_true",help="Stop at the proven standalone WinMain call target")
     args=p.parse_args()
     if not args.demo_exe.is_file() or not 0<args.demo_exe.stat().st_size<=MAX_IMAGE:
         p.error("missing_or_oversized_demo")
     if not 1<=args.instruction_limit<=MAX_INSTRUCTIONS:p.error("invalid_instruction_budget")
     result=execute(PE(args.demo_exe),limit=args.instruction_limit,native_crt_library=args.native_crt_library,
-                   native_startup_library=args.native_startup_library,stop_at_winmain=args.stop_at_winmain)
+                   native_startup_library=args.native_startup_library,stop_at_winmain=args.stop_at_winmain,
+                   asset_paths=args.asset)
     print(json.dumps(result,indent=2))
     if result["original_x64_instruction_executions"]<=0:
         raise SystemExit("No genuine demo instructions executed")

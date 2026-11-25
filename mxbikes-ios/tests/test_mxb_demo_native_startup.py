@@ -10,7 +10,7 @@ class Tests(unittest.TestCase):
         cls.tmp=tempfile.TemporaryDirectory();cls.lib=Path(cls.tmp.name)/"startup.so"
         root=Path(os.environ.get("MXB_RUNTIME",Path(__file__).resolve().parents[1]/"runtime"))
         subprocess.run(["cc","-shared","-fPIC","-O2","-Wall","-Wextra","-Werror",
-          *[str(root/f"mxb_standalone_{n}.c") for n in ("crt","platform","imports","heap","memory")],"-o",str(cls.lib)],check=True)
+          *[str(root/f"mxb_standalone_{n}.c") for n in ("crt","platform","imports","heap","memory","winsock","format","files")],"-o",str(cls.lib)],check=True)
     @classmethod
     def tearDownClass(cls):cls.tmp.cleanup()
     def setUp(self):
@@ -81,4 +81,38 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.call("msvcr90.dll","memmove",B+257,B+256,4),B+257)
         self.assertEqual(self.mem[256:261],b"aabcd")
         self.assertEqual(self.call("msvcr90.dll","memcmp",B+32,B+257,4),0)
+    def test_winsock_lifecycle(self):
+        self.assertEqual(self.call("WS2_32.dll","#115",2,B+256),0)
+        self.assertEqual(self.p.startup.winsock.refs,1)
+        self.assertEqual(self.mem[256:260],b"\x02\x00\x02\x02")
+        self.assertEqual(self.call("ws2_32.dll","#116"),0)
+        self.assertEqual(self.p.startup.winsock.refs,0)
+        self.assertFalse(self.p.supports("WS2_32.dll","socket"))
+    def test_loopback_resolution(self):
+        self.mem[32:42]=b"localhost\0"
+        self.assertEqual(self.call("WS2_32.dll","getaddrinfo",B+32,0,0,B+128),0)
+        a=struct.unpack_from('<Q',self.mem,128)[0]
+        self.assertEqual(a,HEAP_BASE)
+        self.assertEqual(self.heap[52:56],b"\x7f\x00\x00\x01")
+        self.assertEqual(self.call("WS2_32.dll","freeaddrinfo",a),99)
+        with self.assertRaises(ValueError):self.call("WS2_32.dll","freeaddrinfo",a)
+    def test_format(self):
+        self.mem[32:41]=b"%lu.%lu\0"
+        self.assertEqual(self.call("MSVCR90.dll","sprintf",B+128,B+32,127,1),5)
+        self.assertEqual(self.mem[128:134],b"127.1\0")
+    def test_mounted_file(self):
+        self.p.mount_asset("fixture.ini",b"a=1\nb=2")
+        self.mem[32:44]=b"fixture.ini\0";self.mem[64:67]=b"rb\0"
+        h=self.call("MSVCR90.dll","fopen",B+32,B+64)
+        self.assertEqual(self.call("MSVCR90.dll","fgets",B+128,20,h),B+128)
+        self.assertEqual(self.mem[128:133],b"a=1\n\0")
+        self.assertEqual(self.call("MSVCR90.dll","ftell",h),4)
+        self.assertEqual(self.call("MSVCR90.dll","fread",B+128,1,3,h),3)
+        self.assertEqual(self.mem[128:131],b"b=2")
+        self.assertEqual(self.call("MSVCR90.dll","fclose",h),0)
+        with self.assertRaises(ValueError):self.call("MSVCR90.dll","ftell",h)
+    def test_mount_rejection(self):
+        with self.assertRaises(ValueError):self.p.mount_asset("../file",b"x")
+        self.mem[32:44]=b"missing.ini\0";self.mem[64:67]=b"rb\0"
+        with self.assertRaises(ValueError):self.call("MSVCR90.dll","fopen",B+32,B+64)
 if __name__=="__main__":unittest.main()

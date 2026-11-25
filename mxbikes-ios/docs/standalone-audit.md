@@ -121,3 +121,27 @@ python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/offi
 ```
 
 The Unicorn-specific wiring is not yet execution-tested locally, and the native iOS importer still needs integration. No original executable bytes or assets committed. No Actions runs started.
+
+### Batch: local Winsock setup, variadic formatting, indirect-call provenance and read-only mounted files
+
+A local original-code x64 reference trace, using the same SHA-pinned official beta21e executable and exact native C runtime, advanced from 287,083 executions / 833 unique original addresses to 290,025 executions / 1,939 unique original addresses. These counts are not translated ARM64 instructions or a game completion percentage.
+
+Verified ordinal 115 as WSAStartup using the public Winsock specification and the Wine ws2_32 ordinal table; Win64 WSADATA is modeled as 408 bytes. The new backend implements bounded Winsock 2.x initialization/cleanup, error-state access, byte-order conversions, IPv4 numeric parsing/formatting, and the explicitly configured localhost IPv4 name and reverse-name mapping. A bounded guest heap allocation owns each returned local address record, released by freeaddrinfo. No sockets, external DNS, server responses, network login or license behavior are modeled; unsupported transport calls stop the runner. The original startup's observed local loopback resolution sequence completed.
+
+Added a bounded Win64 sprintf subset for literal text, integer conversions including Windows 32-bit long, strings and characters, reading argument five onward from the guest stack. Width/precision, floating-point, %n, unsupported specifiers and invalid destinations remain unsupported. The original address-formatting call returned. A separate conditional IAT fallback verifier checks original/mapped instruction bytes, exact observed call/jump trace, null fallback pointer and live IAT destination; the next allocation wrapper was accepted and ten additional original malloc calls were reached after the earlier boundary.
+
+The next actual original import is MSVCR90!fopen, requesting core.ini in rb mode. No genuine core.ini was present in the local executable-only upload. Implemented an explicitly mounted read-only flat file namespace: fopen, fread, fseek, ftell, fclose, feof, ferror, fgets; no host paths from guest data, synthetic config, missing-file fallback, write mode or general Windows filesystem. Capacity: 16 immutable caller-selected files, 32 generation-tagged handles, 64 MiB per file. Real asset contents stay outside the repository. Binary streams only; unmounted requests are rejected rather than pretending file absence. The module has fixture validation but the original game was not run past fopen.
+
+Local checks: all five optimized and ASan/UBSan native suites passed (102 numbered checkpoints: 25 unified imports, 17 heap, 16 memory, 24 network/format, 20 file). Fifteen native Python/C bridge tests and eight conditional-callsite tests passed. Thirteen translation units (eight C implementations plus five fixtures) compiled as iOS ARM64 Mach-O objects. All 15 staged source/test blobs were verified against locally tested source hashes. The final Unicorn-specific optional asset and callsite wiring is unexecuted locally (Unicorn unavailable), and the iOS native importer is not yet integrated. No CI usage or original executable/assets committed.
+
+Build and source-only regression:
+
+```sh
+python mxbikes-ios/tests/test_mxb_standalone_batch.py
+python mxbikes-ios/tests/test_mxb_demo_native_startup.py
+python mxbikes-ios/tests/test_mxb_demo_conditional_callsite.py
+cc -shared -fPIC -O2 mxbikes-ios/runtime/mxb_standalone_{crt,platform,heap,memory,imports,winsock,format,files}.c -o /tmp/mxb-startup.so
+python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/official/demo/mxbikes.exe --native-startup-library /tmp/mxb-startup.so --asset /path/to/official/demo/core.ini --instruction-limit 1000000
+```
+
+Next milestone: real asset/config parsing using the genuine standalone installation, followed by graphics/window initialization. No ARM64 game execution or menu rendering is claimed.
