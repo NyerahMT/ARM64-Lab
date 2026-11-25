@@ -34,7 +34,7 @@ ROOT=Path(__file__).resolve().parents[1]
 LIBRARY=b"OPENGL32.dll"
 MASK=(1<<64)-1
 TEXTURE_NAMES={
-    "glBindTexture","glGenTextures","glDeleteTextures","glTexImage2D",
+    "glBindTexture","glGenTextures","glDeleteTextures","glTexImage2D","glTexSubImage2D",
     "glTexParameteri","glPixelStorei"
 }
 
