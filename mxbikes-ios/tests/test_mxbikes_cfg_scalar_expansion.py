@@ -16,6 +16,19 @@ FORMS=[
     ("cmp_word_imm", "66817b02ffff7406b801000000c3b802000000c3"),
     ("mov_mem_byte_imm", "c643057fc3"),
     ("mov_mem_word_imm", "66c743067856c3"),
+    ("movaps_stack_save_restore", "0f297424080f57f60f28742408c3"),
+    ("movaps_heap_roundtrip", "0f29030f280bc3"),
+    ("movups_unaligned_heap", "0f114b010f105301c3"),
+    ("movss_heap_load", "f30f104304c3"),
+    ("movsd_heap_load", "f20f107308c3"),
+    ("movss_register", "f30f10c1c3"),
+    ("movsd_register", "f20f10f7c3"),
+    ("movss_heap_store", "f30f114304c3"),
+    ("movsd_heap_store", "f20f117308c3"),
+    ("pxor_high_register", "66450fefe5c3"),
+    ("xorpd_register", "660f57c1c3"),
+    ("movsd_static", "f20f100508000000c3"),
+
 ]
 
 class Fixture:
@@ -51,4 +64,4 @@ if __name__=="__main__":
     plans,refs=prepare()
     for i in range(0,len(plans),4):
         cfg.compile_batch(plans[i:i+4],refs)
-    print("Scalar expansion x64 / native / ARM64 fixtures passed:",len(plans)*cfg.CASES)
+    print("Scalar and SIMD expansion x64 / native / ARM64 fixtures passed:",len(plans)*cfg.CASES)
