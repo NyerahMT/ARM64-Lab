@@ -138,7 +138,7 @@ int main(void){
     mxb_gl_vertex_count(s)!=0u)return 29;
  regs.r9=HEAP+96;regs.rdx=513;
  if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_RENDER_REJECTED)return 30;
- regs.rdx=6;regs.r8=MXB_GL_UNSIGNED_BYTE;
+ regs.rdx=6;regs.r8=MXB_GL_FLOAT;
  if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_RENDER_REJECTED)return 31;
  uint32_t wide[3]={2,1,0};
  memcpy(mem.heap+96,wide,sizeof(wide));
@@ -227,6 +227,58 @@ int main(void){
  regs.rcx=HEAP+127;
  if(invoke(s,&mem,&regs,"glVertex2fv")!=MXB_GL_GUEST_UNMAPPED_POINTER||
     invoke(s,&mem,&regs,"glColor4fv")!=MXB_GL_GUEST_UNMAPPED_POINTER)return 65;
+ /* Menu-style XY arrays and byte indices: the last XY pair ends exactly
+  * at the mapped guest heap boundary. Reading a third float would fail. */
+ mxb_gl_reset(s);
+ const float xy_menu[6]={-1,-.5f,1,-.5f,0,1};
+ const uint8_t rgb_menu[9]={255,0,0,0,255,0,0,0,255};
+ const uint8_t byte_ix[3]={2,0,1};
+ memcpy(mem.heap+104,xy_menu,sizeof(xy_menu));
+ memcpy(mem.heap+64,rgb_menu,sizeof(rgb_menu));
+ memcpy(mem.heap+80,byte_ix,sizeof(byte_ix));
+ regs.xmm_low64[0]=bits_f(.1f);regs.xmm_low64[1]=bits_f(.2f);
+ regs.xmm_low64[2]=bits_f(.3f);regs.xmm_low64[3]=bits_f(.25f);
+ if(invoke(s,&mem,&regs,"glColor4f")!=MXB_GL_GUEST_OK)return 66;
+ regs.rcx=2;regs.rdx=MXB_GL_FLOAT;regs.r8=0;regs.r9=HEAP+104;
+ if(invoke(s,&mem,&regs,"glVertexPointer")!=MXB_GL_GUEST_OK)return 67;
+ regs.rcx=3;regs.rdx=MXB_GL_UNSIGNED_BYTE;regs.r8=0;regs.r9=HEAP+64;
+ if(invoke(s,&mem,&regs,"glColorPointer")!=MXB_GL_GUEST_OK)return 68;
+ regs.rcx=MXB_GL_VERTEX_ARRAY;
+ if(invoke(s,&mem,&regs,"glEnableClientState")!=MXB_GL_GUEST_OK)return 69;
+ regs.rcx=MXB_GL_COLOR_ARRAY;
+ if(invoke(s,&mem,&regs,"glEnableClientState")!=MXB_GL_GUEST_OK)return 70;
+ regs.rcx=MXB_GL_TRIANGLES;regs.rdx=3;regs.r8=MXB_GL_UNSIGNED_BYTE;regs.r9=HEAP+80;
+ if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_OK||
+    mxb_gl_vertex_count(s)!=3u)return 71;
+ vertices=mxb_gl_vertices(s);
+ if(!nearly(vertices[0].position[1],1)||
+    !nearly(vertices[1].position[0],-1)||
+    !nearly(vertices[2].position[0],1))return 72;
+ for(unsigned i=0;i<3u;i++){
+  if(!nearly(vertices[i].position[2],0)||
+     !nearly(vertices[i].position[3],1)||
+     !nearly(vertices[i].color[3],1))return 73;
+ }
+ if(!nearly(vertices[0].color[2],1)||
+    !nearly(vertices[1].color[0],1)||
+    !nearly(vertices[2].color[1],1))return 74;
+ float restored[4];
+ if(!mxb_gl_current_color(s,restored)||!nearly(restored[3],.25f))return 75;
+ /* No partial output when a byte index or XY pair is outside guest memory. */
+ regs.r9=HEAP+127;
+ if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_UNMAPPED_POINTER||
+    mxb_gl_vertex_count(s)!=3u)return 76;
+ regs.rcx=2;regs.rdx=MXB_GL_FLOAT;regs.r8=0;regs.r9=HEAP+105;
+ if(invoke(s,&mem,&regs,"glVertexPointer")!=MXB_GL_GUEST_OK)return 77;
+ regs.rcx=MXB_GL_TRIANGLES;regs.rdx=3;regs.r8=MXB_GL_UNSIGNED_BYTE;regs.r9=HEAP+80;
+ if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_UNMAPPED_POINTER||
+    mxb_gl_vertex_count(s)!=3u)return 78;
+ /* Nonindexed 2D path must use the same two-component layout. */
+ regs.rcx=2;regs.rdx=MXB_GL_FLOAT;regs.r8=0;regs.r9=HEAP+104;
+ if(invoke(s,&mem,&regs,"glVertexPointer")!=MXB_GL_GUEST_OK)return 79;
+ regs.rcx=MXB_GL_TRIANGLES;regs.rdx=0;regs.r8=3;regs.r9=0;
+ if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_OK||
+    mxb_gl_vertex_count(s)!=6u)return 80;
  mxb_gl_destroy(s);
  return 0;
 }
