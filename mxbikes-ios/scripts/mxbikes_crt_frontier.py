@@ -37,11 +37,15 @@ CRT_TRAMPOLINE_START = STUB_BASE + 0x9000
 MAX_SECONDS_MICRO = 120_000_000
 
 
-def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None):
+def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None,
+                 native_dispatch=None, finish=None):
     verified_rvas=frozenset(verified_rvas)
     if len(verified_rvas)>4096 or any(not isinstance(r,int) or not 0<r<2**32 for r in verified_rvas):
         raise ValueError('Unbounded native entry coverage inventory')
     native_entry_hits=collections.Counter()
+    native_completed=collections.Counter()
+    if native_dispatch is not None and (not verified_rvas or len(verified_rvas)>64):
+        raise ValueError("Invalid native dispatch entry set")
     # The DLL bytes remain in memory on the private Actions runner, and
     # are never written to the metadata artifact or printed in diagnostics.
     files = GuestFileBridge({"steam_api64.dll": load_startup_dll(private_archive)})
@@ -456,9 +460,13 @@ def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None
             emulator.emu_stop()
             return
         rva = address - IMAGE_BASE
-        trace["original_instruction_count"] += 1
         if rva in verified_rvas:
             native_entry_hits[rva]+=1
+            if native_dispatch is not None:
+                trace["stop_reason"]="native_dispatch_pending"
+                emulator.emu_stop()
+                return
+        trace["original_instruction_count"] += 1
         try:
             # Avoid decoding millions of repetitive CRC-like loop instructions.
             # Exact faulting instructions are still decoded in invalid_mem.
@@ -528,7 +536,7 @@ def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None
     # Resume after constructing a real callback trampoline. Do not clear a
     # blocked dependency or skip any original initializer code.
     start_va = IMAGE_BASE + entry
-    for _ in range(8):
+    for _ in range(72 if native_dispatch is not None else 8):
         try:
             uc.emu_start(start_va, 0, timeout=MAX_SECONDS_MICRO,
                          count=max(1, MAX_INSNS-trace["original_instruction_count"]-
@@ -537,6 +545,19 @@ def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None
             trace["first_exception"] = type(exc).__name__ + ": " + str(exc)[:180]
             if not trace["stop_reason"]:
                 trace["stop_reason"] = "emulator_exception"
+        if trace["stop_reason"]=="native_dispatch_pending":
+            pc=uc.reg_read(UC_X86_REG_RIP)
+            rva=pc-IMAGE_BASE
+            if rva not in verified_rvas or sum(native_completed.values())>=64:
+                raise RuntimeError("Unexpected native dispatch request")
+            native_dispatch(uc,rva)
+            next_pc=uc.reg_read(UC_X86_REG_RIP)
+            if next_pc==pc or not IMAGE_BASE<=next_pc<IMAGE_BASE+round4k(last_section):
+                raise RuntimeError("Unverified native continuation")
+            native_completed[rva]+=1
+            trace["stop_reason"]=None
+            start_va=next_pc
+            continue
         if trace["stop_reason"] != "crt_trampoline_pending":
             break
         if not pending_callbacks or len(trampoline_ranges) >= 6:
@@ -567,6 +588,10 @@ def run_frontier(executable, private_archive, *, verified_rvas=(), observer=None
     trace["verified_native_entries_observed"]={hex(r):n for r,n in native_entry_hits.items()}
     trace["verified_native_entry_candidates"]=len(verified_rvas)
     trace["steam_service_return_simulated"]=False
+    trace["native_dispatch_completed"]={hex(r):n for r,n in native_completed.items()}
+    trace["native_arm64_executed"]=bool(native_completed)
+    if finish is not None:
+        finish(uc)
     trace["file_bridge"] = files.diagnostics()
     trace["mapped_crt_data_imports"] = data_imports
     trace["recent_original_instructions"] = list(recent)
