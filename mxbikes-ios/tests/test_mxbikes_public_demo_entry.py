@@ -91,6 +91,31 @@ class LoaderTests(unittest.TestCase):
         result=self.execute(FixturePE(call_code(prefix,suffix),symbol="QueryPerformanceCounter"))
         self.assertEqual(result["stop"]["status"],"entry_returned")
 
+    def test_startup_info_a_written(self):
+        prefix=rip_op(b"\x48\x8d\x0d",4,DATA)
+        after=4+len(prefix)+6
+        cmp_mem=b"\x81\x3d"+struct.pack("<i",DATA-(ENTRY+after+10))+struct.pack("<I",104)
+        result=self.execute(FixturePE(call_code(prefix,cmp_mem+b"\x74\x02\x0f\x0b"),
+                                     symbol="GetStartupInfoA"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertEqual(result["serviced_environment_calls"],{"KERNEL32.dll!GetStartupInfoA":1})
+
+    def test_startup_info_a_rejects_cross_boundary(self):
+        prefix=rip_op(b"\x48\x8d\x0d",4,DATA+0x3fc)
+        result=self.execute(FixturePE(call_code(prefix),symbol="GetStartupInfoA"))
+        self.assertEqual(result["stop"]["status"],"rejected_environment_output")
+        self.assertEqual(result["serviced_environment_calls"],{})
+
+    def test_gs_stack_base(self):
+        # mov rax, gs:[8]; mov rdx, expected; cmp rax,rdx; je ret; ud2; ret
+        code=(b"\x65\x48\x8b\x04\x25\x08\x00\x00\x00\x48\xba"
+              +struct.pack("<Q",runner.STACK+runner.STACK_SIZE)
+              +b"\x48\x39\xd0\x74\x02\x0f\x0b\xc3")
+        result=self.execute(FixturePE(code))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertTrue(result["minimal_teb_mapped"])
+        self.assertFalse(result["peb_implemented"])
+
     def test_unverified_tail_import_rejected(self):
         result=self.execute(FixturePE(rip_op(b"\xff\x25",0,IAT)))
         self.assertEqual(result["stop"]["status"],"unverified_environment_import_callsite")
