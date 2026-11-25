@@ -32,6 +32,8 @@ import mxbikes_cfg_lea_address as leaops
 import mxbikes_cfg_conditional_moves as cmovops
 import mxbikes_cfg_imul_ops as imulops
 import mxbikes_cfg_static_image as staticops
+import mxbikes_cfg_simd_moves as simdops
+from unicorn import x86_const
 from mxbikes_whole_game_map import INPUT_SHA
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -58,6 +60,7 @@ MASK=(1<<64)-1
 EXTRA_REGS=[("r12",UC_X86_REG_R12),("r13",UC_X86_REG_R13),
             ("r14",UC_X86_REG_R14),("r15",UC_X86_REG_R15)]
 NATIVE_REGS=prefix.REGS+EXTRA_REGS
+XMM_REGS=[getattr(x86_const,f'UC_X86_REG_XMM{i}') for i in range(16)]
 HEAP=0x720000000
 HEAP_BYTES=1024
 HEAP_BASE_OFFSET=256
@@ -132,6 +135,8 @@ def unsupported_opcode_reason(ins):
     return reason
 
 def translate(ins):
+    code=simdops.emit(ins)
+    if code is not None:return code
     code=staticops.emit(ins)
     if code is not None:return code
     code=heapops.emit(ins)
@@ -243,7 +248,8 @@ def recover_cfg(pe,rva,known_roots,*,max_bytes=MAX_WALK_BYTES,require_branch=Tru
     for row in records.values():
         ins=row["ins"]
         heap_bases.update(heapops.memory_bases(ins))
-        for addr,width in staticops.references(ins):
+        heap_bases.update(simdops.memory_bases(ins))
+        for addr,width in staticops.references(ins)+simdops.references(ins):
             if addr<BASE:
                 return None,"original_image_reference_outside_PE"
             try:raw=bytes(pe.read_rva(addr-BASE,width))
@@ -335,7 +341,8 @@ def prove_stack_dataflow(records,start):
             origin={"rsp":sp,"rbp":bp}.get(base)
             loc=origin+op.mem.disp if origin is not None and not op.mem.index else None
             if loc is None:
-                if heapops.guest_access(ins,op) is None and not staticops.references(ins):
+                if (heapops.guest_access(ins,op) is None and not staticops.references(ins)
+                    and not (simdops.emit(ins) is not None and simdops.memory(ins,op) is not None)):
                     return "unverified_nonstack_guest_memory_access"
             elif loc< -STACK_BELOW or loc+op.size>STACK_ABOVE:
                 return "guest_stack_memory_outside_verified_window"
@@ -350,7 +357,7 @@ def prove_stack_dataflow(records,start):
 def x64_reference(pe,plan,case):
     start=BASE+plan["rva"]
     cpu=Uc(UC_ARCH_X86,UC_MODE_64)
-    pages={((BASE+row["rva"])&~4095) for row in plan["rows"]}
+    pages={p for row in plan['rows'] for p in ((BASE+row['rva'])&~4095,(BASE+row['rva']+row['size']-1)&~4095)}
     for addr,raw in plan.get("original_immutable_data_reads",[]):
         pages.add(addr&~4095)
         pages.add((addr+len(raw)-1)&~4095)
@@ -376,6 +383,10 @@ def x64_reference(pe,plan,case):
     for name,reg in NATIVE_REGS:
         cpu.reg_write(reg,start if name=="rip" else initial[name])
     cpu.reg_write(UC_X86_REG_EFLAGS,flag)
+    vector_words=[(0x9876543210abcdef+0x102030405060708*i+0x31415926*case)&MASK for i in range(32)]
+    initial['xmm_words']=vector_words
+    for i,reg in enumerate(XMM_REGS):
+        cpu.reg_write(reg,vector_words[2*i]|(vector_words[2*i+1]<<64))
     seen=set()
     allowed={BASE+row["rva"] for row in plan["rows"]}
     invalid=[False]
@@ -421,6 +432,8 @@ def x64_reference(pe,plan,case):
     if cpu.reg_read(UC_X86_REG_RSP)!=ENTRY+8:
         return None,"original_x64_ret_stack_mismatch"
     actual={name:cpu.reg_read(reg) for name,reg in NATIVE_REGS}
+    vector_out=[cpu.reg_read(reg) for reg in XMM_REGS]
+    actual['xmm_words']=[word for value in vector_out for word in (value&MASK,(value>>64)&MASK)]
     eflags=cpu.reg_read(UC_X86_REG_EFLAGS)
     actualflags={key:int(bool(eflags&bit)) for key,bit in
                  (("cf",1),("zf",0x40),("sf",0x80),("of",0x800),("pf",4))}
@@ -482,7 +495,9 @@ def generate(batch,references):
                              +",".join(f"UINT64_C({n})" for n in outputs)+"},{"
                              +",".join(str(f) for f in fbits)+"},{"
                              +",".join(str(x) for x in stack)+"},{"
-                             +",".join(str(x) for x in heap_mem)+"}}")
+                             +",".join(str(x) for x in heap_mem)+"},{"
+                             +",".join(f"UINT64_C({n})" for n in state["xmm_words"])+"},{"
+                             +",".join(f"UINT64_C({n})" for n in actual["xmm_words"])+"}}")
         rows.append("{"+",\n".join(all_cases)+"}")
     code=r'''#include <stdint.h>
 #include "mx_cfg_vm.h"
@@ -495,15 +510,32 @@ def generate(batch,references):
 struct cpu {
  uint64_t rax,rbx,rcx,rdx,r8,r9,rdi,rsi,r10,r11,rbp,rsp,rip,r12,r13,r14,r15;
  uint8_t cf,zf,sf,of,pf;
+ uint64_t xmm[16][2];
 };
 typedef struct{
  uint64_t input[17];uint32_t eflags;uint64_t expected[17];
  uint8_t expected_flags[5];uint8_t expected_memory[__STACK_WINDOW__];
  uint8_t expected_heap[1024];
+ uint64_t input_xmm[32],expected_xmm[32];
 } fixture;
 static const fixture cases[COUNT][4]={__DATA__};
 static uint8_t guest_memory[65536];
 static uint8_t heap_memory[1024];
+/* Preflight the entire vector range before a write; no partial transfers. */
+static inline int mx_cfg_vector_transfer(mx_cfg_memory*m,uint64_t address,uint64_t*words,uint32_t size,int write){
+ if(!m||!m->regions||!words||(size!=4U&&size!=8U&&size!=16U)||m->count>16U)return 0;
+ for(uint32_t i=0;i<m->count;i++){
+  mx_cfg_region*r=&m->regions[i];
+  if(!r->data||address<r->base||size>r->length)continue;
+  uint64_t off=address-r->base;
+  if(off>r->length-size)continue;
+  volatile uint8_t*guest=(volatile uint8_t*)r->data;
+  uint8_t*host=(uint8_t*)words;
+  for(uint32_t j=0;j<size;j++){if(write)guest[off+j]=host[j];else host[j]=guest[off+j];}
+  return 1;
+ }
+ return 0;
+}
 __STATIC_IMAGE_BUFFERS__
 __FUNCTIONS__
 typedef int(*worker)(struct cpu*,mx_cfg_memory*);
@@ -530,6 +562,7 @@ int smoke(void){
   struct cpu s={0};uint64_t*regs=&s.rax;
   for(unsigned k=0;k<17U;k++)regs[k]=f->input[k];
   s.rip=originals[i];
+  for(unsigned k=0;k<32U;k++)s.xmm[k/2U][k%2U]=f->input_xmm[k];
   s.cf=(f->eflags&1U)!=0U;s.pf=(f->eflags&4U)!=0U;
   s.zf=(f->eflags&64U)!=0U;s.sf=(f->eflags&128U)!=0U;
   s.of=(f->eflags&2048U)!=0U;
@@ -540,6 +573,7 @@ int smoke(void){
   if(s.sf!=f->expected_flags[2])return 33;
   if(s.of!=f->expected_flags[3])return 34;
   if(s.pf!=f->expected_flags[4])return 35;
+  for(unsigned k=0;k<32U;k++)if(s.xmm[k/2U][k%2U]!=f->expected_xmm[k])return 36;
   for(unsigned k=0;k<WINDOW_BYTES;k++)
    if(guest_memory[WINDOW-STACK+k]!=f->expected_memory[k])return 4;
   for(unsigned k=0;k<1024U;k++)
