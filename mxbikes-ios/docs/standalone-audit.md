@@ -174,3 +174,22 @@ All 21 native POSIX checkpoints passed both optimized and ASan/UBSan Linux host 
 The XcodeGen target and Swift bridging header now include the existing ten standalone native components (CRT, directory/clock, heap, memory, import dispatch, local Winsock, formatter, streaming files, descriptor-backed asset session and WinMain helpers). This is build configuration integration, not an original-game launch or proven Xcode link. The actual iOS SDK is unavailable here; the POSIX adapter and final Xcode project have not been compiled on Apple hardware. The user must supply the genuine standalone package before the original game's asset reads can be validated.
 
 Repeatable POSIX test: python mxbikes-ios/tests/test_mxb_standalone_asset_session.py.
+
+### Roadmap Batch A: package ingestion / Batch B: automated scalar leaf pilot
+
+Batch A's new package tool verifies a local directory or stages an explicitly supplied ZIP into a new directory, requiring one common parent, exact manifest sizes, pinned hashes for the demo EXE and core.ini, no duplicate basenames, no traversal/symlinks, and streamed extraction with CRC verification. Other files are size-checked (not publisher-authenticated). It never creates a replacement configuration. Fourteen fixture tests passed. Local preflight of the real uploaded beta21e EXE (renamed mxbikes.exe for inspection) passed its SHA-256, but all twelve data assets are absent. Genuine configuration parsing and resource loading are still blocked, so Batch A's original execution exit gate is not satisfied.
+
+Batch B has an independently useful automated leaf pilot. It pins the standalone demo SHA-256, decodes with LLVM objdump, verifies decoded bytes against executable PE sections, inventories unwind intervals and direct CALL targets, ranks membership in the static PE-entry/WinMain call graph, and generates private C with guest GPRs and bounded memory callbacks. It accepts only straight-line scalar operations and plain RET, rejecting unsupported destinations, control flow, and nonvolatile-register changes. Guest flags and RET control effects are not modeled, so this is not a general x64-to-ARM64 translator. The caller must provide guest memory callbacks and the original guest address mapping. Fourteen synthetic translator tests passed, including host-compiled register width, sign extension, memory and fault checks.
+
+Actual beta21e pilot: 735,694 byte-matched linear decoded addresses; 8,747 PE unwind intervals; 4,244 direct-call target candidates; 172 intervals and 232 direct targets in the bounded static startup graph. Generated and compiled host shared and iOS ARM64 Mach-O objects for 119 bounded leaf candidates covering 720 original decoded instructions; 17 candidates belong to that static graph. All 119 are unwindless; direct-call-target discovery is not proof of a complete function boundary or dynamic reachability. No original differential tests, ARM64 execution, joined startup, or game frame were demonstrated by this pilot. Generated source and binaries remain private. No original game bytes, generated code, or assets are committed. No Actions runs started.
+
+Reproduce with LLVM installed:
+```sh
+python mxbikes-ios/scripts/mxb_demo_package.py verify /path/to/demo
+python mxbikes-ios/scripts/mxb_demo_package.py stage-zip /path/to/demo.zip /private/new-demo
+python mxbikes-ios/tests/test_mxb_demo_package.py
+python mxbikes-ios/tests/test_mxb_demo_leaf_batch.py
+python mxbikes-ios/scripts/mxb_demo_leaf_batch.py /path/to/demo/mxbikes.exe /private/new-lift
+```
+
+Remaining Batch B gates: general control flow and calls, stack/unwind and flags, SIMD/floating point, import dispatch, original x64 vs actual ARM64 differentials and continuous native execution. These remain incomplete; the pilot is not full-game recompilation.
