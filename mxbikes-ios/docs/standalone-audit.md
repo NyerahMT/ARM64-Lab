@@ -28,3 +28,25 @@ must NOT be reused as if they were the standalone layout.
 
 See [authenticated original game execution](run-original-locally.md) for
 the *Steam* target. Those tests still stop at the unsupported Steam API.
+
+## Public beta21e demo research target (November 24, 2026)
+
+The publisher's publicly distributed beta21e demo was downloaded and
+extracted transiently on a standard public GitHub runner. Its observed
+executable SHA-256 is
+`b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742`.
+The import audit identified 11 DLLs, 310 imported symbols and **zero static
+Steam imports**. This is a distinct executable from the private Steam build.
+
+The separate `mxbikes_public_demo_entry.py` reference runner starts at the
+PE's real entry, maps original sections with bounded permissions and
+models only basic Win32 clock and process identity calls. It stops at any
+unsupported import, fault or execution budget. It never supplies a licensing
+success result or changes demo restrictions.
+
+No private repository workflows, credentials, commercial assets or owned
+Steam binaries are needed for this public demo experiment. The workflow
+downloads the public installer directly from its publisher, verifies the
+extracted executable's pinned SHA before execution, and deletes the temporary
+files. Only aggregate diagnostic metadata is emitted. It is still x64
+reference execution, not native ARM64 translation or a booted game.
