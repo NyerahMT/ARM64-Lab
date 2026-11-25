@@ -1,0 +1,55 @@
+name: MX Bikes — public demo compatibility audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/mxbikes-public-demo-audit.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mxb-public-demo-audit
+  cancel-in-progress: true
+
+jobs:
+  standalone-demo-imports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Obtain publicly offered beta21e demo installer from publisher
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mxb-demo-audit"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --max-filesize 3000000000 --max-time 300 --retry 1 \
+            'https://www.mx-bikes.com/downloads/mxbikes-beta21e.exe' \
+            -o "$RUNNER_TEMP/mxb-demo-audit/installer.exe"
+          test -s "$RUNNER_TEMP/mxb-demo-audit/installer.exe"
+      - name: Extract only original demo executable without running installer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full innoextract
+          root="$RUNNER_TEMP/mxb-demo-audit"
+          mkdir -p "$root/extracted"
+          if ! 7z e -y -o"$root/extracted" "$root/installer.exe" '-ir!mxbikes.exe' > "$root/extract.log" 2>&1 || ! find "$root/extracted" -type f -iname mxbikes.exe -print -quit | grep -q .; then
+            innoextract --silent --include mxbikes.exe --output-dir "$root/extracted" "$root/installer.exe" > "$root/inno.log" 2>&1
+          fi
+          test "$(find "$root/extracted" -type f -iname mxbikes.exe | wc -l)" -eq 1
+      - name: Audit publicly distributed standalone PE metadata only
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mxb-demo-audit"
+          exe="$(find "$root/extracted" -type f -iname mxbikes.exe -print -quit)"
+          python mxbikes-ios/scripts/mxbikes_standalone_import_audit.py --standalone-exe "$exe" --out "$root/report"
+          python - "$root/report/standalone-candidate-imports.json" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1]))
+          print("Public demo import audit:", json.dumps({k:r[k] for k in ("candidate_sha256","candidate_matches_pinned_steam_executable","architecture","imported_dlls","imported_symbols","steam_symbol_count","native_ios_engine_executed")}))
+          PY
+      - name: Delete all downloaded executable material and temporary reports
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mxb-demo-audit"
