@@ -150,6 +150,16 @@ enum MXBGLGuestStatus mxb_gl_dispatch_win64(
   return MXB_GL_GUEST_INVALID_STATE;
  if(!same(library,"OPENGL32.dll"))
   return MXB_GL_GUEST_UNSUPPORTED;
+ if(same(name,"glEnable")||same(name,"glDisable")){
+  unsigned cap=(unsigned)g->rcx;
+  if(cap!=MXB_GL_DEPTH_TEST&&cap!=MXB_GL_BLEND&&cap!=MXB_GL_ALPHA_TEST&&
+     !(cap==MXB_GL_LIGHTING&&same(name,"glDisable")))return MXB_GL_GUEST_UNSUPPORTED;
+  return rendered(mxb_gl_capability(s,cap,same(name,"glEnable")));
+ }
+ if(same(name,"glDepthMask"))return rendered(mxb_gl_depth_mask(s,(uint8_t)g->rcx));
+ if(same(name,"glDepthFunc"))return rendered(mxb_gl_depth_func(s,(unsigned)g->rcx));
+ if(same(name,"glBlendFunc"))return rendered(mxb_gl_blend_func(s,(unsigned)g->rcx,(unsigned)g->rdx));
+ if(same(name,"glAlphaFunc"))return rendered(mxb_gl_alpha_func(s,(unsigned)g->rcx,xmm_float(g->xmm_low64[1])));
  if(same(name,"glEnableClientState")||same(name,"glDisableClientState"))
   return rendered(mxb_gl_client_enable(s,(unsigned)g->rcx,
                         same(name,"glEnableClientState")));
