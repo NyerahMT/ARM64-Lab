@@ -25,7 +25,7 @@ class Files(C.Structure):
     _fields_=[("mounts",Mount*16),("handles",Handle*32),("generation",C.c_uint64)]
 
 def open_regular(path):
-    fd=os.open(path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_BINARY",0))
+    fd=os.open(path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_BINARY",0)|getattr(os,"O_NONBLOCK",0))
     try:
         f=os.fdopen(fd,"rb",buffering=0)
     except BaseException:
@@ -95,7 +95,9 @@ class AssetMounts:
     def close(self):
         if not self.closed:
             # Invalidate native handles before releasing callbacks/storage.
-            C.memset(C.byref(self.files),0,C.sizeof(self.files));self.closed=True
+            generation=self.files.generation
+            C.memset(C.byref(self.files),0,C.sizeof(self.files))
+            self.files.generation=generation;self.closed=True
             for _,f in self._keep:
                 if f is not None:f.close()
             self._keep.clear()

@@ -5,4 +5,7 @@
 #include "../../runtime/mxb_gl_indexed_probe.h"
 #include "../../runtime/mxb_gl_texture.h"
 #include "../../runtime/mxb_gl_texture_probe.h"
+#include "../../runtime/mxb_standalone_imports.h"
+#include "../../runtime/mxb_standalone_asset_session.h"
+#include "../../runtime/mxb_standalone_winmain.h"
 #endif

@@ -164,3 +164,13 @@ With the genuine extracted public beta21e directory and a locally built native s
 ```sh
 python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/demo/mxbikes.exe --native-startup-library /tmp/mxb-startup.so --demo-assets-dir /path/to/demo
 ```
+
+### Native sandbox file adapter and iOS target source integration
+
+The POSIX asset-session component binds caller-selected regular files to the same streaming guest file table using read-only descriptors and bounded pread. It handles short reads and EINTR, rejects final-component symlinks, nonregular files, incorrect sizes and duplicate guest names, and invalidates handles before descriptor release. Generation numbers survive session closure, preventing stale handle aliasing. This component is intended for native platform code in the iOS sandbox; paths must come from trusted platform code, not guest strings.
+
+All 21 native POSIX checkpoints passed both optimized and ASan/UBSan Linux host builds, including a real sparse 1,751,015,009-byte fixture, multi-chunk reads, truncation and descriptor release. The Python asset tests now include reopening a file table without accepting a stale token (10 tests passed). No original assets were available for either fixture.
+
+The XcodeGen target and Swift bridging header now include the existing ten standalone native components (CRT, directory/clock, heap, memory, import dispatch, local Winsock, formatter, streaming files, descriptor-backed asset session and WinMain helpers). This is build configuration integration, not an original-game launch or proven Xcode link. The actual iOS SDK is unavailable here; the POSIX adapter and final Xcode project have not been compiled on Apple hardware. The user must supply the genuine standalone package before the original game's asset reads can be validated.
+
+Repeatable POSIX test: python mxbikes-ios/tests/test_mxb_standalone_asset_session.py.

@@ -76,6 +76,11 @@ class Tests(unittest.TestCase):
         h=self.fopen("core.ini");self.mount.close()
         self.call("ftell",h,status=-1)
         with self.assertRaises(ValueError):self.mount.mount_path(self.small)
+    def test_reopened_session_stale_handle(self):
+        self.mount.mount_path(self.small);h=self.fopen("core.ini");self.mount.close()
+        self.mount=AssetMounts(self.lib,self.files);self.addCleanup(self.mount.close)
+        self.mount.mount_path(self.small);h2=self.fopen("core.ini")
+        self.assertNotEqual(h,h2);self.call("ftell",h,status=-1)
     def test_truncated_backing(self):
         path=self.root/"truncated.pkz";path.write_bytes(b"1234")
         self.mount.mount_path(path);h=self.fopen("truncated.pkz");path.write_bytes(b"1")

@@ -32,6 +32,36 @@ targets:
         buildPhase: headers
       - path: runtime/mxb_gl_surface.h
         buildPhase: headers
+      - path: runtime/mxb_standalone_crt.c
+      - path: runtime/mxb_standalone_crt.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_platform.c
+      - path: runtime/mxb_standalone_platform.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_heap.c
+      - path: runtime/mxb_standalone_heap.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_memory.c
+      - path: runtime/mxb_standalone_memory.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_imports.c
+      - path: runtime/mxb_standalone_imports.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_winsock.c
+      - path: runtime/mxb_standalone_winsock.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_format.c
+      - path: runtime/mxb_standalone_format.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_files.c
+      - path: runtime/mxb_standalone_files.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_asset_session.c
+      - path: runtime/mxb_standalone_asset_session.h
+        buildPhase: headers
+      - path: runtime/mxb_standalone_winmain.c
+      - path: runtime/mxb_standalone_winmain.h
+        buildPhase: headers
     info:
       path: ios/MXBViewportPrototype/Info.plist
     settings:
