@@ -56,6 +56,7 @@ jobs:
           python -m unittest discover -s tests -p test_mxbikes_real_frame_frontier.py -v
           python -m unittest discover -s tests -p test_mxbikes_real_runtime_imports.py -v
           python -m unittest discover -s tests -p test_mxb_gl_callsite.py -v
+          python -m unittest discover -s tests -p test_mxb_demo_win64_environment.py -v
           python -m unittest discover -s tests -p test_mxbikes_public_demo_entry.py -v
           python -m unittest discover -s tests -p test_mxbikes_steam_call_contract.py -v
       - name: Execute synthetic x64-to-native OpenGL import tests
