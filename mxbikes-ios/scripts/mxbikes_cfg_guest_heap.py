@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed x64 guest-heap MOV/CMP/MOVSXD translator for bounded native CFGs.
 
-Supported operands: ordinary 32/64-bit integer MOV and 32-bit memory CMP IMM,
-and MOVSXD reg64,[GPR+disp]. No indexed/segment/RIP/stack access, no virtual
+Supported operands: integer MOV, both memory CMP operand orders, MOVZX,
+and MOVSXD with bounded base-register addressing. No indexed/segment/RIP/stack access, no virtual
 memory host-pointer casts, no ignored side effects. The caller maps a known
 synthetic guest heap range in both Unicorn x64 and compiled ARM64 and compares
 EVERY heap byte after a complete original x64 return.
@@ -15,9 +15,9 @@ GP=(prefix.C_REGS|xreg.EXT)-{"rsp","rbp","rip"}
 MAX_DISP=1024
 
 def guest_access(ins,op):
-    if op.type!=X86_OP_MEM or op.size not in (4,8):return None
+    if op.type!=X86_OP_MEM or op.size not in (1,2,4,8):return None
     m=op.mem
-    if m.index or m.segment or abs(m.disp)>MAX_DISP:
+    if m.index or m.segment or 0x67 in ins.prefix or abs(m.disp)>MAX_DISP:
         return None
     base=ins.reg_name(m.base)
     if base not in GP:return None
@@ -39,7 +39,7 @@ def transfer_code(mem,write,value,*,width=None):
     )
 
 def emit(ins):
-    if len(ins.operands)!=2 or ins.mnemonic not in ("mov","movsxd","cmp"):
+    if len(ins.operands)!=2 or ins.mnemonic not in ("mov","movsxd","movzx","cmp"):
         return None
     dst,src=ins.operands
     left=guest_access(ins,dst)
@@ -63,18 +63,28 @@ def emit(ins):
         read=transfer_code(right,False,"v")
         return (f"{{uint64_t v=0U;{read}"
                 f"s.{r_dst[0]}=(uint64_t)(int64_t)(int32_t)(uint32_t)v;}}")
-    if ins.mnemonic=="cmp" and left and left[2] in (4,8) and (
-        r_src and r_src[1]==left[2] or src.type==X86_OP_IMM
-    ):
-        n=left[2]
-        mask=(1<<(n*8))-1
+    if ins.mnemonic=="movzx" and right and right[2] in (1,2) and r_dst and r_dst[1] in (4,8) and r_dst[0] not in ("rsp","rbp"):
+        read=transfer_code(right,False,"v")
+        return f"{{uint64_t v=0U;{read}s.{r_dst[0]}=v;}}"
+    if ins.mnemonic=="cmp":
+        # Accept both operand orders, exact width, and masked immediates.
+        # Neither CMP nor memory reads change the compared operands.
+        if left and (r_src and r_src[1]==left[2] or src.type==X86_OP_IMM):
+            n=left[2]
+            mask=(1<<(n*8))-1
+            rhs=(f"(s.{r_src[0]}&UINT64_C({mask}))" if r_src else
+                 f"UINT64_C({src.imm&mask})")
+            setup=f"uint64_t a=0U;{transfer_code(left,False,'a')}uint64_t b={rhs};"
+        elif right and r_dst and r_dst[1]==right[2]:
+            n=right[2]
+            mask=(1<<(n*8))-1
+            setup=f"uint64_t a=s.{r_dst[0]}&UINT64_C({mask});uint64_t b=0U;{transfer_code(right,False,'b')}"
+        else:
+            return None
         sign=1<<(n*8-1)
-        b=(f"(s.{r_src[0]}&UINT64_C({mask}))" if r_src else
-           f"UINT64_C({src.imm&mask})")
-        read=transfer_code(left,False,"a")
         return (
-            f"{{uint64_t a=0U;{read}"
-            f"a&=UINT64_C({mask});uint64_t b={b};"
+            "{"+setup+
+            f"a&=UINT64_C({mask});b&=UINT64_C({mask});"
             f"uint64_t v=(a-b)&UINT64_C({mask});"
             f"s.cf=(a<b);s.zf=(v==0U);"
             f"s.sf=(v>>{n*8-1}U)&1U;"
