@@ -472,7 +472,7 @@ def generate_worker(plan,name):
     )
     return body
 
-def generate(batch,references):
+def generate(batch,references,*,external_dispatch=False):
     original_data={}
     for plan in batch:
         for addr,raw in plan.get("original_immutable_data_reads",[]):
@@ -491,8 +491,8 @@ def generate(batch,references):
     pieces=[]
     rows=[]
     for idx,plan in enumerate(batch):
-        body=generate_worker(plan,f"run_{idx}")
-        pieces.append(body)
+        if not external_dispatch:
+            pieces.append(generate_worker(plan,f"run_{idx}"))
         all_cases=[]
         for state,eflags,actual,final,stack,heap_mem in references[plan["rva"]]:
             inp=[state[n] for n,_ in NATIVE_REGS]
@@ -589,6 +589,14 @@ int smoke(void){
 int main(void){return smoke();}
 #endif
 '''
+    if external_dispatch:
+        code=code.replace("typedef int(*worker)(struct cpu*,mx_cfg_memory*);\nstatic const worker workers[COUNT]={__WORKERS__};\n","")
+        code=code.replace("if(workers[i](&s,&mem)!=0)return 1;",
+                          "if(mx_cfg_native_dispatch(&s,&mem)!=0)return 1;")
+        code=code.replace(" (void)mx_cfg_vector_transfer;\n",
+                          " (void)mx_cfg_vector_transfer;\n if(mx_cfg_native_count()!=COUNT)return 7;\n")
+        if "workers[i]" in code or "mx_cfg_native_dispatch" not in code:
+            raise RuntimeError("Native module fixture substitution failed")
     inserts={
         "__COUNT__":str(len(batch)),
         "__STACK_BELOW__":str(STACK_BELOW),
