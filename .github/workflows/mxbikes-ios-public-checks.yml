@@ -44,6 +44,10 @@ jobs:
             tests/mxb_gl_texture_batch_smoke.c \
             -o /tmp/mxb-gl-texture
           /tmp/mxb-gl-texture
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_texture.c tests/mxb_gl_texture_subimage_smoke.c \
+            -o /tmp/mxb-gl-texture-subimage
+          /tmp/mxb-gl-texture-subimage
       - name: Install authentic guest-runtime Python dependencies
         run: |
           python -m pip install --disable-pip-version-check \
@@ -110,6 +114,10 @@ jobs:
             tests/mxb_gl_texture_batch_smoke.c \
             -o /tmp/mxb-arm64-texture
           /tmp/mxb-arm64-texture
+          cc -O2 -std=c11 -Wall -Wextra -Werror -Iruntime \
+            runtime/mxb_gl_texture.c tests/mxb_gl_texture_subimage_smoke.c \
+            -o /tmp/mxb-arm64-texture-subimage
+          /tmp/mxb-arm64-texture-subimage
           echo "Native AArch64 renderer tests passed with synthetic fixture data only." >> "$GITHUB_STEP_SUMMARY"
 
   ios-metal-build:
