@@ -68,9 +68,44 @@ class LoaderTests(unittest.TestCase):
                          {"KERNEL32.dll!GetCurrentProcessId":1})
 
     def test_unsupported_call_never_returns(self):
-        result=self.execute(FixturePE(call_code(),symbol="GetModuleHandleW"))
+        result=self.execute(FixturePE(call_code(),symbol="GetProcAddress"))
         self.assertEqual(result["stop"]["status"],"unsupported_import")
         self.assertEqual(result["serviced_environment_calls"],{})
+
+    def test_main_module_handle(self):
+        # Null name requests the current executable, not a DLL.
+        suffix=b"\x48\xba"+struct.pack("<Q",BASE)+b"\x48\x39\xd0\x74\x02\x0f\x0b"
+        result=self.execute(FixturePE(call_code(b"\x31\xc9",suffix),symbol="GetModuleHandleW"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+
+    def test_named_module_handle_rejected(self):
+        prefix=rip_op(b"\x48\x8d\x0d",4,DATA)
+        result=self.execute(FixturePE(call_code(prefix),symbol="GetModuleHandleA"))
+        self.assertEqual(result["stop"]["status"],"rejected_environment_output")
+
+    def test_command_line_immutable_string(self):
+        # cmp byte ptr [rax], 'C'; je success; ud2.
+        result=self.execute(FixturePE(call_code(suffix=b"\x80\x38\x43\x74\x02\x0f\x0b"),
+                                     symbol="GetCommandLineA"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertTrue(result["immutable_process_strings_mapped"])
+
+    def test_module_filename_wide(self):
+        # XOR ecx,ecx; LEA RDX,[DATA]; MOV R8D,128.
+        prefix=b"\x31\xc9"+rip_op(b"\x48\x8d\x15",6,DATA)+b"\x41\xb8\x80\x00\x00\x00"
+        result=self.execute(FixturePE(call_code(prefix),symbol="GetModuleFileNameW"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertEqual(result["serviced_environment_calls"],{"KERNEL32.dll!GetModuleFileNameW":1})
+
+    def test_module_filename_small_buffer_rejected(self):
+        prefix=b"\x31\xc9"+rip_op(b"\x48\x8d\x15",6,DATA)+b"\x41\xb8\x01\x00\x00\x00"
+        result=self.execute(FixturePE(call_code(prefix),symbol="GetModuleFileNameW"))
+        self.assertEqual(result["stop"]["status"],"rejected_environment_output")
+
+    def test_current_process_pseudohandle(self):
+        suffix=b"\x48\x83\xf8\xff\x74\x02\x0f\x0b"
+        result=self.execute(FixturePE(call_code(suffix=suffix),symbol="GetCurrentProcess"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
 
     def test_clock_output_must_be_writable(self):
         # RCX points into executable text, so even a legitimate import is
