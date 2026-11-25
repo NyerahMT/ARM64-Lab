@@ -508,7 +508,7 @@ def generate(batch,references):
                              +",".join(f"UINT64_C({n})" for n in actual["xmm_words"])+"}}")
         rows.append("{"+",\n".join(all_cases)+"}")
     code=r'''#include <stdint.h>
-#include "mx_cfg_vm.h"
+#include "mx_cfg_native_module.h"
 #ifndef HOST
 /* Large XMM-aware structs may be lowered to these compiler libcalls even
  * in a freestanding build. Byte-volatile loops avoid recursive lowering. */
@@ -530,11 +530,6 @@ void *memset(void *dst,int ch,size_t n){
 #define SENTINEL UINT64_C(__SENTINEL__)
 #define WINDOW (ENTRY-UINT64_C(__STACK_BELOW__))
 #define WINDOW_BYTES __STACK_WINDOW__U
-struct cpu {
- uint64_t rax,rbx,rcx,rdx,r8,r9,rdi,rsi,r10,r11,rbp,rsp,rip,r12,r13,r14,r15;
- uint8_t cf,zf,sf,of,pf;
- uint64_t xmm[16][2];
-};
 typedef struct{
  uint64_t input[17];uint32_t eflags;uint64_t expected[17];
  uint8_t expected_flags[5];uint8_t expected_memory[__STACK_WINDOW__];
@@ -544,21 +539,6 @@ typedef struct{
 static const fixture cases[COUNT][4]={__DATA__};
 static uint8_t guest_memory[65536];
 static uint8_t heap_memory[1024];
-/* Preflight the entire vector range before a write; no partial transfers. */
-static inline int mx_cfg_vector_transfer(mx_cfg_memory*m,uint64_t address,uint64_t*words,uint32_t size,int write){
- if(!m||!m->regions||!words||(size!=4U&&size!=8U&&size!=16U)||m->count>16U)return 0;
- for(uint32_t i=0;i<m->count;i++){
-  mx_cfg_region*r=&m->regions[i];
-  if(!r->data||address<r->base||size>r->length)continue;
-  uint64_t off=address-r->base;
-  if(off>r->length-size)continue;
-  volatile uint8_t*guest=(volatile uint8_t*)r->data;
-  uint8_t*host=(uint8_t*)words;
-  for(uint32_t j=0;j<size;j++){if(write)guest[off+j]=host[j];else host[j]=guest[off+j];}
-  return 1;
- }
- return 0;
-}
 __STATIC_IMAGE_BUFFERS__
 __FUNCTIONS__
 typedef int(*worker)(struct cpu*,mx_cfg_memory*);
