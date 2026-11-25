@@ -501,6 +501,21 @@ def generate(batch,references):
         rows.append("{"+",\n".join(all_cases)+"}")
     code=r'''#include <stdint.h>
 #include "mx_cfg_vm.h"
+#ifndef HOST
+/* Large XMM-aware structs may be lowered to these compiler libcalls even
+ * in a freestanding build. Byte-volatile loops avoid recursive lowering. */
+void *memcpy(void *dst,const void *src,size_t n){
+ volatile uint8_t*d=(volatile uint8_t*)dst;
+ const volatile uint8_t*s=(const volatile uint8_t*)src;
+ for(size_t i=0;i<n;i++)d[i]=s[i];
+ return dst;
+}
+void *memset(void *dst,int ch,size_t n){
+ volatile uint8_t*d=(volatile uint8_t*)dst;
+ for(size_t i=0;i<n;i++)d[i]=(uint8_t)ch;
+ return dst;
+}
+#endif
 #define COUNT __COUNT__
 #define STACK UINT64_C(0x710000000)
 #define ENTRY (STACK+UINT64_C(0x7ff8))
