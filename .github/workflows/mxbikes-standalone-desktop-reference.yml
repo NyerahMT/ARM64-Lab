@@ -21,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends wine wine64 xvfb xauth xdotool innoextract mesa-utils libgl1-mesa-dri
+          sudo apt-get install -y -qq --no-install-recommends wine wine64 xvfb xauth xdotool p7zip-full innoextract mesa-utils imagemagick libgl1-mesa-dri
           mkdir -p "$RUNNER_TEMP/mxb-standalone-reference"
       - name: Retrieve official public standalone installer
         run: |
@@ -29,7 +29,13 @@ jobs:
           root="$RUNNER_TEMP/mxb-standalone-reference"
           curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --max-filesize 3000000000 --max-time 400 --retry 1 \
             'https://www.mx-bikes.com/downloads/mxbikes-beta21e.exe' -o "$root/installer.exe"
-          innoextract --silent --output-dir "$root/extracted" "$root/installer.exe"
+          mkdir -p "$root/extracted"
+          # The successful executable-only audit used 7z for this installer.
+          # Preserve its complete public demo directory structure this time.
+          if ! 7z x -y -o"$root/extracted" "$root/installer.exe" > "$root/extract.log" 2>&1 || ! find "$root/extracted" -type f -iname mxbikes.exe -print -quit | grep -q .; then
+            rm -rf "$root/extracted"
+            innoextract --silent --output-dir "$root/extracted" "$root/installer.exe"
+          fi
           test "$(find "$root/extracted" -type f -iname mxbikes.exe | wc -l)" -eq 1
       - name: Run genuine unmodified demo in isolated desktop session
         env:
