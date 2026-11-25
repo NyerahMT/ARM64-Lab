@@ -7,6 +7,10 @@ extern void free(void *);
 struct MXBGLSurface {
  MXBGLVertex frame[MXB_GL_MAX_OUTPUT],working[MXB_GL_MAX_INPUT];
  size_t frame_len,working_len;
+ MXBGLDrawBatch batches[MXB_GL_MAX_BATCHES];
+ size_t batch_len;
+ unsigned depth_test,depth_write,depth_func,blend_enabled,blend_src,blend_dst,alpha_test,alpha_func;
+ float alpha_ref;
  float modelview[16],projection[16],current_color[4],current_uv[2];
  /* OpenGL minimum stack depths: modelview 32, projection 2, including current. */
  float modelview_stack[31][16],projection_stack[1][16];
@@ -39,8 +43,49 @@ void mxb_gl_reset(MXBGLSurface*s){
  identity(s->modelview);identity(s->projection);
  for(unsigned i=0;i<4u;i++)s->current_color[i]=1.0f;
  s->current_matrix=MXB_GL_MODELVIEW;
+ s->depth_write=1u;s->depth_func=MXB_GL_LESS;
+ s->blend_src=MXB_GL_ONE;s->blend_dst=MXB_GL_ZERO;
+ s->alpha_func=MXB_GL_ALWAYS;
 }
-void mxb_gl_clear_frame(MXBGLSurface*s){if(s)s->frame_len=0u;}
+void mxb_gl_clear_frame(MXBGLSurface*s){if(s){s->frame_len=0u;s->batch_len=0u;}}
+int mxb_gl_capability(MXBGLSurface*s,unsigned cap,int enabled){
+ if(!s)return 0;
+ if(s->building)return fail(s);
+ unsigned value=enabled!=0;
+ switch(cap){
+ case MXB_GL_DEPTH_TEST:s->depth_test=value;return 1;
+ case MXB_GL_BLEND:s->blend_enabled=value;return 1;
+ case MXB_GL_ALPHA_TEST:s->alpha_test=value;return 1;
+ /* Unlit geometry is implemented; enabled fixed-function lighting is not. */
+ case MXB_GL_LIGHTING:return value?fail(s):1;
+ default:return fail(s);
+ }
+}
+int mxb_gl_depth_mask(MXBGLSurface*s,unsigned enabled){
+ if(!s)return 0;
+ if(s->building||enabled>1u)return fail(s);
+ s->depth_write=enabled;return 1;
+}
+int mxb_gl_depth_func(MXBGLSurface*s,unsigned func){
+ if(!s)return 0;
+ if(s->building||func<MXB_GL_NEVER||func>MXB_GL_ALWAYS)return fail(s);
+ s->depth_func=func;return 1;
+}
+static int blend_factor(unsigned v){
+ return v==MXB_GL_ZERO||v==MXB_GL_ONE||v==MXB_GL_SRC_ALPHA||v==MXB_GL_ONE_MINUS_SRC_ALPHA;
+}
+int mxb_gl_blend_func(MXBGLSurface*s,unsigned src,unsigned dst){
+ if(!s)return 0;
+ if(s->building||!blend_factor(src)||!blend_factor(dst))return fail(s);
+ s->blend_src=src;s->blend_dst=dst;return 1;
+}
+int mxb_gl_alpha_func(MXBGLSurface*s,unsigned func,float ref){
+ if(!s)return 0;
+ if(s->building||func<MXB_GL_NEVER||func>MXB_GL_ALWAYS||!valid(ref))return fail(s);
+ s->alpha_func=func;s->alpha_ref=ref<0?0:ref>1?1:ref;return 1;
+}
+size_t mxb_gl_batch_count(const MXBGLSurface*s){return s?s->batch_len:0u;}
+const MXBGLDrawBatch*mxb_gl_batches(const MXBGLSurface*s){return s?s->batches:NULL;}
 int mxb_gl_matrix_mode(MXBGLSurface*s,unsigned mode){
  if(!s)return 0;
  if(s->building||(mode!=MXB_GL_MODELVIEW&&mode!=MXB_GL_PROJECTION))return fail(s);
@@ -141,7 +186,9 @@ int mxb_gl_end(MXBGLSurface*s){
   if(n%4u)return fail(s);
   triangles=(n/4u)*2u;
  }else triangles=n>=3u?n-2u:0u;
- if(triangles>(MXB_GL_MAX_OUTPUT-s->frame_len)/3u)return fail(s);
+ if(triangles>(MXB_GL_MAX_OUTPUT-s->frame_len)/3u||
+    (triangles&&s->batch_len>=MXB_GL_MAX_BATCHES))return fail(s);
+ size_t first=s->frame_len;
  if(s->begin_mode==MXB_GL_TRIANGLES){
   for(size_t i=0;i<n;i+=3u)tri(s,i,i+1u,i+2u);
  }else if(s->begin_mode==MXB_GL_QUADS){
@@ -153,6 +200,12 @@ int mxb_gl_end(MXBGLSurface*s){
    if(i&1u)tri(s,i-1u,i-2u,i);
    else tri(s,i-2u,i-1u,i);
   }
+ }
+ if(triangles){
+  MXBGLDrawBatch*b=&s->batches[s->batch_len++];
+  *b=(MXBGLDrawBatch){(uint32_t)first,(uint32_t)(s->frame_len-first),
+    s->depth_test,s->depth_write,s->depth_func,s->blend_enabled,s->blend_src,s->blend_dst,
+    s->alpha_test,s->alpha_func,s->alpha_ref};
  }
  s->working_len=0;return 1;
 }
@@ -210,6 +263,10 @@ int mxb_gl_dispatch_import(MXBGLSurface*s,const char*lib,const char*name,
                            unsigned word,const float*a,size_t n){
  if(!s)return 0;
  if(!sym_eq(lib,"OPENGL32.dll")||!name)return fail(s);
+ if(sym_eq(name,"glEnable")||sym_eq(name,"glDisable"))
+  return mxb_gl_capability(s,word,sym_eq(name,"glEnable"));
+ if(sym_eq(name,"glDepthMask"))return mxb_gl_depth_mask(s,word);
+ if(sym_eq(name,"glDepthFunc"))return mxb_gl_depth_func(s,word);
  if(sym_eq(name,"glBegin"))return mxb_gl_begin(s,word);
  if(sym_eq(name,"glEnd"))return mxb_gl_end(s);
  if(sym_eq(name,"glMatrixMode"))return mxb_gl_matrix_mode(s,word);
