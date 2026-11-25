@@ -5,16 +5,23 @@
 Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering project.
 **Not affiliated with or endorsed by PiBoSo, Valve or Apple.**
 
-## Status (October 27, 2026)
+## Status (November 24, 2026)
 
 - The SHA-pinned original MX Bikes executable has executed in a **private**
   Linux/x64-emulator and AArch64 testing environment through original CRT
   file operations and checksum logic.
 - The original game stops at the unsupported
   `steam_api64.dll!SteamAPI_RestartAppIfNecessary` platform boundary.
-- **No original game rendering calls, real game frames or working MX Bikes
-  iOS game launch have been verified.** Metal screenshots in prior reports
-  show synthetic graphics tests only.
+- **Isolated original glyph rendering verified (November 24, 2026):** private
+  ARM64 CI executed the SHA-pinned original chained unwind drawing fragment
+  with explicitly authored caller fixtures. Across four cases, 316 original
+  x64 instructions produced 42 verified OpenGL import calls and 18 native
+  triangle vertices; all position, color and UV attributes matched.
+  The disabled-glyph case produced no geometry.
+- **No actual game frame or working MX Bikes iOS game launch has been
+  verified.** The original startup still stops at the Steam boundary. The
+  isolated renderer proof is not a booted engine or a real menu.
+  Private CI evidence: [run 45524503483](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45524503483).
 - This public snapshot includes the authored source, tests, documentation
   and iOS Metal renderer, **not** the commercial executable, DLLs,
   tracks, game packages, textures or original game release archives.
