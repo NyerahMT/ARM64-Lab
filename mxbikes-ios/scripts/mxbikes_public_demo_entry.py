@@ -20,9 +20,9 @@ sys.path.insert(0,str(ROOT))
 from tools.pe_probe import PE
 from mxbikes_first_callee_emu import import_slots
 from mxb_gl_callsite import prove_callsite
-from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE
+from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE, process_strings, process_service, PROCESS_ENVIRONMENT_APIS
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_PROT_READ, UC_PROT_WRITE, UC_PROT_EXEC
-from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_GS_BASE
+from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_GS_BASE
 
 DEMO_SHA="b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742"
 PAGE=4096
@@ -31,11 +31,12 @@ STACK_SIZE=0x100000
 STUB=0x710000000
 END=0x720000000
 TEB=0x730000000
+PROCESS_STRINGS=0x740000000
 MAX_IMAGE=128*1024*1024
 MAX_INSTRUCTIONS=250000
 ENVIRONMENT={"getsystemtimeasfiletime","getcurrentthreadid","getcurrentprocessid",
              "queryperformancecounter","queryperformancefrequency","gettickcount","gettickcount64",
-             "getstartupinfoa"}
+             "getstartupinfoa"} | PROCESS_ENVIRONMENT_APIS
 
 
 def align(n):
@@ -95,6 +96,10 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     u.mem_write(TEB,thread_environment(TEB,STACK+STACK_SIZE,STACK,0x1234,0x5678))
     u.reg_write(UC_X86_REG_GS_BASE,TEB)
     writable.append((TEB,TEB+TEB_PAGE_SIZE))
+    a_off,w_off,strings=process_strings(PAGE)
+    u.mem_map(PROCESS_STRINGS,PAGE,UC_PROT_READ|UC_PROT_WRITE)
+    u.mem_write(PROCESS_STRINGS,strings)
+    u.mem_protect(PROCESS_STRINGS,PAGE,UC_PROT_READ)
     sp=STACK+STACK_SIZE-0x108
     u.mem_write(sp,struct.pack("<Q",END))
     u.reg_write(UC_X86_REG_RSP,sp)
@@ -131,7 +136,10 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
                     halt("unverified_environment_import_callsite",import_name=key)
                     return
                 ptr=cpu.reg_read(UC_X86_REG_RCX)
-                if low=="getstartupinfoa":checked_write(cpu.mem_write,writable,ptr,startup_info_a())
+                if low in PROCESS_ENVIRONMENT_APIS:
+                    value=process_service(low,(ptr,cpu.reg_read(UC_X86_REG_RDX),cpu.reg_read(UC_X86_REG_R8)),image_base=base,command_a=PROCESS_STRINGS+a_off,command_w=PROCESS_STRINGS+w_off,write=cpu.mem_write,writable=writable)
+                    cpu.reg_write(UC_X86_REG_RAX,value)
+                elif low=="getstartupinfoa":checked_write(cpu.mem_write,writable,ptr,startup_info_a())
                 elif low=="getsystemtimeasfiletime":write_qword(ptr,116444736012345678)
                 elif low=="queryperformancecounter":write_qword(ptr,1234567890);cpu.reg_write(UC_X86_REG_RAX,1)
                 elif low=="queryperformancefrequency":write_qword(ptr,10000000);cpu.reg_write(UC_X86_REG_RAX,1)
@@ -171,7 +179,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             "tls_directory_present":bool(tls_rva and tls_size),
             "tls_callbacks_executed":False,
             "stop":stop,"environment_mode":"bounded_clock_process_identity_and_minimal_startup_environment",
-            "minimal_teb_mapped":True,"peb_implemented":False,
+            "minimal_teb_mapped":True,"immutable_process_strings_mapped":True,"peb_implemented":False,
             "demo_restrictions_modified":False,"native_arm64_engine_executed":False,
             "actual_game_menu_rendered":False}
 
