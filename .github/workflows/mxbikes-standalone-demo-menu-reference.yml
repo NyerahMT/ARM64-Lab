@@ -1,0 +1,118 @@
+name: MX Bikes — official standalone demo menu reference
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/mxb-demo-crt-startup-20261125]
+    paths: ['.github/workflows/mxbikes-standalone-demo-menu-reference.yml']
+permissions:
+  contents: read
+concurrency:
+  group: mxb-standalone-demo-menu-reference
+  cancel-in-progress: true
+jobs:
+  standalone-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Prepare disposable Wine and software OpenGL environment
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wine wine64 xvfb xauth xdotool p7zip-full innoextract mesa-utils imagemagick libgl1-mesa-dri
+          mkdir -p "$RUNNER_TEMP/mxb-standalone-reference"
+      - name: Retrieve official public standalone installer
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mxb-standalone-reference"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --max-filesize 3000000000 --max-time 400 --retry 1 \
+            'https://www.mx-bikes.com/downloads/mxbikes-beta21e.exe' -o "$root/installer.exe"
+          mkdir -p "$root/extracted"
+          # The successful executable-only audit used 7z for this installer.
+          # Preserve its complete public demo directory structure this time.
+          if ! 7z x -y -o"$root/extracted" "$root/installer.exe" > "$root/extract.log" 2>&1 || ! find "$root/extracted" -type f -iname mxbikes.exe -print -quit | grep -q .; then
+            rm -rf "$root/extracted"
+            innoextract --silent --output-dir "$root/extracted" "$root/installer.exe"
+          fi
+          test "$(find "$root/extracted" -type f -iname mxbikes.exe | wc -l)" -eq 1
+      - name: Run genuine unmodified demo in isolated desktop session
+        env:
+          WINEDEBUG: "-all"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WINEARCH: win64
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mxb-standalone-reference"
+          export WINEPREFIX="$root/wine"
+          exe="$(find "$root/extracted" -type f -iname mxbikes.exe -print -quit)"
+          test "$(sha256sum "$exe" | cut -d ' ' -f 1)" = b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742
+          python mxbikes-ios/scripts/mxbikes_standalone_import_audit.py --standalone-exe "$exe" --out "$root/report"
+          export MXB_REFERENCE_EXE="$exe"
+          export MXB_REFERENCE_CAPTURE="$root/capture"
+          mkdir -p "$MXB_REFERENCE_CAPTURE"
+          python - "$exe" "$MXB_REFERENCE_CAPTURE" <<'PY'
+          import hashlib,json,pathlib,sys
+          root=pathlib.Path(sys.argv[1]).parent
+          config=root/"core.ini"
+          data={"core_ini_present":config.is_file(),"core_ini_bytes":config.stat().st_size if config.is_file() else None,"core_ini_sha256":hashlib.sha256(config.read_bytes()).hexdigest() if config.is_file() else None,"files":[{"name":p.name,"size":p.stat().st_size} for p in sorted(root.iterdir()) if p.is_file()]}
+          print("PUBLIC_DEMO_ASSET_INVENTORY "+json.dumps(data))
+          (pathlib.Path(sys.argv[2])/"asset-inventory.json").write_text(json.dumps(data,indent=2))
+          PY
+          xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX' bash -c '
+            set -euo pipefail
+            timeout 90 wineboot -u >/dev/null 2>&1
+            glxinfo -B
+            cd "$(dirname "$MXB_REFERENCE_EXE")"
+            wine "$MXB_REFERENCE_EXE" >"$WINEPREFIX/game.log" 2>&1 &
+            game_pid=$!
+            trap "wineserver -k >/dev/null 2>&1 || true" EXIT
+            for second in $(seq 1 45); do
+              if ! kill -0 "$game_pid" 2>/dev/null; then
+                echo "STANDALONE_PROCESS_EXITED at $second seconds"
+                break
+              fi
+              if [ $((second % 5)) -eq 0 ]; then
+                echo "STANDALONE_WINDOW_SAMPLE $second seconds"
+                xdotool search --onlyvisible --name ".*" getwindowname %@ 2>/dev/null || true
+              fi
+              sleep 1
+            done
+            if kill -0 "$game_pid" 2>/dev/null; then
+              echo "STANDALONE_PROCESS_ALIVE"
+            fi
+            echo "STANDALONE_FINAL_VISIBLE_WINDOWS"
+            xdotool search --onlyvisible --name ".*" getwindowname %@ 2>/dev/null || true
+            window="$(xdotool search --onlyvisible --name "^MX Bikes$" 2>/dev/null | head -n 1 || true)"
+            if [ -n "$window" ]; then
+              xdotool getwindowgeometry --shell "$window"
+              import -window "$window" "$MXB_REFERENCE_CAPTURE/standalone-window.png"
+              identify "$MXB_REFERENCE_CAPTURE/standalone-window.png"
+              sha256sum "$MXB_REFERENCE_CAPTURE/standalone-window.png"
+              echo "STANDALONE_SCREENSHOT_CAPTURED"
+              xdotool mousemove --window "$window" 640 460 click 1
+              sleep 10
+              window="$(xdotool search --onlyvisible --name "^MX Bikes$" 2>/dev/null | head -n 1 || true)"
+              if [ -n "$window" ]; then
+                import -window "$window" "$MXB_REFERENCE_CAPTURE/demo-after-selection.png"
+                identify "$MXB_REFERENCE_CAPTURE/demo-after-selection.png"
+                sha256sum "$MXB_REFERENCE_CAPTURE/demo-after-selection.png"
+                echo "STANDALONE_DEMO_SELECTION_CAPTURED"
+              fi
+            else
+              echo "STANDALONE_SCREENSHOT_NO_GAME_WINDOW"
+            fi
+            echo "STANDALONE_REFERENCE_LOG_END"
+            tail -n 15 "$WINEPREFIX/game.log"
+          '
+      - name: Retain public demo reference screenshot only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: standalone-demo-menu-reference
+          path: ${{ runner.temp }}/mxb-standalone-reference/capture/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Delete original binaries and disposable prefix
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mxb-standalone-reference"
