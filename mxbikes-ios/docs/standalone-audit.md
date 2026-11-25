@@ -99,3 +99,25 @@ Fifteen source-only regression checkpoints passed optimized host and ASan/UBSan 
 Added a native bounded platform model for SetCurrentDirectoryA / GetCurrentDirectoryA semantics, a caller-advanced 32-bit wrapping millisecond clock, and balanced 1 ms virtual timer period registration. The directory namespace admits only the configured virtual root and its drive root. No host directory is changed, no actual assets are opened, and no physical timer resolution is changed. Twenty-five numbered checks passed the optimized host and ASan/UBSan builds. Both sources compiled to arm64-apple-ios15.0 Mach-O objects.
 
 Local experimental reference trace, same pinned beta21e executable, native C CRT and new native C platform model: 249,866 original x64 instruction executions in a total 250,000-step budget (including the modeled import/CRT transitions). Actual imported SetCurrentDirectoryA returned success for the configured virtual directory; timeGetTime was serviced twice and timeBeginPeriod once. The guest clock advanced deterministically by original instruction count, not wall time. Trace stopped on budget at RVA 0x285d83 inside an initialization loop. Instruction executions are not unique instructions, translated instructions, or an estimate of completeness. No game window, asset loading, native ARM64 engine execution, or licensing modification was demonstrated. The new component was exercised through the local reference harness but is not yet wired to the committed Unicorn runner or the iOS importer. Next: characterize the remaining startup dependencies without changing any demo restrictions, and integrate the supported platform calls into the portable importer. Repeatable source-only test: python mxbikes-ios/tests/test_mxb_standalone_platform.py.
+
+### Native import batch: filesystem, heap and memory operations
+
+Three connected native C modules now unify the earlier process and virtual directory services with a bounded 16 MiB, 256-block guest allocator and bounded CRT byte-memory operations. The allocator implements malloc/calloc/free, including 16-byte alignment, first-fit reuse, capacity limits, overflow handling and rejection of invalid frees. The memory model implements memset/memcpy/memmove/memcmp with preflight checks and bounded guest callbacks. No real host heap pointer is returned. Realloc, general filesystem I/O, sockets and a full Windows runtime remain unsupported.
+
+Local verification: 25 unified import checkpoints, 17 heap checkpoints and 16 byte-memory checkpoints passed (58 native checks), including sanitizer executions. Ten Python/C integration tests passed and all eight implementation/fixture translation units cross-compiled into ARM64 iOS Mach-O objects. Source-only repeatable tests:
+
+```sh
+python mxbikes-ios/tests/test_mxb_standalone_batch.py
+python mxbikes-ios/tests/test_mxb_demo_native_startup.py
+```
+
+A local experimental single-step x64 reference harness using the exact native service library reached the original standalone's next actual unsupported import. Successive traces: 287,069 instructions / 819 unique addresses at malloc; 287,075 / 825 at memset; 287,083 / 833 at WS2_32.dll ordinal 115. The last trace used a genuine guest allocation and byte fill, and retained both initializer-table completion results. Instruction totals include repeated work; they are not ARM64 translation coverage. No networking result was fabricated, no licensing behavior changed, and no menu rendered. The experimental local harness is not distributed.
+
+The committed Unicorn runner now has a separate optional unified backend and records hot RVAs, unique addresses and heap use:
+
+```sh
+cc -shared -fPIC -O2 mxbikes-ios/runtime/mxb_standalone_{crt,platform,heap,memory,imports}.c -o /tmp/mxb-startup.so
+python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/official/demo/mxbikes.exe --native-startup-library /tmp/mxb-startup.so --instruction-limit 1000000
+```
+
+The Unicorn-specific wiring is not yet execution-tested locally, and the native iOS importer still needs integration. No original executable bytes or assets committed. No Actions runs started.
