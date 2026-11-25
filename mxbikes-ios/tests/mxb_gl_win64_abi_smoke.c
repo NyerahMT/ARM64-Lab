@@ -279,6 +279,59 @@ int main(void){
  regs.rcx=MXB_GL_TRIANGLES;regs.rdx=0;regs.r8=3;regs.r9=0;
  if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_OK||
     mxb_gl_vertex_count(s)!=6u)return 80;
+ /* Original text renderer depends on state changes between independent draws.
+  * The GL Win64 float argument is XMM1, not XMM0. */
+ mxb_gl_reset(s);
+ regs.rcx=MXB_GL_LIGHTING;
+ if(invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_UNSUPPORTED||
+    invoke(s,&mem,&regs,"glDisable")!=MXB_GL_GUEST_OK)return 81;
+ regs.rcx=MXB_GL_DEPTH_TEST;
+ if(invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_OK)return 82;
+ regs.rcx=0xfeedface00000000ULL;
+ if(invoke(s,&mem,&regs,"glDepthMask")!=MXB_GL_GUEST_OK)return 83;
+ regs.rcx=0x0203;
+ if(invoke(s,&mem,&regs,"glDepthFunc")!=MXB_GL_GUEST_OK)return 84;
+ regs.rcx=MXB_GL_BLEND;
+ if(invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_OK)return 85;
+ regs.rcx=MXB_GL_SRC_ALPHA;regs.rdx=MXB_GL_ONE_MINUS_SRC_ALPHA;
+ if(invoke(s,&mem,&regs,"glBlendFunc")!=MXB_GL_GUEST_OK)return 86;
+ regs.rcx=MXB_GL_ALPHA_TEST;
+ if(invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_OK)return 87;
+ regs.rcx=0x0206;regs.xmm_low64[0]=bits_f(.875f);regs.xmm_low64[1]=bits_f(.125f);
+ if(invoke(s,&mem,&regs,"glAlphaFunc")!=MXB_GL_GUEST_OK)return 88;
+ for(unsigned pass=0;pass<2u;pass++){
+  if(pass){
+   regs.rcx=MXB_GL_BLEND;
+   if(invoke(s,&mem,&regs,"glDisable")!=MXB_GL_GUEST_OK)return 89;
+   regs.rcx=MXB_GL_ALPHA_TEST;
+   if(invoke(s,&mem,&regs,"glDisable")!=MXB_GL_GUEST_OK)return 90;
+   regs.rcx=MXB_GL_DEPTH_TEST;
+   if(invoke(s,&mem,&regs,"glDisable")!=MXB_GL_GUEST_OK)return 91;
+   regs.rcx=1;
+   if(invoke(s,&mem,&regs,"glDepthMask")!=MXB_GL_GUEST_OK)return 92;
+  }
+  regs.rcx=MXB_GL_TRIANGLES;
+  if(invoke(s,&mem,&regs,"glBegin")!=MXB_GL_GUEST_OK)return 93;
+  regs.rcx=MXB_GL_BLEND;
+  if(invoke(s,&mem,&regs,"glEnable")!=MXB_GL_GUEST_RENDER_REJECTED)return 94;
+  for(unsigned i=0;i<3u;i++){
+   regs.xmm_low64[0]=bits_f((float)i*.25f);regs.xmm_low64[1]=bits_f(0);
+   if(invoke(s,&mem,&regs,"glVertex2f")!=MXB_GL_GUEST_OK)return 95;
+  }
+  if(invoke(s,&mem,&regs,"glEnd")!=MXB_GL_GUEST_OK)return 96;
+ }
+ const MXBGLDrawBatch *b=mxb_gl_batches(s);
+ if(mxb_gl_batch_count(s)!=2u||mxb_gl_vertex_count(s)!=6u||
+    b[0].first_vertex!=0u||b[0].vertex_count!=3u||
+    b[0].depth_test!=1u||b[0].depth_write!=0u||b[0].depth_func!=0x0203u||
+    b[0].blend_enabled!=1u||b[0].blend_src!=MXB_GL_SRC_ALPHA||
+    b[0].blend_dst!=MXB_GL_ONE_MINUS_SRC_ALPHA||b[0].alpha_test!=1u||
+    b[0].alpha_func!=0x0206u||!nearly(b[0].alpha_ref,.125f)||
+    b[1].first_vertex!=3u||b[1].vertex_count!=3u||
+    b[1].depth_test!=0u||b[1].depth_write!=1u||
+    b[1].blend_enabled!=0u||b[1].alpha_test!=0u)return 97;
+ mxb_gl_clear_frame(s);
+ if(mxb_gl_batch_count(s)!=0u||mxb_gl_vertex_count(s)!=0u)return 98;
  mxb_gl_destroy(s);
  return 0;
 }
