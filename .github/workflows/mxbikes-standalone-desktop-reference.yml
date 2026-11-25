@@ -50,6 +50,8 @@ jobs:
           test "$(sha256sum "$exe" | cut -d ' ' -f 1)" = b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742
           python mxbikes-ios/scripts/mxbikes_standalone_import_audit.py --standalone-exe "$exe" --out "$root/report"
           export MXB_REFERENCE_EXE="$exe"
+          export MXB_REFERENCE_CAPTURE="$root/capture"
+          mkdir -p "$MXB_REFERENCE_CAPTURE"
           xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX' bash -c '
             set -euo pipefail
             timeout 90 wineboot -u >/dev/null 2>&1
@@ -74,9 +76,26 @@ jobs:
             fi
             echo "STANDALONE_FINAL_VISIBLE_WINDOWS"
             xdotool search --onlyvisible --name ".*" getwindowname %@ 2>/dev/null || true
+            window="$(xdotool search --onlyvisible --name "^MX Bikes$" 2>/dev/null | head -n 1 || true)"
+            if [ -n "$window" ]; then
+              xdotool getwindowgeometry --shell "$window"
+              import -window "$window" "$MXB_REFERENCE_CAPTURE/standalone-window.png"
+              identify "$MXB_REFERENCE_CAPTURE/standalone-window.png"
+              sha256sum "$MXB_REFERENCE_CAPTURE/standalone-window.png"
+              echo "STANDALONE_SCREENSHOT_CAPTURED"
+            else
+              echo "STANDALONE_SCREENSHOT_NO_GAME_WINDOW"
+            fi
             echo "STANDALONE_REFERENCE_LOG_END"
             tail -n 15 "$WINEPREFIX/game.log"
           '
+      - name: Retain public demo reference screenshot only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: standalone-desktop-reference
+          path: ${{ runner.temp }}/mxb-standalone-reference/capture/standalone-window.png
+          if-no-files-found: warn
+          retention-days: 7
       - name: Delete original binaries and disposable prefix
         if: always()
         run: rm -rf "$RUNNER_TEMP/mxb-standalone-reference"
