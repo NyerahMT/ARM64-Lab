@@ -332,6 +332,43 @@ int main(void){
     b[1].blend_enabled!=0u||b[1].alpha_test!=0u)return 97;
  mxb_gl_clear_frame(s);
  if(mxb_gl_batch_count(s)!=0u||mxb_gl_vertex_count(s)!=0u)return 98;
+ /* Nonzero high words are legal for Win64 32-bit GL arguments.
+  * Test both draw families, signed negative low words and full pointers. */
+ mxb_gl_reset(s);
+ memcpy(mem.heap,points,sizeof(points));
+ memcpy(mem.heap+96,ix,sizeof(ix));
+ regs.rcx=3;regs.rdx=MXB_GL_FLOAT;regs.r8=12;regs.r9=HEAP;
+ if(invoke(s,&mem,&regs,"glVertexPointer")!=MXB_GL_GUEST_OK)return 99;
+ regs.rcx=MXB_GL_VERTEX_ARRAY;
+ if(invoke(s,&mem,&regs,"glEnableClientState")!=MXB_GL_GUEST_OK)return 100;
+ regs.rcx=UINT64_C(0xdeadbeef00000004);
+ regs.rdx=UINT64_C(0xaabbccdd00000006);
+ regs.r8=UINT64_C(0x1234567800001403);regs.r9=HEAP+96;
+ if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_OK||
+    mxb_gl_vertex_count(s)!=6u)return 101;
+ vertices=mxb_gl_vertices(s);
+ if(!nearly(vertices[0].position[0],-1)||
+    !nearly(vertices[3].position[1],1))return 102;
+ mxb_gl_clear_frame(s);
+ regs.rdx=UINT64_C(0xaabbccdd00000000);
+ regs.r8=UINT64_C(0x1234567800000003);
+ if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_OK||
+    mxb_gl_vertex_count(s)!=3u)return 103;
+ vertices=mxb_gl_vertices(s);
+ if(!nearly(vertices[0].position[0],-1)||
+    !nearly(vertices[2].position[1],1))return 104;
+ mxb_gl_clear_frame(s);
+ unsigned reads_before=mem.reads;
+ regs.rdx=UINT64_C(0xabcdef01ffffffff);
+ if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_RENDER_REJECTED)return 105;
+ regs.rdx=0;regs.r8=UINT64_C(0xabcdef01ffffffff);
+ if(invoke(s,&mem,&regs,"glDrawArrays")!=MXB_GL_GUEST_RENDER_REJECTED)return 106;
+ regs.rdx=UINT64_C(0xabcdef0180000000);regs.r8=MXB_GL_UNSIGNED_SHORT;
+ if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_RENDER_REJECTED||
+    mem.reads!=reads_before||mxb_gl_vertex_count(s)!=0u)return 107;
+ regs.rdx=3;regs.r9=(uint32_t)(HEAP+96);
+ if(invoke(s,&mem,&regs,"glDrawElements")!=MXB_GL_GUEST_UNMAPPED_POINTER||
+    mxb_gl_vertex_count(s)!=0u)return 108;
  mxb_gl_destroy(s);
  return 0;
 }

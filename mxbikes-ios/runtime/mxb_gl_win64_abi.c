@@ -46,12 +46,16 @@ static int good_mode(unsigned mode,unsigned count){
 }
 static enum MXBGLGuestStatus draw_elements(MXBGLSurface*s,
  const MXBGLWin64Call*g,MXBGLGuestRead cb,void*ctx,int indexed){
- unsigned mode=(unsigned)g->rcx;
- unsigned count=(unsigned)(indexed?g->rdx:g->r8);
- unsigned type=(unsigned)g->r8;
- if(!good_mode(mode,count)||(indexed?g->rdx:g->r8)!=(uint64_t)count||
+ /* GLenum, GLsizei and GLint occupy 32 bits in Win64 integer registers.
+  * Ignore unspecified upper bits, but reject negative/oversized low words.
+  * Index and vertex memory pointers retain their full guest width. */
+ uint32_t mode=(uint32_t)g->rcx;
+ uint32_t count=(uint32_t)(indexed?g->rdx:g->r8);
+ uint32_t type=(uint32_t)g->r8;
+ uint32_t first=indexed?0u:(uint32_t)g->rdx;
+ if(!good_mode(mode,count)||
     (indexed&&(type!=MXB_GL_UNSIGNED_BYTE&&type!=MXB_GL_UNSIGNED_SHORT&&type!=MXB_GL_UNSIGNED_INT))||
-    (!indexed&&(g->rdx>65535u||g->rdx+count>65536u)))
+    (!indexed&&(first>65535u||count>65536u-first)))
   return MXB_GL_GUEST_RENDER_REJECTED;
  MXBGLClientArray vertex,color,texcoord;
  if(!mxb_gl_client_lookup(s,MXB_GL_VERTEX_ARRAY,&vertex)||
@@ -69,7 +73,7 @@ static enum MXBGLGuestStatus draw_elements(MXBGLSurface*s,
  unsigned col_stride=color.stride?color.stride:
   color.components*(color.type==MXB_GL_FLOAT?4u:1u);
  for(unsigned i=0;i<count;i++){
-  uint32_t index=indexed?0u:(uint32_t)(g->rdx+i);
+  uint32_t index=indexed?0u:first+i;
   if(indexed&&index_size==1u){
    uint8_t byte_index=0;
    if(!read_at(cb,ctx,g->r9,(uint64_t)i,&byte_index,1u))

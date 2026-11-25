@@ -53,9 +53,10 @@ guest_entry:
  movabs rax,0x11000020
  call rax
 
- mov ecx,4
- mov edx,6
- mov r8d,0x1403
+ # Win64 integer arguments are right-justified; upper bits need not be zero.
+ movabs rcx,0xdeadbeef00000004
+ movabs rdx,0xaabbccdd00000006
+ movabs r8,0x1234567800001403
  lea r9,[rip+indices]
  movabs rax,0x11000030
  call rax
