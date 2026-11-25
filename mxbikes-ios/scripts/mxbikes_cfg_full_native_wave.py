@@ -441,6 +441,37 @@ def x64_reference(pe,plan,case):
             bytes(cpu.mem_read(WINDOW_LO,STACK_WINDOW)),
             bytes(cpu.mem_read(HEAP,HEAP_BYTES))),None
 
+def generate_worker(plan,name):
+    """Emit the same worker for differential fixtures and native modules."""
+    import re
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}",name):
+        raise ValueError("Invalid generated function symbol")
+    instructions=[]
+    for row in plan["rows"]:
+        line=f"case {row['rva']}U:"
+        if row["kind"]=="ret":
+            line+=(" {uint64_t guest_return=0U;"
+                   "if(!mx_cfg_transfer(&mem,s.rsp,&guest_return,8U,0))return 11;"
+                   "s.rsp+=8U;s.rip=guest_return;*sp=s;return 0;}")
+        elif row["kind"]=="jmp":
+            line+=f" pc={row['target']}U;break;"
+        elif row["kind"]=="jcc":
+            line+=(f" pc=({row['predicate']})?{row['target']}U:"
+                   f"{row['next']}U;break;")
+        else:
+            line+=f" {row['stmt']} pc={row['next']}U;break;"
+        instructions.append(line)
+    body=(
+        f"static int {name}(struct cpu*sp,mx_cfg_memory*memory){{\n"
+        " struct cpu s=*sp;mx_cfg_memory mem=*memory;(void)mem;\n"
+        f" uint32_t pc={plan['rva']}U;\n"
+        " for(unsigned budget=0U;budget<1792U;budget++){\n"
+        "  switch(pc){\n"
+        +"\n".join(instructions)+
+        "\n default:return 12;\n } }\n return 13;\n}\n"
+    )
+    return body
+
 def generate(batch,references):
     original_data={}
     for plan in batch:
@@ -460,30 +491,7 @@ def generate(batch,references):
     pieces=[]
     rows=[]
     for idx,plan in enumerate(batch):
-        instructions=[]
-        for row in plan["rows"]:
-            line=f"case {row['rva']}U:"
-            if row["kind"]=="ret":
-                line+=(" {uint64_t guest_return=0U;"
-                       "if(!mx_cfg_transfer(&mem,s.rsp,&guest_return,8U,0))return 11;"
-                       "s.rsp+=8U;s.rip=guest_return;*sp=s;return 0;}")
-            elif row["kind"]=="jmp":
-                line+=f" pc={row['target']}U;break;"
-            elif row["kind"]=="jcc":
-                line+=(f" pc=({row['predicate']})?{row['target']}U:"
-                       f"{row['next']}U;break;")
-            else:
-                line+=f" {row['stmt']} pc={row['next']}U;break;"
-            instructions.append(line)
-        body=(
-            f"static int run_{idx}(struct cpu*sp,mx_cfg_memory*memory){{\n"
-            " struct cpu s=*sp;mx_cfg_memory mem=*memory;(void)mem;\n"
-            f" uint32_t pc={plan['rva']}U;\n"
-            " for(unsigned budget=0U;budget<1792U;budget++){\n"
-            "  switch(pc){\n"
-            +"\n".join(instructions)+
-            "\n default:return 12;\n } }\n return 13;\n}\n"
-        )
+        body=generate_worker(plan,f"run_{idx}")
         pieces.append(body)
         all_cases=[]
         for state,eflags,actual,final,stack,heap_mem in references[plan["rva"]]:
