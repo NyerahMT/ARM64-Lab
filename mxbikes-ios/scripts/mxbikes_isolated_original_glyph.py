@@ -123,7 +123,7 @@ def fbits(f):
     return struct.unpack("<I", struct.pack("<f", f))[0]
 
 
-def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_probe=False, kerning=None):
+def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_probe=False, kerning=None, renderer=None):
     """Execute the genuine loop with explicit caller fixtures; no patched guest instructions."""
     code, valid_pcs, calls = qualified
     glyph, enabled, origin, scale, width, offset, top, height, z, rgba = fixture
@@ -167,7 +167,7 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
                  X.UC_X86_REG_XMM12:fbits(top), **saved}
     for reg,value in registers.items():
         u.reg_write(reg,value)
-    bridge = VerifiedGameGL(pe,so)
+    bridge = renderer if renderer is not None else VerifiedGameGL(pe,so)
     bridge.lib.mxb_gl_vertices.argtypes = [C.c_void_p]
     bridge.lib.mxb_gl_vertices.restype = C.POINTER(Vertex)
     instructions = 0
@@ -247,7 +247,8 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
                 "all_vertex_attributes_match":True,
                 "exact_fragment_continuation":True}
     finally:
-        bridge.close()
+        if renderer is None:
+            bridge.close()
 
 def run(exe):
     pe = PE(exe)
