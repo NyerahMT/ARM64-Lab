@@ -50,7 +50,7 @@ static enum MXBGLGuestStatus draw_elements(MXBGLSurface*s,
  unsigned count=(unsigned)(indexed?g->rdx:g->r8);
  unsigned type=(unsigned)g->r8;
  if(!good_mode(mode,count)||(indexed?g->rdx:g->r8)!=(uint64_t)count||
-    (indexed&&(type!=MXB_GL_UNSIGNED_SHORT&&type!=MXB_GL_UNSIGNED_INT))||
+    (indexed&&(type!=MXB_GL_UNSIGNED_BYTE&&type!=MXB_GL_UNSIGNED_SHORT&&type!=MXB_GL_UNSIGNED_INT))||
     (!indexed&&(g->rdx>65535u||g->rdx+count>65536u)))
   return MXB_GL_GUEST_RENDER_REJECTED;
  MXBGLClientArray vertex,color,texcoord;
@@ -58,19 +58,24 @@ static enum MXBGLGuestStatus draw_elements(MXBGLSurface*s,
     !mxb_gl_client_lookup(s,MXB_GL_COLOR_ARRAY,&color)||
     !mxb_gl_client_lookup(s,MXB_GL_TEXTURE_COORD_ARRAY,&texcoord)||
     !vertex.enabled||!vertex.guest_pointer||
-    vertex.components!=3u||vertex.type!=MXB_GL_FLOAT)
+    (vertex.components!=2u&&vertex.components!=3u)||vertex.type!=MXB_GL_FLOAT)
   return MXB_GL_GUEST_RENDER_REJECTED;
  float initial[4],initial_uv[2];
  if(!mxb_gl_current_color(s,initial)||!mxb_gl_current_uv(s,initial_uv))return MXB_GL_GUEST_RENDER_REJECTED;
  /* Stage every guest pointer read before starting any renderer primitive. */
  MXBIndexedVertex out[MXB_GL_MAX_INDEXED];
- unsigned index_size=(type==MXB_GL_UNSIGNED_SHORT?2u:4u);
+ unsigned index_size=(type==MXB_GL_UNSIGNED_BYTE?1u:type==MXB_GL_UNSIGNED_SHORT?2u:4u);
  unsigned pos_stride=vertex.stride?vertex.stride:vertex.components*4u;
  unsigned col_stride=color.stride?color.stride:
   color.components*(color.type==MXB_GL_FLOAT?4u:1u);
  for(unsigned i=0;i<count;i++){
   uint32_t index=indexed?0u:(uint32_t)(g->rdx+i);
-  if(indexed&&index_size==2u){
+  if(indexed&&index_size==1u){
+   uint8_t byte_index=0;
+   if(!read_at(cb,ctx,g->r9,(uint64_t)i,&byte_index,1u))
+    return MXB_GL_GUEST_UNMAPPED_POINTER;
+   index=byte_index;
+  }else if(indexed&&index_size==2u){
    uint16_t short_index=0;
    if(!read_at(cb,ctx,g->r9,(uint64_t)i*2u,&short_index,2u))
     return MXB_GL_GUEST_UNMAPPED_POINTER;
@@ -78,8 +83,9 @@ static enum MXBGLGuestStatus draw_elements(MXBGLSurface*s,
   }else if(indexed&&!read_at(cb,ctx,g->r9,(uint64_t)i*4u,&index,4u))
    return MXB_GL_GUEST_UNMAPPED_POINTER;
   if(index>65535u)return MXB_GL_GUEST_RENDER_REJECTED;
+  out[i].vertex[2]=0.0f;
   if(!read_at(cb,ctx,vertex.guest_pointer,(uint64_t)index*pos_stride,
-              out[i].vertex,sizeof(out[i].vertex)))
+              out[i].vertex,vertex.components*sizeof(float)))
    return MXB_GL_GUEST_UNMAPPED_POINTER;
   for(unsigned k=0;k<3u;k++)
    if(!__builtin_isfinite(out[i].vertex[k]))
@@ -106,6 +112,7 @@ static enum MXBGLGuestStatus draw_elements(MXBGLSurface*s,
      return MXB_GL_GUEST_UNMAPPED_POINTER;
     for(unsigned k=0;k<color.components;k++)
      out[i].color[k]=value[k]/255.0f;
+    if(color.components==3u)out[i].color[3]=1.0f;
    }else if(color.type==MXB_GL_FLOAT){
     if(!read_at(cb,ctx,color.guest_pointer,(uint64_t)index*col_stride,
                 out[i].color,color.components*4u))
