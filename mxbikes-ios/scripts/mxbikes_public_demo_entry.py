@@ -2,8 +2,8 @@
 """Bounded x64 reference execution of the publisher's unmodified beta21e demo.
 
 This does not unlock the demo, change any licensing decision, start a game
-session, or translate x64 instructions to ARM64. Only basic Windows clock
-and process identity APIs are modeled. Everything else stops before return.
+session, or translate x64 instructions to ARM64. Only basic Windows clock,
+process identity and bounded startup environment APIs are modeled. Everything else stops before return.
 No executable bytes, memory contents or modified binaries are emitted.
 """
 from __future__ import annotations
@@ -20,8 +20,9 @@ sys.path.insert(0,str(ROOT))
 from tools.pe_probe import PE
 from mxbikes_first_callee_emu import import_slots
 from mxb_gl_callsite import prove_callsite
+from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_PROT_READ, UC_PROT_WRITE, UC_PROT_EXEC
-from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX
+from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_GS_BASE
 
 DEMO_SHA="b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742"
 PAGE=4096
@@ -29,10 +30,12 @@ STACK=0x700000000
 STACK_SIZE=0x100000
 STUB=0x710000000
 END=0x720000000
+TEB=0x730000000
 MAX_IMAGE=128*1024*1024
 MAX_INSTRUCTIONS=250000
 ENVIRONMENT={"getsystemtimeasfiletime","getcurrentthreadid","getcurrentprocessid",
-             "queryperformancecounter","queryperformancefrequency","gettickcount","gettickcount64"}
+             "queryperformancecounter","queryperformancefrequency","gettickcount","gettickcount64",
+             "getstartupinfoa"}
 
 
 def align(n):
@@ -88,6 +91,10 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
         u.mem_protect(base+p,PAGE,prot)
     u.mem_map(STACK,STACK_SIZE,UC_PROT_READ|UC_PROT_WRITE)
     writable.append((STACK,STACK+STACK_SIZE))
+    u.mem_map(TEB,TEB_PAGE_SIZE,UC_PROT_READ|UC_PROT_WRITE)
+    u.mem_write(TEB,thread_environment(TEB,STACK+STACK_SIZE,STACK,0x1234,0x5678))
+    u.reg_write(UC_X86_REG_GS_BASE,TEB)
+    writable.append((TEB,TEB+TEB_PAGE_SIZE))
     sp=STACK+STACK_SIZE-0x108
     u.mem_write(sp,struct.pack("<Q",END))
     u.reg_write(UC_X86_REG_RSP,sp)
@@ -102,9 +109,7 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
         stop.update(status=status,**details)
         u.emu_stop()
     def write_qword(ptr,value):
-        if not any(lo<=ptr and ptr+8<=hi for lo,hi in writable):
-            raise ValueError("unmapped_or_read_only_output_pointer")
-        u.mem_write(ptr,struct.pack("<Q",value))
+        checked_write(u.mem_write,writable,ptr,struct.pack("<Q",value))
     def hook(cpu,pc,size,_):
         nonlocal original
         if pc in targets:
@@ -126,7 +131,8 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
                     halt("unverified_environment_import_callsite",import_name=key)
                     return
                 ptr=cpu.reg_read(UC_X86_REG_RCX)
-                if low=="getsystemtimeasfiletime":write_qword(ptr,116444736012345678)
+                if low=="getstartupinfoa":checked_write(cpu.mem_write,writable,ptr,startup_info_a())
+                elif low=="getsystemtimeasfiletime":write_qword(ptr,116444736012345678)
                 elif low=="queryperformancecounter":write_qword(ptr,1234567890);cpu.reg_write(UC_X86_REG_RAX,1)
                 elif low=="queryperformancefrequency":write_qword(ptr,10000000);cpu.reg_write(UC_X86_REG_RAX,1)
                 else:cpu.reg_write(UC_X86_REG_RAX,{"getcurrentthreadid":0x5678,
@@ -164,7 +170,8 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             "memory_fault":memory_fault or None,
             "tls_directory_present":bool(tls_rva and tls_size),
             "tls_callbacks_executed":False,
-            "stop":stop,"environment_mode":"bounded_clock_and_process_identity_only",
+            "stop":stop,"environment_mode":"bounded_clock_process_identity_and_minimal_startup_environment",
+            "minimal_teb_mapped":True,"peb_implemented":False,
             "demo_restrictions_modified":False,"native_arm64_engine_executed":False,
             "actual_game_menu_rendered":False}
 
