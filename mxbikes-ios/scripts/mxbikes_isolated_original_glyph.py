@@ -115,28 +115,41 @@ def fbits(f):
     return struct.unpack("<I", struct.pack("<f", f))[0]
 
 
-def run_case(pe, so, qualified, fixture):
+def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_probe=False):
+    """Execute the genuine loop with explicit caller fixtures; no patched guest instructions."""
     code, valid_pcs, calls = qualified
     glyph, enabled, origin, scale, width, offset, top, height, z, rgba = fixture
+    text = bytes([glyph]) if text is None else bytes(text)
+    if not 1 <= len(text) <= 32:
+        raise ValueError("Isolated text fixture exceeds budget")
+    disabled = set(disabled) | ({glyph} if not enabled else set())
     u = Uc(UC_ARCH_X86, UC_MODE_64)
     targets = map_code(u, code, calls)
     u.mem_map(STACK, 4096)
     u.mem_map(OBJECT, 0x6000)
     u.mem_map(TEXT, 4096)
-    u.mem_write(TEXT, bytes([glyph]))
-    item = OBJECT + 72*glyph
-    u.mem_write(item+0x210, struct.pack("<4i", int(enabled), offset, width, 1))
+    u.mem_write(TEXT, text)
     uv = [(0.125,0.25),(0.125,0.75),(0.875,0.75),(0.875,0.25)]
-    for (a,b),(s,t) in zip(((0x230,0x240),(0x23c,0x24c),(0x238,0x248),(0x234,0x244)),uv):
-        u.mem_write(item+a, struct.pack("<f",s))
-        u.mem_write(item+b, struct.pack("<f",t))
+    for index in set(text):
+        item = OBJECT + 72*index
+        u.mem_write(item+0x210, struct.pack("<4i", int(index not in disabled), offset, width, 1))
+        for (a,b),(s,t) in zip(((0x230,0x240),(0x23c,0x24c),(0x238,0x248),(0x234,0x244)),uv):
+            u.mem_write(item+a, struct.pack("<f",s))
+            u.mem_write(item+b, struct.pack("<f",t))
+        u.mem_write(item+0x250, struct.pack("<2i",0,int(kerning_probe)))
+    # An explicit nonmatching kerning record exercises the original lookup
+    # loop without entering a different, as-yet-unmapped chained fragment.
+    if kerning_probe and 127 in text:
+        raise ValueError("Nonmatching kerning fixture must exclude key 127")
+    u.mem_write(OBJECT+0x4a30,struct.pack("<Q",OBJECT+0x5000))
+    u.mem_write(OBJECT+0x5000,struct.pack("<2i",127,9))
     u.mem_write(SP+0x120, struct.pack("<f",1.0))
     u.mem_write(SP+0x128, bytes(rgba))
     saved = {X.UC_X86_REG_RBP:0x123456789, X.UC_X86_REG_XMM6:fbits(11.0),
              X.UC_X86_REG_XMM7:fbits(12.0), X.UC_X86_REG_XMM13:fbits(13.0)}
     registers = {X.UC_X86_REG_RBX:OBJECT, X.UC_X86_REG_RSI:TEXT,
-                 X.UC_X86_REG_R13:0, X.UC_X86_REG_R14:TEXT+1,
-                 X.UC_X86_REG_R12:0, X.UC_X86_REG_R15:1, X.UC_X86_REG_RSP:SP,
+                 X.UC_X86_REG_R13:0, X.UC_X86_REG_R14:TEXT+len(text),
+                 X.UC_X86_REG_R12:0, X.UC_X86_REG_R15:len(text), X.UC_X86_REG_RSP:SP,
                  X.UC_X86_REG_XMM8:fbits(origin), X.UC_X86_REG_XMM9:fbits(scale),
                  X.UC_X86_REG_XMM10:fbits(height), X.UC_X86_REG_XMM11:fbits(z),
                  X.UC_X86_REG_XMM12:fbits(top), **saved}
@@ -147,11 +160,13 @@ def run_case(pe, so, qualified, fixture):
     bridge.lib.mxb_gl_vertices.restype = C.POINTER(Vertex)
     instructions = 0
     names = []
+    expected_names = EXPECTED * sum(index not in disabled for index in text)
+    visited = set()
     def hook(cpu, pc, size, _):
         nonlocal instructions
         if pc in targets:
             lib,name = targets[pc]
-            if len(names) >= len(EXPECTED) or name != EXPECTED[len(names)]:
+            if len(names) >= len(expected_names) or name != expected_names[len(names)]:
                 raise ValueError("Unexpected original dynamic GL sequence")
             if not bridge(cpu,lib,name):
                 raise ValueError("Native adapter rejected verified GL import " + name)
@@ -160,41 +175,57 @@ def run_case(pe, so, qualified, fixture):
         if pc not in valid_pcs:
             raise ValueError("Execution escaped the isolated original fragment")
         instructions += 1
+        visited.add(pc-BASE)
     try:
         u.hook_add(UC_HOOK_CODE,hook)
-        u.emu_start(BASE+FIRST,BASE+END,count=512,timeout=2_000_000)
+        u.emu_start(BASE+FIRST,BASE+END,count=512*len(text),timeout=2_000_000)
         if (u.reg_read(X.UC_X86_REG_RIP) != BASE+END or
             u.reg_read(X.UC_X86_REG_RSP) != SP or
-            u.reg_read(X.UC_X86_REG_RSI) != TEXT+1 or
-            u.reg_read(X.UC_X86_REG_R12) != 1 or
+            u.reg_read(X.UC_X86_REG_RSI) != TEXT+len(text) or
+            u.reg_read(X.UC_X86_REG_R12) != len(text) or
             any(u.reg_read(r)!=v for r,v in saved.items())):
             raise ValueError("Original fragment did not reach exact continuation with restored state")
         result = bridge.summary()
         count = result["actual_original_game_vertex_count"]
-        if names != (EXPECTED if enabled else []) or count != (6 if enabled else 0):
+        if names != expected_names or count != 6*sum(index not in disabled for index in text):
             raise ValueError("Unexpected original glyph draw count")
         if result["verified_opengl_import_failure_count"] or result["unproven_opengl_import_event_count"]:
             raise ValueError("Unverified call in isolated draw")
-        if enabled:
-            left = origin+offset*scale
+        if kerning_probe and 0x209af2 not in visited:
+            raise ValueError("Original kerning lookup was not executed")
+        vertices = bridge.lib.mxb_gl_vertices(bridge.surface)
+        cursor = origin
+        emitted = []
+        for index in text:
+            if index in disabled:
+                continue
+            left = cursor+offset*scale
             right = left+width*scale
             corners = [(left,top,z,1),(left,top-height,z,1),
                        (right,top-height,z,1),(right,top,z,1)]
-            vertices = bridge.lib.mxb_gl_vertices(bridge.surface)
-            for i,k in enumerate((0,1,2,0,2,3)):
+            for k in (0,1,2,0,2,3):
                 expected = list(corners[k])+[v/255 for v in rgba]+list(uv[k])
-                actual = list(vertices[i].position)+list(vertices[i].color)+list(vertices[i].uv)
+                v = vertices[len(emitted)]
+                actual = list(v.position)+list(v.color)+list(v.uv)
                 if not all(math.isclose(a,b,rel_tol=0,abs_tol=1e-6) for a,b in zip(actual,expected)):
-                    raise ValueError("Native glyph vertex mismatch at index " + str(i))
-        return {"glyph_fixture_index":glyph,"enabled":enabled,
+                    raise ValueError("Native glyph vertex mismatch at index " + str(len(emitted)))
+                emitted.append({"position":list(v.position),"color":list(v.color),"uv":list(v.uv)})
+            cursor = right + scale
+        final_x = struct.unpack("<f",struct.pack("<I",u.reg_read(X.UC_X86_REG_XMM8)&0xffffffff))[0]
+        if not math.isclose(final_x,cursor,rel_tol=0,abs_tol=1e-6):
+            raise ValueError("Original final text cursor mismatch")
+        return {"glyph_fixture_index":glyph,"enabled":enabled,"fixture_text":list(text),
+                "disabled_fixture_indices":sorted(disabled),
                 "original_x64_instructions":instructions,
                 "verified_original_gl_calls":len(names),
                 "native_triangle_vertices":count,
+                "native_vertex_data":emitted,
+                "original_final_cursor_x":final_x,
+                "original_kerning_lookup_executed":0x209af2 in visited,
                 "all_vertex_attributes_match":True,
                 "exact_fragment_continuation":True}
     finally:
         bridge.close()
-
 
 def run(exe):
     pe = PE(exe)
@@ -213,6 +244,14 @@ def run(exe):
                           ("mxb_gl_surface.c","mxb_gl_win64_abi.c","mxb_gl_texture.c")],
                         "-lm","-o",str(so)],check=True)
         cases = [run_case(pe,so,qualified,f) for f in fixtures]
+        cases += [
+            run_case(pe,so,qualified,(65,True,-0.875,0.0625,4,1,0.5,0.5,0.0,(255,255,255,255)),
+                     text=b"AAA",kerning_probe=True),
+            run_case(pe,so,qualified,(65,True,-0.875,0.0625,4,1,0.5,0.5,0.0,(192,128,64,255)),
+                     text=b"ABA",disabled=(66,),kerning_probe=True),
+            run_case(pe,so,qualified,(65,True,-0.875,0.0625,4,1,0.5,0.5,0.0,(64,128,192,255)),
+                     text=b"ABBA",disabled=(65,66)),
+        ]
     report = {"mode":"isolated_original_glyph_fragment_with_authored_caller_state",
               "cases":cases,"original_gl_calls":sum(r["verified_original_gl_calls"] for r in cases),
               "native_vertices":sum(r["native_triangle_vertices"] for r in cases),
