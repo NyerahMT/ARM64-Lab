@@ -20,10 +20,11 @@ import sys
 import tempfile
 
 from unicorn.x86_const import (
- UC_X86_REG_RSP,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8,UC_X86_REG_R9,
+ UC_X86_REG_RIP,UC_X86_REG_RSP,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_R8,UC_X86_REG_R9,
  UC_X86_REG_XMM0,UC_X86_REG_XMM1,UC_X86_REG_XMM2,UC_X86_REG_XMM3
 )
 from mxbikes_first_callee_emu import import_slots
+from mxb_gl_callsite import prove_callsite
 from mxbikes_whole_game_map import INPUT_SHA
 from mxbikes_startup_fast_blocks import execute as run_original_startup
 from mxbikes_main_joined_callee_native import BASE
@@ -69,6 +70,7 @@ class VerifiedGameGL:
             raise RuntimeError("Could not initialize host-native renderer")
         self.confirmed_calls=[]
         self.unsupported_real_calls=[]
+        self.unproven_real_calls=[]
         self.last_source=None
         self.read_count=0
         self.write_count=0
@@ -107,23 +109,14 @@ class VerifiedGameGL:
             self.textures=None
 
     def prove_original_callsite(self,return_va,library,symbol):
-        """Prove a real 6-byte RIP-relative Win64 IAT CALL ended at return VA."""
-        if not BASE+6<=return_va<BASE+len(self.pe.b)+0x100000:
-            return None
-        rva=return_va-BASE-6
-        try:
-            code=self.pe.read_rva(rva,6)
-        except (ValueError,struct.error):
-            return None
-        if code[:2]!=b"\xff\x15":
-            return None
-        disp=struct.unpack_from("<i",code,2)[0]
-        slot=rva+6+disp
-        actual=self.iat.get(slot)
-        if not actual or actual!=(library.lower(),symbol):
-            return None
-        return {"original_call_rva":hex(rva),"original_iat_rva":hex(slot),
-                "import":library+"!"+symbol}
+        """Validate live bytes, original import identity and current trampoline."""
+        return prove_callsite(
+            self.pe,self.iat,BASE,self.machine.mem_read,return_va,
+            self.machine.reg_read(UC_X86_REG_RIP),library,symbol)
+
+    def reject_unproven(self,library,symbol,reason):
+        self.unproven_real_calls.append({"import":library+"!"+symbol,"reason":reason})
+        raise ValueError(reason)
 
     def __call__(self,u,library,symbol):
         if library.lower()!="opengl32.dll":
@@ -131,14 +124,14 @@ class VerifiedGameGL:
         self.machine=u
         guest_rsp=u.reg_read(UC_X86_REG_RSP)
         if guest_rsp%16!=8:
-            raise ValueError("Original guest imported CALL entry violated Win64 stack ABI")
+            self.reject_unproven(library,symbol,"invalid_win64_call_stack")
         try:
             return_va=struct.unpack("<Q",u.mem_read(guest_rsp,8))[0]
-        except Exception as exc:
-            raise ValueError("Cannot inspect original x64 import return address") from exc
+        except Exception:
+            self.reject_unproven(library,symbol,"unmapped_guest_return_address")
         evidence=self.prove_original_callsite(return_va,library,symbol)
         if evidence is None:
-            raise ValueError("Import callsite is not exact SHA-verified original x64 CALL")
+            self.reject_unproven(library,symbol,"unverified_original_callsite")
         regs=Registers()
         regs.rcx=u.reg_read(UC_X86_REG_RCX)
         regs.rdx=u.reg_read(UC_X86_REG_RDX)
@@ -167,6 +160,9 @@ class VerifiedGameGL:
             "actual_original_game_opengl_imports_dispatched":len(self.confirmed_calls),
             "original_verified_opengl_calls":self.confirmed_calls[:30],
             "genuine_guest_opengl_import_failures":self.unsupported_real_calls[:30],
+            "verified_opengl_import_failure_count":len(self.unsupported_real_calls),
+            "unproven_opengl_import_event_count":len(self.unproven_real_calls),
+            "unproven_opengl_import_events":self.unproven_real_calls[:30],
             "genuine_guest_memory_reads":self.read_count,
             "genuine_guest_memory_writes":self.write_count,
             "actual_original_game_vertex_count":(
@@ -196,10 +192,11 @@ def run(executable,dll,out):
         finally:
             bridge.close()
     # The engine's *actual output* is the only possible game-render signal.
-    if summary["actual_original_game_opengl_imports_dispatched"] != runtime["actual_original_gl_import_events"]:
-        # An original but unsupported GL call is an explicit stop, not a draw.
-        if not summary["genuine_guest_opengl_import_failures"]:
-            raise RuntimeError("Original GL event/provenance instrumentation diverged")
+    verified_events=(summary["actual_original_game_opengl_imports_dispatched"]+
+                     summary["verified_opengl_import_failure_count"])
+    accounted_events=verified_events+summary["unproven_opengl_import_event_count"]
+    if accounted_events != runtime["actual_original_gl_import_events"]:
+        raise RuntimeError("Original GL event/provenance instrumentation diverged")
     provenance={
         "input_sha256":INPUT_SHA,
         "original_game_code_executed":runtime["original_guest_basic_block_executions"]>0,
@@ -209,8 +206,9 @@ def run(executable,dll,out):
         "original_guest_blocks":runtime["original_guest_basic_block_executions"],
         "original_guest_instruction_estimate":runtime["estimated_original_instructions_in_completed_blocks"],
         "original_guest_import_calls":runtime["total_guest_import_calls"],
-        "original_opengl_import_events":runtime["actual_original_gl_import_events"],
-        "actual_original_engine_reached_gl":runtime["actual_original_gl_import_events"]>0,
+        "original_opengl_import_events":verified_events,
+        "observed_opengl_trampoline_events":runtime["actual_original_gl_import_events"],
+        "actual_original_engine_reached_gl":verified_events>0,
         "runtime_stop":runtime["stop"],
         "host_original_import_adapter_compiled":True,
         "actual_windows_steam_client_initialized":False,
@@ -234,7 +232,8 @@ def run(executable,dll,out):
            "",
            "Never confuse a fully functioning fixture renderer with actual original executable graphics.",
            "This test dispatches only original game x64 imported OpenGL CALLs with verified Win64",
-           "stack return locations; no generated geometry or caller fake return state is used.",""]
+           "stack return locations, original code bytes and live IAT targets; no generated geometry",
+           "or caller fake return state is used.",""]
     (out/"original-game-to-metal-provenance.md").write_text("\n".join(lines))
     print("\n".join(lines))
     return provenance
