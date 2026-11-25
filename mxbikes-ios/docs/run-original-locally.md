@@ -70,6 +70,20 @@ Reports:
 - `startup-fast-blocks.json` — original x64 translated basic-block summary
 - `owned-steam-file-manifest.json` — safe input size and hash verification
 
+### Graphics callsite evidence
+
+The live bridge accepts direct RIP-relative IAT calls and a single
+direct-call/linker-thunk jump to an IAT slot. Both instruction sequences must
+match the SHA-verified original PE's executable bytes in guest memory, and the
+live IAT target must equal the current import trampoline. Unsupported indirect
+forms, altered instructions, and mismatched targets remain blocked.
+
+The provenance report separates observed OpenGL trampoline events from
+verified callsites, successful native dispatches, and rejected/unproven
+events. A verified callsite is structural evidence, not proof of a completed
+frame. The source-only test `test_mxb_gl_callsite.py` uses authored fixtures;
+it does not establish that the original executable uses either call form.
+
 **The currently verified limitation:** original game x64 reaches
 `steam_api64.dll!SteamAPI_RestartAppIfNecessary`, with **zero** original
 OpenGL events. To progress beyond this boundary, work with the legitimate
