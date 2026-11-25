@@ -5,6 +5,7 @@ extern void free(void *);
 typedef struct {
  uint32_t id;
  uint16_t width,height;
+ unsigned rgb_storage;
  uint8_t *rgba;
 } Texture;
 struct MXBGLTextures {
@@ -80,6 +81,30 @@ const uint8_t*mxb_tex_current_rgba(const MXBGLTextures*t,unsigned*w,unsigned*h){
   }
  }
  return 0;
+}
+/* Stage guest pixels before changing any texture; a failed late read is atomic. */
+static enum MXBGLGuestStatus stage_pixels(uint8_t*rgba,unsigned w,unsigned h,
+ unsigned format,unsigned alignment,unsigned rgb_storage,uint64_t pixels,
+ MXBGLGuestRead read,void*ctx){
+ unsigned bpp=format==MXB_GL_RGB?3u:4u;
+ unsigned row=w*bpp,aligned=(row+alignment-1u)&~(alignment-1u);
+ uint8_t chunk[128];
+ for(unsigned y=0;y<h;y++){
+  for(unsigned start=0;pixels&&start<row;){
+   unsigned bytes=row-start;
+   if(bytes>sizeof(chunk))bytes=sizeof(chunk);
+   if(!read_guest(read,ctx,pixels,(uint64_t)y*aligned+start,chunk,bytes))
+    return MXB_GL_GUEST_UNMAPPED_POINTER;
+   for(unsigned i=0;i<bytes;i++){
+    unsigned source=start+i;
+    rgba[((size_t)y*w+source/bpp)*4u+source%bpp]=chunk[i];
+   }
+   start+=bytes;
+  }
+  if(bpp==3u||rgb_storage)
+   for(unsigned xx=0;xx<w;xx++)rgba[((size_t)y*w+xx)*4u+3u]=255u;
+ }
+ return MXB_GL_GUEST_OK;
 }
 enum MXBGLGuestStatus mxb_tex_dispatch_win64(
  MXBGLTextures*t,const char*lib,const char*name,const MXBGLWin64Call*g,
@@ -161,41 +186,53 @@ enum MXBGLGuestStatus mxb_tex_dispatch_win64(
      !d||d>MXB_GL_MAX_TEX_DIM||
      !height||height>MXB_GL_MAX_TEX_DIM||border!=0||
      (format!=MXB_GL_RGB&&format!=MXB_GL_RGBA)||
-     type!=MXB_GL_UNSIGNED_BYTE||!pixels||!t->current)
+     type!=MXB_GL_UNSIGNED_BYTE||!t->current)
    return MXB_GL_GUEST_UNSUPPORTED;
   Texture*x=find(t,t->current);
   if(!x)return MXB_GL_GUEST_RENDER_REJECTED;
   unsigned w=d,h=(unsigned)height;
   size_t old_bytes=(size_t)x->width*x->height*4u,new_bytes=(size_t)w*h*4u;
   if(new_bytes>MXB_GL_MAX_TEX_BYTES-(t->storage_bytes-old_bytes))return MXB_GL_GUEST_RENDER_REJECTED;
-  unsigned bpp=format==MXB_GL_RGB?3u:4u;
-  unsigned row=w*bpp;
-  unsigned aligned=(row+t->unpack_alignment-1u)&~(t->unpack_alignment-1u);
+  unsigned rgb_storage=c==3u||c==MXB_GL_RGB;
   uint8_t*rgba=(uint8_t*)calloc((size_t)w*h,4u);
   if(!rgba)return MXB_GL_GUEST_RENDER_REJECTED;
-  uint8_t chunk[128];
-  for(unsigned y=0;y<h;y++){
-   for(unsigned start_byte=0;start_byte<row;){
-    unsigned bytes=row-start_byte;
-    if(bytes>sizeof(chunk))bytes=sizeof(chunk);
-    if(!read_guest(read,ctx,pixels,(uint64_t)y*aligned+start_byte,chunk,bytes)){
-     free(rgba);return MXB_GL_GUEST_UNMAPPED_POINTER;
-    }
-    /* Writing RGB->RGBA must preserve triples that span chunks.
-     * Stage the row as RGBA through byte-offset tracking, no overreads. */
-    for(unsigned i=0;i<bytes;i++){
-     unsigned source_byte=start_byte+i;
-     unsigned pixel=source_byte/bpp,channel=source_byte%bpp;
-     rgba[((size_t)y*w+pixel)*4u+channel]=chunk[i];
-    }
-    start_byte+=bytes;
-   }
-   if(bpp==3u)for(unsigned xx=0;xx<w;xx++)rgba[((size_t)y*w+xx)*4u+3u]=255u;
-  }
+  enum MXBGLGuestStatus status=stage_pixels(rgba,w,h,(unsigned)format,
+   t->unpack_alignment,rgb_storage,pixels,read,ctx);
+  if(status){free(rgba);return status;}
   free(x->rgba);
   t->storage_bytes=t->storage_bytes-old_bytes+new_bytes;
   x->rgba=rgba;x->width=(uint16_t)w;x->height=(uint16_t)h;
+  x->rgb_storage=rgb_storage;
   return MXB_GL_GUEST_OK;
+ }
+ if(same(name,"glTexSubImage2D")){
+  /* target, level, xoffset, yoffset, width, height, format, type, pixels */
+  uint64_t width=0,height=0,format=0,type=0,pixels=0;
+  if(!stack(g,read,ctx,5,&width)||!stack(g,read,ctx,6,&height)||
+     !stack(g,read,ctx,7,&format)||!stack(g,read,ctx,8,&type)||
+     !stack(g,read,ctx,9,&pixels))return MXB_GL_GUEST_UNMAPPED_POINTER;
+  width=(uint32_t)width;height=(uint32_t)height;
+  format=(uint32_t)format;type=(uint32_t)type;
+  if(a!=MXB_GL_TEXTURE_2D||b!=0||!t->current||
+     (format!=MXB_GL_RGB&&format!=MXB_GL_RGBA)||
+     type!=MXB_GL_UNSIGNED_BYTE)return MXB_GL_GUEST_UNSUPPORTED;
+  Texture*x=find(t,t->current);
+  if(!x||!x->rgba)return MXB_GL_GUEST_RENDER_REJECTED;
+  /* Unsigned bounds also reject negative GLint/GLsizei and avoid overflow. */
+  if(c>x->width||d>x->height||width>x->width-c||height>x->height-d)
+   return MXB_GL_GUEST_UNSUPPORTED;
+  if(!width||!height)return MXB_GL_GUEST_OK;
+  if(!pixels)return MXB_GL_GUEST_UNMAPPED_POINTER;
+  unsigned w=(unsigned)width,h=(unsigned)height;
+  uint8_t*rgba=(uint8_t*)calloc((size_t)w*h,4u);
+  if(!rgba)return MXB_GL_GUEST_RENDER_REJECTED;
+  enum MXBGLGuestStatus status=stage_pixels(rgba,w,h,(unsigned)format,
+   t->unpack_alignment,x->rgb_storage,pixels,read,ctx);
+  if(!status)for(unsigned y=0;y<h;y++)
+   __builtin_memcpy(x->rgba+((size_t)(d+y)*x->width+c)*4u,
+                    rgba+(size_t)y*w*4u,(size_t)w*4u);
+  free(rgba);
+  return status;
  }
  return MXB_GL_GUEST_UNSUPPORTED;
 }
