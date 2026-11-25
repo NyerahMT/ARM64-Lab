@@ -22,8 +22,10 @@ from tools.pe_probe import PE
 from mxbikes_first_callee_emu import import_slots
 from mxb_gl_callsite import prove_callsite
 from mxb_demo_win64_environment import startup_info_a, thread_environment, checked_write, TEB_PAGE_SIZE, process_strings, process_service, PROCESS_ENVIRONMENT_APIS
+from mxb_demo_crt_process import CRT_DATA, data_address, data_page, Process, APIS as CRT_PROCESS_APIS
+from mxb_demo_win64_environment import COMMAND_LINE_A
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_PROT_READ, UC_PROT_WRITE, UC_PROT_EXEC
-from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_GS_BASE, UC_X86_REG_RBX, UC_X86_REG_RSI, UC_X86_REG_RDI
+from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_GS_BASE, UC_X86_REG_RBX, UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_R9
 
 DEMO_SHA="b75ba091fea6425ea9e5e372d2c41bf19f7d3f20a1ff1890130389e9f51f8742"
 PAGE=4096
@@ -94,9 +96,15 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
         raise ValueError("invalid_import_slots")
     u.mem_map(STUB,align(16*len(slots)),UC_PROT_READ|UC_PROT_WRITE)
     targets={}
+    typed_data_imports={}
     iat={rva:(lib.lower(),name) for rva,lib,name in slots}
     for i,(rva,lib,name) in enumerate(slots):
         if rva+8>image_size:raise ValueError("invalid_IAT_RVA")
+        data_va=data_address(lib,name)
+        if data_va is not None:
+            u.mem_write(base+rva,struct.pack("<Q",data_va))
+            typed_data_imports[lib+"!"+name]=hex(data_va-CRT_DATA)
+            continue
         addr=STUB+16*i
         targets[addr]=(lib,name)
         if lib.lower()=="msvcr90.dll" and name in CRT_VARIANTS:
@@ -122,6 +130,10 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
     u.mem_map(PROCESS_STRINGS,PAGE,UC_PROT_READ|UC_PROT_WRITE)
     u.mem_write(PROCESS_STRINGS,strings)
     u.mem_protect(PROCESS_STRINGS,PAGE,UC_PROT_READ)
+    u.mem_map(CRT_DATA,PAGE,UC_PROT_READ|UC_PROT_WRITE)
+    u.mem_write(CRT_DATA,data_page(PROCESS_STRINGS+a_off,PROCESS_STRINGS+w_off,COMMAND_LINE_A))
+    writable.append((CRT_DATA,CRT_DATA+PAGE))
+    crt_process=Process()
     sp=STACK+STACK_SIZE-0x108
     u.mem_write(sp,struct.pack("<Q",END))
     u.reg_write(UC_X86_REG_RSP,sp)
@@ -192,7 +204,8 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             key=lib+"!"+name
             counts[key]+=1
             is_crt=lib.lower()=="msvcr90.dll" and name in CRT_VARIANTS
-            supported=is_crt or (lib.lower() in ("kernel32.dll","kernelbase.dll") and low in ENVIRONMENT)
+            is_crt_process=lib.lower()=="msvcr90.dll" and name in CRT_PROCESS_APIS
+            supported=is_crt or is_crt_process or (lib.lower() in ("kernel32.dll","kernelbase.dll") and low in ENVIRONMENT)
             if not supported:
                 # Record proven import origin even for the next unsupported dependency.
                 try:
@@ -239,7 +252,12 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
                                     (UC_X86_REG_RBX,UC_X86_REG_RSI,UC_X86_REG_RDI))}
                     # The actual guest JMP and CALL instructions execute; no fabricated return.
                     return
-                if low in PROCESS_ENVIRONMENT_APIS:
+                if is_crt_process:
+                    value=crt_process.dispatch(name,(ptr,cpu.reg_read(UC_X86_REG_RDX),
+                        cpu.reg_read(UC_X86_REG_R8),cpu.reg_read(UC_X86_REG_R9)),
+                        read=cpu.mem_read,write=cpu.mem_write,writable=writable,rsp=rsp)
+                    if value is not None:cpu.reg_write(UC_X86_REG_RAX,value)
+                elif low in PROCESS_ENVIRONMENT_APIS:
                     value=process_service(low,(ptr,cpu.reg_read(UC_X86_REG_RDX),cpu.reg_read(UC_X86_REG_R8)),image_base=base,command_a=PROCESS_STRINGS+a_off,command_w=PROCESS_STRINGS+w_off,write=cpu.mem_write,writable=writable)
                     cpu.reg_write(UC_X86_REG_RAX,value)
                 elif low=="getstartupinfoa":checked_write(cpu.mem_write,writable,ptr,startup_info_a())
@@ -284,6 +302,8 @@ def execute(pe, limit=MAX_INSTRUCTIONS):
             "recent_original_instruction_rvas":recent,
             "memory_fault":memory_fault or None,
             "crt_initializer_tables":crt_reports,
+            "typed_crt_data_imports":typed_data_imports,
+            "crt_process_state":{"app_type":crt_process.app_type,"locale_mode":crt_process.locale_mode},
             "tls_directory_present":bool(tls_rva and tls_size),
             "tls_callbacks_executed":False,
             "stop":stop,"environment_mode":"bounded_clock_process_identity_and_minimal_startup_environment",

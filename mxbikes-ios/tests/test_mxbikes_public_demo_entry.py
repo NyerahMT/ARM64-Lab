@@ -234,6 +234,20 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(evidence["original_call_rva"],"0x1004")
         self.assertEqual(evidence["original_iat_rva"],"0x2100")
 
+    def test_crt_data_import_is_writable_storage(self):
+        # mov rax,[rip+IAT]; mov dword ptr [rax],123; cmp [rax],123; je ret; ud2.
+        code=rip_op(b"\x48\x8b\x05",0,IAT)+b"\xc7\x00\x7b\x00\x00\x00\x83\x38\x7b\x74\x02\x0f\x0b\xc3"
+        result=self.execute(FixturePE(code,symbol="_fmode",library="MSVCR90.dll"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertEqual(result["typed_crt_data_imports"],{"MSVCR90.dll!_fmode":"0x10"})
+        self.assertEqual(result["observed_import_calls"],{})
+
+    def test_crt_app_type_call(self):
+        result=self.execute(FixturePE(call_code(b"\xb9\x02\x00\x00\x00"),
+                                     symbol="__set_app_type",library="MSVCR90.dll"))
+        self.assertEqual(result["stop"]["status"],"entry_returned")
+        self.assertEqual(result["crt_process_state"]["app_type"],2)
+
     def test_sha_required(self):
         with self.assertRaisesRegex(ValueError,"SHA_mismatch"):
             runner.execute(FixturePE(b"\xc3"))
