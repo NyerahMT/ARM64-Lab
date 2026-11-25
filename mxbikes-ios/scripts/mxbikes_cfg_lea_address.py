@@ -22,13 +22,17 @@ def emit(ins):
     # Instruction address-size override changes offset arithmetic semantics.
     if hasattr(ins,"prefix") and 0x67 in ins.prefix:return None
     m=src.mem
-    if m.index:return None
-    base=ins.reg_name(m.base)
-    if base not in VALID_BASE:return None
+    base=ins.reg_name(m.base) if m.base else None
+    index=ins.reg_name(m.index) if m.index else None
+    if base is not None and base not in VALID_BASE:return None
+    if index is not None and (index not in VALID_BASE-{"rip","rsp"} or m.scale not in (1,2,4,8)):
+        return None
+    if base=="rip" and index is not None:return None
     if m.disp < -(1<<31) or m.disp >= 1<<31:return None
     base_c=(f"UINT64_C({ins.address+ins.size})" if base=="rip"
-            else f"s.{base}")
-    value=f"({base_c}+UINT64_C({m.disp&MASK}))"
+            else f"s.{base}" if base is not None else "UINT64_C(0)")
+    index_c=f"+s.{index}*UINT64_C({m.scale})" if index is not None else ""
+    value=f"({base_c}{index_c}+UINT64_C({m.disp&MASK}))"
     if reg[1]==4:value=f"(uint32_t){value}"
     elif reg[1]!=8:return None
     return f"s.{reg[0]}={value};"
