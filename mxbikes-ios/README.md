@@ -12,16 +12,20 @@ Experimental, unofficial Windows x64-to-ARM64/iOS compatibility and rendering pr
   file operations and checksum logic.
 - The original game stops at the unsupported
   `steam_api64.dll!SteamAPI_RestartAppIfNecessary` platform boundary.
-- **Isolated original glyph rendering verified (November 24, 2026):** private
-  ARM64 CI executed the SHA-pinned original chained unwind drawing fragment
-  with explicitly authored caller fixtures. Across four cases, 316 original
-  x64 instructions produced 42 verified OpenGL import calls and 18 native
-  triangle vertices; all position, color and UV attributes matched.
-  The disabled-glyph case produced no geometry.
+- **Original text layout and state transitions verified (November 24, 2026):**
+  private ARM64 CI executed SHA-pinned original x64 glyph instructions with
+  explicit caller fixtures. Nine cases produced 168 verified OpenGL imports
+  and 72 native vertices, including multiple characters, absent glyphs and
+  positive/negative signed kerning. Actual emitted vertex positions, colors,
+  UVs and final text cursor matched. The original lighting, depth, blend,
+  alpha, texture and binding helpers also ran against the same native
+  renderer as a two-glyph draw (11 state imports + 28 glyph imports, 12
+  vertices and two immutable draw-state batches). The tests do not load the
+  original font texture or establish an authenticated game session.
 - **No actual game frame or working MX Bikes iOS game launch has been
   verified.** The original startup still stops at the Steam boundary. The
   isolated renderer proof is not a booted engine or a real menu.
-  Private CI evidence: [run 45524503483](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45524503483).
+  Private ARM64 evidence: [run 45526854709, original-graphics job](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45526854709/job/138912235890).
 - This public snapshot includes the authored source, tests, documentation
   and iOS Metal renderer, **not** the commercial executable, DLLs,
   tracks, game packages, textures or original game release archives.
