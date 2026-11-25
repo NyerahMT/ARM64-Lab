@@ -2,8 +2,8 @@ name: MX Bikes — public demo compatibility audit
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths: ['.github/workflows/mxbikes-public-demo-audit.yml', 'mxbikes-ios/scripts/mxbikes_public_demo_entry.py']
+    branches: [feat/mxb-demo-crt-startup-20261125]
+    paths: ['.github/workflows/mxbikes-public-demo-audit.yml']
 
 permissions:
   contents: read
@@ -15,11 +15,15 @@ concurrency:
 jobs:
   standalone-demo-imports:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Validate compatibility adapters before fetching the publisher demo
+        run: |
+          python -m pip install --disable-pip-version-check unicorn==2.1.4 capstone==5.0.9
+          python -m unittest discover -s mxbikes-ios/tests -p 'test_mxbikes_public_demo_entry.py'
       - name: Obtain publicly offered beta21e demo installer from publisher
         run: |
           set -euo pipefail
@@ -54,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = aarch64
-          python -m pip install --disable-pip-version-check 'unicorn>=2,<3' 'capstone>=5,<6'
+          python -m pip install --disable-pip-version-check unicorn==2.1.4 capstone==5.0.9
           root="$RUNNER_TEMP/mxb-demo-audit"
           exe="$(find "$root/extracted" -type f -iname mxbikes.exe -print -quit)"
           python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe "$exe"
