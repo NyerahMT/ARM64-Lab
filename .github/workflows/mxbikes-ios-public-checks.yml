@@ -110,3 +110,23 @@ jobs:
             -o /tmp/mxb-arm64-texture
           /tmp/mxb-arm64-texture
           echo "Native AArch64 renderer tests passed with synthetic fixture data only." >> "$GITHUB_STEP_SUMMARY"
+
+  ios-metal-build:
+    # Standard public macOS runner: no private-repository minutes or assets.
+    runs-on: macos-15
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: mxbikes-ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build source-only iOS Metal simulator target
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate --spec project.yml
+          xcodebuild -project MXBViewportPrototype.xcodeproj -scheme MXBViewportPrototype -configuration Debug -sdk iphonesimulator -derivedDataPath "$RUNNER_TEMP/mxb-ios" CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/mxb-ios.log" 2>&1 || { tail -80 "$RUNNER_TEMP/mxb-ios.log"; exit 1; }
+          tail -8 "$RUNNER_TEMP/mxb-ios.log"
+          echo "iOS Metal simulator compilation passed. No private inputs, game assets, or original executable used." >> "$GITHUB_STEP_SUMMARY"
