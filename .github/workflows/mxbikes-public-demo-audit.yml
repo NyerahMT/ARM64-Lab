@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['.github/workflows/mxbikes-public-demo-audit.yml']
+    paths: ['.github/workflows/mxbikes-public-demo-audit.yml', 'mxbikes-ios/scripts/mxbikes_public_demo_entry.py']
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   standalone-demo-imports:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +50,14 @@ jobs:
           r=json.load(open(sys.argv[1]))
           print("Public demo import audit:", json.dumps({k:r[k] for k in ("candidate_sha256","candidate_matches_pinned_steam_executable","architecture","imported_dlls","imported_symbols","steam_symbol_count","native_ios_engine_executed")}))
           PY
+      - name: Execute original public demo entry on ARM64 with bounded guest services
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          python -m pip install --disable-pip-version-check 'unicorn>=2,<3' 'capstone>=5,<6'
+          root="$RUNNER_TEMP/mxb-demo-audit"
+          exe="$(find "$root/extracted" -type f -iname mxbikes.exe -print -quit)"
+          python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe "$exe"
       - name: Delete all downloaded executable material and temporary reports
         if: always()
         run: rm -rf "$RUNNER_TEMP/mxb-demo-audit"
