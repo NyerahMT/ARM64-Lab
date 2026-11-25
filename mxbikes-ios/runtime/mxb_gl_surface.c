@@ -251,7 +251,7 @@ int mxb_gl_client_pointer(MXBGLSurface*s,unsigned array,
  if(!s)return 0;
  unsigned width=(type==MXB_GL_FLOAT?4u:type==MXB_GL_UNSIGNED_BYTE?1u:0u);
  if(!c||s->building||!pointer||!width||stride>4096u||
-    (array==MXB_GL_VERTEX_ARRAY&&(components!=3u||type!=MXB_GL_FLOAT))||
+    (array==MXB_GL_VERTEX_ARRAY&&((components!=2u&&components!=3u)||type!=MXB_GL_FLOAT))||
     (array==MXB_GL_COLOR_ARRAY&&(components!=3u&&components!=4u))||
     (array==MXB_GL_TEXTURE_COORD_ARRAY&&(components!=2u||type!=MXB_GL_FLOAT))||
     (stride!=0u&&stride<components*width))return fail(s);
