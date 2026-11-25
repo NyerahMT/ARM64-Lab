@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 RUNTIME=ROOT/"runtime"
 FLAGS=["-std=c11","-Wall","-Wextra","-Werror","-O2","-I"+str(RUNTIME)]
 LIBS=[RUNTIME/f"mxb_standalone_{n}.c" for n in ("crt","platform","heap","memory","imports","winsock","format","files")]
-FIXTURES=[ROOT/"tests"/f"mxb_standalone_{n}_smoke.c" for n in ("imports","heap","memory","network_format","files")]
+FIXTURES=[ROOT/"tests"/f"mxb_standalone_{n}_smoke.c" for n in ("imports","heap","memory","network_format","files","stream")]
 class BatchTests(unittest.TestCase):
     def test_host(self):
         if not shutil.which("cc"):self.skipTest("C compiler unavailable")

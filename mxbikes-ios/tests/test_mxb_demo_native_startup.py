@@ -14,7 +14,7 @@ class Tests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):cls.tmp.cleanup()
     def setUp(self):
-        self.p=NativeStartup(self.lib,B);self.mem=bytearray(1024);self.heap=bytearray(256);self.writes=[]
+        self.p=NativeStartup(self.lib,B);self.addCleanup(self.p.close_assets);self.mem=bytearray(1024);self.heap=bytearray(256);self.writes=[]
     def read(self,p,n):
         if not B<=p<=p+n<=B+len(self.mem):raise ValueError("unmapped")
         return self.mem[p-B:p-B+n]

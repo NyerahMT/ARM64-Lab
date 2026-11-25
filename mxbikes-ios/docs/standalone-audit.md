@@ -145,3 +145,22 @@ python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/offi
 ```
 
 Next milestone: real asset/config parsing using the genuine standalone installation, followed by graphics/window initialization. No ARM64 game execution or menu rendering is claimed.
+
+### Complete bounded read-only streaming asset module
+
+Replaced the 64 MiB whole-file mount limitation with random-access sources up to the signed Win64 CRT long offset limit (2,147,483,647 bytes), retaining 64 MiB per fread call and 16 KiB per backing read. The existing memory-backed fixtures remain supported. The full scoped binary read lifecycle now includes fopen, fread, fseek, ftell, fclose, feof, ferror, fgets, fgetc, clearerr and rewind. Short reads and source failures maintain distinct EOF/error state, partial fread item counts, independent file cursors, and no guest writes on invalid destination preflight. Guest-selected host paths, write mode and arbitrary Windows filesystem remain unsupported. Backing storage must not be changed while mounted.
+
+The new host adapter opens explicitly selected regular files, retains read-only descriptors and callbacks, and streams without copying entire packages into RAM. The verified beta21e directory option checks the original executable SHA-256, core.ini SHA-256, and exact observed sizes of all twelve data files (the other eleven assets are size-checked, not independently hash-verified). The prior public demo reference job 139339475363 recorded core.ini as 179 bytes and SHA-256 92d455770a96575e75239b317408d0c5516fbf087d5f28b3a8646e22f06b07bf. The current runtime cannot download the public installer (DNS unavailable), and the private release contains ZIP assets not accessible as local bytes through the connector. No synthetic config is substituted for the original game.
+
+Local verification: 30 numbered native stream lifecycle checks passed optimized and ASan/UBSan builds. The implementation and smoke fixture compiled as arm64-apple-ios15.0 Mach-O objects. Nine host/Python-to-native integration tests passed, including a real sparse 1,751,015,009-byte fixture matching the recorded tracks archive size, large-offset seeking, multi-chunk reads, underlying truncation, explicit mount hash rejection, invalid output handling and cleanup. The synthetic fixture is not the original archive. The actual game has not been rerun past core.ini. The updated unified startup/Unicorn wiring remains unexecuted in this environment; iOS importer integration is not yet proven.
+
+Repeatable source-only tests:
+```sh
+python mxbikes-ios/tests/test_mxb_standalone_batch.py
+python mxbikes-ios/tests/test_mxb_demo_assets.py
+```
+
+With the genuine extracted public beta21e directory and a locally built native startup library:
+```sh
+python mxbikes-ios/scripts/mxbikes_public_demo_entry.py --demo-exe /path/to/demo/mxbikes.exe --native-startup-library /tmp/mxb-startup.so --demo-assets-dir /path/to/demo
+```

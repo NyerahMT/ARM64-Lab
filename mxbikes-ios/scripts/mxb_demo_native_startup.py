@@ -1,8 +1,9 @@
 """Unified native standalone startup service bridge (local trusted library only)."""
 import ctypes as C
+from mxb_demo_assets import AssetMounts, Files as _Files
 from mxb_demo_native_crt import NativeCRT, APIS, _Process, _Regs, _Memory, _Read, _Check, _Write, _Exec
 
-CRT_APIS=APIS|{"strcpy","strrchr","malloc","calloc","free","memset","memcpy","memmove","memcmp","sprintf","fopen","fread","fseek","ftell","fclose","feof","ferror","fgets"}
+CRT_APIS=APIS|{"strcpy","strrchr","malloc","calloc","free","memset","memcpy","memmove","memcmp","sprintf","fopen","fread","fseek","ftell","fclose","feof","ferror","fgets","fgetc","clearerr","rewind"}
 HEAP_BASE=0x770000000
 HEAP_CAP=16*1024*1024
 WIN_APIS=frozenset({"GetTickCount","GetTickCount64","GetLastError","SetLastError",
@@ -24,13 +25,6 @@ class _Heap(C.Structure):
 
 class _Winsock(C.Structure):
     _fields_=[("refs",C.c_uint32),("last_error",C.c_uint32),("results",C.c_uint64*16)]
-
-class _Mount(C.Structure):
-    _fields_=[("name",C.c_char*128),("data",C.c_void_p),("size",C.c_uint64)]
-class _FileHandle(C.Structure):
-    _fields_=[("token",C.c_uint64),("pos",C.c_uint64),("mount",C.c_uint32),("eof",C.c_uint32)]
-class _Files(C.Structure):
-    _fields_=[("mounts",_Mount*16),("handles",_FileHandle*32),("generation",C.c_uint64)]
 
 class _Startup(C.Structure):
     _fields_=[("platform",_Platform),("crt",_Process),("module_path",C.c_uint8*260),
@@ -57,17 +51,19 @@ class NativeStartup(NativeCRT):
             raise ValueError("invalid_native_startup_context")
         self.state=self.startup.crt
         self.clock_instruction=0
-        self.lib.mxb_files_mount.argtypes=[C.POINTER(_Files),C.c_char_p,C.c_void_p,C.c_uint64]
-        self.lib.mxb_files_mount.restype=C.c_int
-        self._mounted_buffers=[]
+        self.assets=AssetMounts(self.lib,self.startup.files)
 
     def mount_asset(self,name,data):
-        """Explicit caller-selected immutable asset, not guest-selected host path."""
-        if not isinstance(data,bytes) or len(data)>64*1024*1024:raise ValueError("invalid_asset_data")
-        buf=C.create_string_buffer(data)
-        if self.lib.mxb_files_mount(C.byref(self.startup.files),name.encode("ascii"),buf,len(data))!=1:
-            raise ValueError("invalid_asset_mount")
-        self._mounted_buffers.append(buf)
+        self.assets.mount_bytes(name,data)
+
+    def mount_asset_path(self,path):
+        self.assets.mount_path(path)
+
+    def mount_demo_directory(self,root):
+        self.assets.mount_demo_directory(root)
+
+    def close_assets(self):
+        self.assets.close()
 
     @staticmethod
     def supports(dll,name):
