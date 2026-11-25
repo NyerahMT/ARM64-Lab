@@ -31,6 +31,7 @@ from tools.pe_probe import PE
 ROOT = Path(__file__).resolve().parents[1]
 BASE = 0x140000000
 FIRST, END, PARENT = 0x2098A5, 0x209B4E, 0x2097E0
+MATCH, MATCH_END = 0x209BB4, 0x209BBC
 STUB = 0x750000000
 STACK, SP = 0x720000000, 0x720000800
 OBJECT, TEXT = 0x730000000, 0x740000000
@@ -82,14 +83,21 @@ def qualify(pe):
         calls.append((rva, lib, name))
     if [n for _, _, n in calls] != EXPECTED:
         raise ValueError("Original glyph OpenGL call sequence changed")
-    return code, {i.address for i in rows}, calls
+    match = pe.read_rva(MATCH,MATCH_END-MATCH)
+    match_rows = list(d.disasm(match,BASE+MATCH))
+    if (len(match_rows)!=2 or sum(i.size for i in match_rows)!=len(match)
+        or match_rows[0].mnemonic!="mov" or match_rows[0].op_str!="eax, dword ptr [rdx + 4]"
+        or match_rows[1].mnemonic!="jmp" or match_rows[1].operands[0].imm!=BASE+0x209B10):
+        raise ValueError("Original matched kerning successor changed")
+    return (code,match), {i.address for i in rows+match_rows}, calls
 
 
 def map_code(uc, code, calls):
     page = (BASE+FIRST) & ~4095
     length = ((BASE+END+4095) & ~4095) - page
     uc.mem_map(page, length)
-    uc.mem_write(BASE+FIRST, code)
+    uc.mem_write(BASE+FIRST, code[0])
+    uc.mem_write(BASE+MATCH, code[1])
     uc.mem_protect(page, length, UC_PROT_READ | UC_PROT_EXEC)
     uc.mem_map(STUB, 4096)
     targets = {}
@@ -115,7 +123,7 @@ def fbits(f):
     return struct.unpack("<I", struct.pack("<f", f))[0]
 
 
-def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_probe=False):
+def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_probe=False, kerning=None):
     """Execute the genuine loop with explicit caller fixtures; no patched guest instructions."""
     code, valid_pcs, calls = qualified
     glyph, enabled, origin, scale, width, offset, top, height, z, rgba = fixture
@@ -130,6 +138,13 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
     u.mem_map(TEXT, 4096)
     u.mem_write(TEXT, text)
     uv = [(0.125,0.25),(0.125,0.75),(0.875,0.75),(0.875,0.25)]
+    if kerning is not None:
+        key, adjust = kerning
+        if not -128<=key<=127 or not -16<=adjust<=16:
+            raise ValueError("Kerning fixture outside bounded signed range")
+        kerning_probe = True
+    else:
+        key, adjust = 127,9
     for index in set(text):
         item = OBJECT + 72*index
         u.mem_write(item+0x210, struct.pack("<4i", int(index not in disabled), offset, width, 1))
@@ -137,12 +152,9 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
             u.mem_write(item+a, struct.pack("<f",s))
             u.mem_write(item+b, struct.pack("<f",t))
         u.mem_write(item+0x250, struct.pack("<2i",0,int(kerning_probe)))
-    # An explicit nonmatching kerning record exercises the original lookup
-    # loop without entering a different, as-yet-unmapped chained fragment.
-    if kerning_probe and 127 in text:
-        raise ValueError("Nonmatching kerning fixture must exclude key 127")
+    # Explicit caller-owned test record; the original comparison and adjustment execute.
     u.mem_write(OBJECT+0x4a30,struct.pack("<Q",OBJECT+0x5000))
-    u.mem_write(OBJECT+0x5000,struct.pack("<2i",127,9))
+    u.mem_write(OBJECT+0x5000,struct.pack("<2i",key,adjust))
     u.mem_write(SP+0x120, struct.pack("<f",1.0))
     u.mem_write(SP+0x128, bytes(rgba))
     saved = {X.UC_X86_REG_RBP:0x123456789, X.UC_X86_REG_XMM6:fbits(11.0),
@@ -196,7 +208,8 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
         vertices = bridge.lib.mxb_gl_vertices(bridge.surface)
         cursor = origin
         emitted = []
-        for index in text:
+        matched = False
+        for ordinal,index in enumerate(text):
             if index in disabled:
                 continue
             left = cursor+offset*scale
@@ -211,6 +224,14 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
                     raise ValueError("Native glyph vertex mismatch at index " + str(len(emitted)))
                 emitted.append({"position":list(v.position),"color":list(v.color),"uv":list(v.uv)})
             cursor = right + scale
+            if kerning_probe and ordinal+1<len(text):
+                next_byte = text[ordinal+1]
+                signed = next_byte if next_byte<128 else next_byte-256
+                if signed == key:
+                    matched = True
+                    cursor += adjust*scale
+        if (MATCH in visited) != matched:
+            raise ValueError("Original matched kerning branch differs from expected lookup")
         final_x = struct.unpack("<f",struct.pack("<I",u.reg_read(X.UC_X86_REG_XMM8)&0xffffffff))[0]
         if not math.isclose(final_x,cursor,rel_tol=0,abs_tol=1e-6):
             raise ValueError("Original final text cursor mismatch")
@@ -222,6 +243,7 @@ def run_case(pe, so, qualified, fixture, *, text=None, disabled=(), kerning_prob
                 "native_vertex_data":emitted,
                 "original_final_cursor_x":final_x,
                 "original_kerning_lookup_executed":0x209af2 in visited,
+                "original_matched_kerning_executed":MATCH in visited,
                 "all_vertex_attributes_match":True,
                 "exact_fragment_continuation":True}
     finally:
@@ -251,6 +273,10 @@ def run(exe):
                      text=b"ABA",disabled=(66,),kerning_probe=True),
             run_case(pe,so,qualified,(65,True,-0.875,0.0625,4,1,0.5,0.5,0.0,(64,128,192,255)),
                      text=b"ABBA",disabled=(65,66)),
+            run_case(pe,so,qualified,(65,True,-0.875,0.0625,4,1,0.5,0.5,0.0,(255,255,255,255)),
+                     text=b"AB",kerning=(66,-2)),
+            run_case(pe,so,qualified,(65,True,-0.875,0.0625,4,1,0.5,0.5,0.0,(255,255,255,255)),
+                     text=bytes([65,255]),kerning=(-1,3)),
         ]
     report = {"mode":"isolated_original_glyph_fragment_with_authored_caller_state",
               "cases":cases,"original_gl_calls":sum(r["verified_original_gl_calls"] for r in cases),
