@@ -64,3 +64,9 @@ The additional void _initterm walker executes every non-null original callback r
 ### Typed CRT data and process state
 
 The standalone runner now separates four known MSVCR90 data imports from executable IAT thunks: _acmdln, _wcmdln, _fmode and _commode. The backing page has documented text-mode/default commit values, explicit virtual command-line pointers, and a one-argument, empty-environment vector. Three bounded startup services track application type, locale-mode flags and no-wildcard __getmainargs outputs. Unknown modes, invalid/overlapping output pointers and foreign imports remain unsupported; no real locale, heap, wildcard expansion, exception or license service is implemented. Seven pure-Python service/layout tests passed locally; two additional integration fixtures were added but require Unicorn. The original beta21e runtime trace has not yet been rerun.
+
+### Native standalone CRT process component milestone
+
+The standalone process data and three process services now have a portable C implementation in `runtime/mxb_standalone_crt.c` (relative to mxbikes-ios). It writes little-endian Win64 guest data, resolves exactly four typed MSVCR90 globals, checks the fifth stack argument, handles 32-bit scalar widths, and preflights all output spans before modifying guest memory. The caller must guarantee that writes to prevalidated spans cannot fail. It is not yet connected to the native game importer.
+
+Local verification: all 21 numbered smoke checkpoints returned success on x86-64 Linux, both optimized and UBSan-enabled. Both implementation and fixture compiled as arm64-apple-ios15.0 Mach-O objects; the freestanding AArch64 Linux smoke ELF linked successfully. ARM64 execution and actual game startup were not tested. No original game files or CI runs were used. Run the repeatable host/build tests with `python mxbikes-ios/tests/test_mxb_standalone_crt_native.py`.
