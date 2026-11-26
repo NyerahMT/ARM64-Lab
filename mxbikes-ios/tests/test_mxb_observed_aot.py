@@ -90,6 +90,11 @@ class ObservedAOTTests(unittest.TestCase):
     def test_translated_graphics_bridge_host(self):
         self.build_and_run(graphics=True)
 
+    def test_translated_graphics_bridge_arm64(self):
+        if importlib.util.find_spec('unicorn') is None or importlib.util.find_spec('elftools') is None:
+            self.skipTest('ARM64 execution dependencies unavailable')
+        self.build_and_run(graphics=True,arm64=True)
+
     def run_elf(self,exe):
         from elftools.elf.elffile import ELFFile
         from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
@@ -109,7 +114,7 @@ class ObservedAOTTests(unittest.TestCase):
         stack=0x80000000;end=stack+0x20000
         u.mem_map(stack,0x21000)
         u.reg_write(UC_ARM64_REG_SP,end-16);u.reg_write(UC_ARM64_REG_LR,end)
-        u.emu_start(entry,end,count=2_000_000)
+        u.emu_start(entry,end,count=20_000_000)
         self.assertEqual(u.reg_read(UC_ARM64_REG_PC),end)
         self.assertEqual(u.reg_read(UC_ARM64_REG_X0),0)
 
