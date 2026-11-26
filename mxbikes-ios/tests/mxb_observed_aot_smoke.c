@@ -47,3 +47,17 @@ int main(void){
     if(r.status!=-2||r.instructions||b[13]!=15||ro[0])return 11;
     return 0;
 }
+
+#ifdef MXB_FREESTANDING_SMOKE
+void *memset(void *p,int v,size_t n){
+    volatile uint8_t *d=(volatile uint8_t*)p;
+    for(size_t i=0;i<n;i++)d[i]=(uint8_t)v;
+    return p;
+}
+void *memcpy(void *p,const void *q,size_t n){
+    volatile uint8_t *d=(volatile uint8_t*)p;
+    const volatile uint8_t *src=(const volatile uint8_t*)q;
+    for(size_t i=0;i<n;i++)d[i]=src[i];
+    return p;
+}
+#endif
