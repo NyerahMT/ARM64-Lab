@@ -8,4 +8,5 @@
 #include "../../runtime/mxb_standalone_imports.h"
 #include "../../runtime/mxb_standalone_asset_session.h"
 #include "../../runtime/mxb_standalone_winmain.h"
+#include "../../runtime/mxb_observed_session.h"
 #endif
