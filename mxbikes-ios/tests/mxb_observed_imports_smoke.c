@@ -19,7 +19,7 @@ int main(void){
        !mxb_observed_map(&memory,0x4000,sizeof(readonly),readonly,MXB_MEM_R)||
        !mxb_observed_map(&memory,0x8000,sizeof(stack),stack,MXB_MEM_R|MXB_MEM_W))return 2;
     data[0]='a';data[1]='B';data[2]='c';
-    mxb_observed_imports env={&memory,&startup,sites,sizeof(sites)/sizeof(sites[0])};
+    mxb_observed_imports env={&memory,&startup,sites,sizeof(sites)/sizeof(sites[0]),0,0};
     mxb_observed_session session={0};
     if(mxb_observed_session_init(&session,&memory,&startup,sites,3,mxb_auto_step,0x3000,0x80c0,0x1010))return 19;
     if(mxb_observed_session_init(&session,&memory,&startup,sites,3,mxb_auto_step,0x1000,0x4000,0x1010))return 20;
@@ -58,7 +58,7 @@ int main(void){
         {0x2030,0x100a,"MSVCR90.dll","fopen"},
         {0x2040,0x100a,"MSVCR90.dll","_findfirst64i32"},
     };
-    mxb_observed_imports files_env={&memory,&startup,file_sites,2};
+    mxb_observed_imports files_env={&memory,&startup,file_sites,2,0,0};
     static const char *const paths[]={"series/.pkz","SERIES\\sm\\test.ini","series/../outside","unverified/.pkz","series.pkz"};
     for(unsigned i=0;i<5;i++){
         const char *p=paths[i];size_t k=0;do{data[k]=(uint8_t)p[k];}while(p[k++]);
