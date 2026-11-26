@@ -125,6 +125,33 @@ int main(void){
    ++bitcases;
   }
  }
+ unsigned families=0;
+ for(unsigned k=0;k<2048;k++){
+  uint64_t a=next(),b=next(),lo=a,hi,flags;
+  mxb_cfg x={0};x.r[0]=a;
+  __asm__ volatile("imulq %3;pushfq;popq %2":"+a"(lo),"=d"(hi),"=r"(flags):"r"(b):"cc");
+  mx_mul_form(&x,64,b,1);
+  if(x.r[0]!=lo||x.r[2]!=hi||((x.flags^flags)&(CF|OF)))return 20;
+  ++families;
+  uint32_t l=(uint32_t)a,h;
+  x=(mxb_cfg){0};x.r[0]=a;x.r[2]=b;
+  __asm__ volatile("imull %3;pushfq;popq %2":"+a"(l),"=d"(h),"=r"(flags):"r"((uint32_t)b):"cc");
+  mx_mul_form(&x,32,b,1);
+  if(x.r[0]!=l||x.r[2]!=h||((x.flags^flags)&(CF|OF)))return 21;
+  ++families;
+  uint64_t f0,f1,out0,out1;uint32_t csr=0x1f80;
+  __asm__ volatile("movq %2,%%xmm0;cvtdq2pd %%xmm0,%%xmm0;movq %%xmm0,%0;psrldq $8,%%xmm0;movq %%xmm0,%1":"=&r"(f0),"=&r"(f1):"r"(a):"xmm0");
+  if(!fp_fromint(&csr,32,64,a&UINT32_MAX,&out0)||!fp_fromint(&csr,32,64,a>>32,&out1)||out0!=f0||out1!=f1||csr!=0x1f80)return 22;
+  ++families;
+ }
+ /* Guest memory bit-index addressing, including a negative register index. */
+ mxb_cfg m={0};m.read=test_rd;m.write=test_wr;cell=UINT64_C(1)<<63;
+ if(mx_bitmem(&m,72,64,0,UINT64_MAX,1)!=1||!(m.flags&CF))return 23;
+ allow_write=1;
+ if(mx_bitmem(&m,64,64,2,63,0)!=1||cell||!(m.flags&CF))return 24;
+ allow_write=0;uint64_t before=m.flags;
+ if(mx_bitmem(&m,64,64,1,1,0)!=-2||cell||m.flags!=before)return 25;
+ printf("EXPANDED_SCALAR_SSE_CPU_COMPARISONS %u; memory bit checks 3\\n",families);
  printf("BIT_FAMILY_CPU_COMPARISONS %u\\n",bitcases);
  printf("INTEGER_CPU_COMPARISONS %u; fault checks 3; atomic contract checks 5; CMPS CPU comparisons %u; CMPS fault checks 1\n",count,compares);return 0;
 }
@@ -148,8 +175,14 @@ def run(root):
                  85:(bytes.fromhex("0fb3c8"),"btr","eax, ecx"),
                  88:(bytes.fromhex("660fbb c8"),"btc","ax, cx"),
                  92:(bytes.fromhex("480fbc01"),"bsf","rax, qword ptr [rcx]")})
+    rows.update({96:(bytes.fromhex("48f7e9"),"imul","rcx"),
+                 100:(bytes.fromhex("480fa308"),"bt","qword ptr [rax], rcx"),
+                 104:(bytes.fromhex("f30fe6c1"),"cvtdq2pd","xmm0, xmm1"),
+                 108:(bytes.fromhex("f3ab"),"rep stosd","dword ptr [rdi], eax"),
+                 112:(bytes.fromhex("f348a5"),"rep movsq","qword ptr [rdi], qword ptr [rsi]"),
+                 116:(bytes.fromhex("c21000"),"ret","0x10")})
     src,accepted,reject=generate(rows,set(rows))
-    if len(accepted)!=17 or reject:raise RuntimeError("scalar/CRT generator fixture")
+    if len(accepted)!=23 or reject:raise RuntimeError("scalar/CRT generator fixture")
     source=root/"integer-arm.c";source.write_text(src)
     obj=root/"integer-arm.o"
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","aarch64-linux-musl","-O2","-ffreestanding","-fno-builtin","-c",str(source),"-o",str(obj)],check=True,timeout=120)
