@@ -35,6 +35,9 @@ targets:
       - path: runtime/mxb_observed_runtime.c
       - path: runtime/mxb_observed_memory.c
       - path: runtime/mxb_observed_imports.c
+      - path: runtime/mxb_observed_graphics.c
+      - path: runtime/mxb_observed_graphics.h
+        buildPhase: headers
       - path: runtime/mxb_observed_session.c
       - path: runtime/mxb_observed_session.h
         buildPhase: headers
