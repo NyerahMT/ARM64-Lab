@@ -2,7 +2,28 @@
 static int eq(const char *a,const char *b){if(!a||!b)return 0;while(*a&&*a==*b){a++;b++;}return *a==*b;}
 static int span(uint64_t a,uint64_t n){return a&&a<=UINT64_MAX-n;}
 static size_t chunk(uint64_t n){return n>256u?256u:(size_t)n;}
+/* Stage the complete C-locale ASCII string before writing anything.
+ * Non-ASCII locales are intentionally not implemented. */
+static int case_convert(const mxb_crt_memory *m,mxb_crt_regs *r,int upper){
+    if(!r||!r->rsp||(r->rsp&15u)!=8u||!m||!m->read||!m->writable||!m->write)return -1;
+    uint8_t staged[4096];uint64_t a=r->rcx;
+    if(!span(a,sizeof(staged)))return -1;
+    size_t n=0;
+    for(;n<sizeof(staged);n++){
+        uint8_t c=0;if(!m->read(m->ctx,a+n,&c,1)||c>=128u)return -1;
+        if(upper&&c>='a'&&c<='z')c=(uint8_t)(c-32u);
+        if(!upper&&c>='A'&&c<='Z')c=(uint8_t)(c+32u);
+        staged[n]=c;
+        if(!c){
+            if(!m->writable(m->ctx,a,n+1u))return -1;
+            m->write(m->ctx,a,staged,n+1u);r->rax=a;return 1;
+        }
+    }
+    return -1;
+}
 int mxb_memory_dispatch(const mxb_crt_memory *m,const char *name,mxb_crt_regs *r){
+    if(eq(name,"_strupr"))return case_convert(m,r,1);
+    if(eq(name,"_strlwr"))return case_convert(m,r,0);
     int fill=eq(name,"memset"),copy=eq(name,"memcpy"),move=eq(name,"memmove"),cmp=eq(name,"memcmp");
     if(!fill&&!copy&&!move&&!cmp)return 0;
     if(!r||(r->rsp&15u)!=8u||!r->rsp||r->r8>MXB_MEM_LIMIT)return -1;
