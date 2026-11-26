@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from mxb_demo_pkz_audit import audit, index, verify, key
+from mxb_demo_pkz_audit import audit, audit_all, index, verify, key
 
 class Tests(unittest.TestCase):
     def archive(self, rows):
@@ -48,4 +48,32 @@ class Tests(unittest.TestCase):
             self.assertFalse(r['original_engine_reads_verified'])
             self.assertEqual([s['sha256'] for s in r['samples']],
                 [hashlib.sha256(b).hexdigest() for b in (b'a'*100,b'c'*5,b'b'*70000)])
+    def test_full_audit(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'fixture.pkz'
+            with zipfile.ZipFile(p,'w') as z:
+                for n,b,c in [('ui/a',b'a'*100,0),('ui/b',b'b'*70000,8),('ui/c',b'',0)]:
+                    z.writestr(n,b,compress_type=c)
+            r=audit_all(p)
+            self.assertTrue(r['complete_integrity'])
+            self.assertEqual((r['members'],r['verified_members'],r['verified_bytes']),(3,3,70100))
+            self.assertEqual(r['compression_methods'],{'0':2,'8':1})
+            self.assertEqual(r['verified_manifest_sha256'],audit_all(p)['verified_manifest_sha256'])
+            self.assertFalse(r['original_engine_reads_verified'])
+            r=audit_all(p,member_limit=100)
+            self.assertFalse(r['complete_integrity'])
+            self.assertEqual(r['skipped'],{'member_limit':1})
+            r=audit_all(p,total_limit=100)
+            self.assertFalse(r['complete_integrity'])
+            self.assertEqual(r['skipped'],{'total_limit':1})
+    def test_full_audit_corruption(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'fixture.pkz'
+            with zipfile.ZipFile(p,'w') as z:z.writestr('a',b'abcdef')
+            raw=bytearray(p.read_bytes());raw[31]^=1;p.write_bytes(raw)
+            r=audit_all(p)
+            self.assertFalse(r['complete_integrity'])
+            self.assertEqual(r['verified_members'],0)
+            self.assertEqual(r['failed'],{'BadZipFile':1})
+            self.assertIsNone(r['verified_bytes'])
 if __name__=='__main__':unittest.main()
