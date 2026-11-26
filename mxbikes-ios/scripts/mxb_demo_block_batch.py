@@ -9,10 +9,13 @@ import re,struct
 import mxb_demo_cfg_batch as cfg
 import mxb_demo_simd_batch as simd
 import mxb_demo_hot_string as hot
-PREAMBLE=simd.PREAMBLE+hot.PREAMBLE
+import mxb_demo_integer_extra as integer_extra
+PREAMBLE=simd.PREAMBLE+hot.PREAMBLE+integer_extra.PREAMBLE
 
 def emit(row,pc):
     extra=hot.emit(row,pc)
+    if extra is not None:return extra
+    extra=integer_extra.emit(row,pc)
     if extra is not None:return extra
     raw,op,args=row;end=pc+len(raw)
     if op in ('call','jmp'):
