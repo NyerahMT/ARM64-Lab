@@ -50,6 +50,11 @@ int mxb_observed_import_dispatch(void *context,mxb_observed_cpu *cpu){
     mxb_crt_memory mem={env->memory,read_bytes,writable,write_bytes,executable};
     mxb_crt_regs regs={cpu->r[1],cpu->r[2],cpu->r[8],cpu->r[9],rsp,cpu->r[0]};
     int status=mxb_startup_dispatch(env->startup,&mem,site->library,site->symbol,&regs);
+    if(status==0&&env->platform_service){
+        status=env->platform_service(env->platform_context,site,cpu);
+        if(cpu->rip!=site->token||cpu->r[4]!=rsp)return -1;
+        if(status==1)regs.rax=cpu->r[0];
+    }
     if(status!=1)return status<0?status:0;
     cpu->r[0]=regs.rax;
     cpu->r[4]=rsp+8;
