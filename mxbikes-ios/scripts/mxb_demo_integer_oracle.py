@@ -181,8 +181,26 @@ def run(root):
                  108:(bytes.fromhex("f3ab"),"rep stosd","dword ptr [rdi], eax"),
                  112:(bytes.fromhex("f348a5"),"rep movsq","qword ptr [rdi], qword ptr [rsi]"),
                  116:(bytes.fromhex("c21000"),"ret","0x10")})
+    rows[120]=(bytes.fromhex("660f2f01"),"comisd","xmm0, xmmword ptr [rcx]")
     src,accepted,reject=generate(rows,set(rows))
-    if len(accepted)!=23 or reject:raise RuntimeError("scalar/CRT generator fixture")
+    if len(accepted)!=24 or reject:raise RuntimeError("scalar/CRT generator fixture")
+    # Execute emitted memory operand with a callback accepting only eight
+    # bytes. Incorrect 16-byte reads must fail this boundary fixture.
+    compare=root/"compare-width.c";compare.write_text(src+r"""
+int main(void);
+static int rd64(void*c,uint64_t p,unsigned n,uint64_t*out){
+ (void)c;if(p!=64||n!=8)return 0;*out=UINT64_C(0x3ff0000000000000);return 1;
+}
+int main(void){
+ mxb_cfg s={0};s.read=rd64;s.rip=120;s.r[1]=64;s.mxcsr=0x1f80;
+ s.xmm[0].lo=UINT64_C(0x3ff0000000000000);
+ return mxb_block_step(&s)!=1||s.rip!=124||!(s.flags&ZF);
+}
+""")
+    exe=root/"compare-width.exe"
+    subprocess.run([sys.executable,"-m","ziglang","cc","-target","x86_64-windows-gnu","-O2",str(compare),"-o",str(exe)],check=True,timeout=120)
+    subprocess.run([str(exe)],check=True,timeout=30)
+    print("COMISD_M64_WIDTH_FIXTURE passed",flush=True)
     source=root/"integer-arm.c";source.write_text(src)
     obj=root/"integer-arm.o"
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","aarch64-linux-musl","-O2","-ffreestanding","-fno-builtin","-c",str(source),"-o",str(obj)],check=True,timeout=120)
