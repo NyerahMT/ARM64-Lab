@@ -1,4 +1,4 @@
-#include "mxb_observed_imports.h"
+#include "mxb_observed_session.h"
 extern int mxb_auto_step(mxb_observed_cpu *);
 static mxb_startup_imports startup;
 static mxb_observed_memory memory;
@@ -20,12 +20,19 @@ int main(void){
        !mxb_observed_map(&memory,0x8000,sizeof(stack),stack,MXB_MEM_R|MXB_MEM_W))return 2;
     data[0]='a';data[1]='B';data[2]='c';
     mxb_observed_imports env={&memory,&startup,sites,sizeof(sites)/sizeof(sites[0])};
-    mxb_observed_cpu cpu={0};cpu.ctx=&memory;cpu.read=mxb_observed_read;
-    cpu.write=mxb_observed_write;cpu.write128=mxb_observed_write128;
-    cpu.rip=0x1000;cpu.r[4]=0x80c0;
-    mxb_observed_result r=mxb_observed_run(&cpu,mxb_auto_step,mxb_observed_import_dispatch,&env,0x1010,6);
-    if(r.status!=MXB_RUN_STOP||r.instructions!=4||r.imports!=2||
+    mxb_observed_session session={0};
+    if(mxb_observed_session_init(&session,&memory,&startup,sites,3,mxb_auto_step,0x3000,0x80c0,0x1010))return 19;
+    if(mxb_observed_session_init(&session,&memory,&startup,sites,3,mxb_auto_step,0x1000,0x4000,0x1010))return 20;
+    if(!mxb_observed_session_init(&session,&memory,&startup,sites,3,mxb_auto_step,0x1000,0x80c0,0x1010))return 21;
+    if(mxb_observed_session_tick(&session,MXB_SESSION_SLICE_MAX+1).status!=MXB_RUN_INVALID||session.instructions)return 22;
+    mxb_observed_result r=mxb_observed_session_tick(&session,2);
+    if(r.status!=MXB_RUN_BUDGET||r.instructions!=2||r.imports||session.cpu.rip!=0x2000)return 23;
+    r=mxb_observed_session_tick(&session,4);
+    mxb_observed_cpu cpu=session.cpu;
+    if(r.status!=MXB_RUN_STOP||session.instructions!=4||session.services!=2||
        cpu.r[0]!=123||cpu.r[4]!=0x80c0||!same(data,"ABC"))return 3;
+    r=mxb_observed_session_tick(&session,1);
+    if(r.status!=MXB_RUN_STOP||r.instructions||r.imports||!session.terminal)return 24;
     /* Known target but unverified return address must fail closed. */
     cpu.rip=0x2000;cpu.r[4]=0x80b8;cpu.r[0]=99;cpu.r[1]=0x3000;
     data[0]='a';
