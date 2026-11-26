@@ -119,7 +119,16 @@ static inline int xarith(mxb_cfg*s,unsigned w,unsigned scalar,unsigned op,mxb_xm
  s->mxcsr=csr;*out=r;return 1;
 }
 static inline int fp_convert(uint32_t*csr,unsigned from,unsigned to,uint64_t a,uint64_t*out){
- fp x;if((*csr&0xffc0)!=0x1f80||!fp_unpack(a,from,&x))return 0;
+ fp x;if((*csr&0xffc0)!=0x1f80)return 0;
+ a&=mask(from);
+ /* Exact signed infinity widening/narrowing does not raise an exception.
+  * NaNs, denormals and overflowing finite conversions still stop. */
+ uint64_t from_exp=mask(from)^signbit(from)^mask(fp_p(from)-1);
+ if((a&~signbit(from))==from_exp){
+  *out=(mask(to)^signbit(to)^mask(fp_p(to)-1))|((a&signbit(from))?signbit(to):0);
+  return 1;
+ }
+ if(!fp_unpack(a,from,&x))return 0;
  if(!x.sig){*out=x.sign?signbit(to):0;return 1;}
  int e=x.exp-(int)fp_bias(from)+(int)fp_bias(to);
  int delta=(int)fp_p(from)-(int)fp_p(to)-3;
