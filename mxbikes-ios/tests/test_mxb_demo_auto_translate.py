@@ -1,4 +1,6 @@
 """Compiled regression for the automatic AOT shard boundary and sparse dispatch."""
+import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -17,7 +19,11 @@ class AutoTranslateTests(unittest.TestCase):
 
     def test_dense_page_and_sparse_holes(self):
         cc = shutil.which("clang") or shutil.which("gcc")
-        if not cc:
+        if importlib.util.find_spec("ziglang") is not None:
+            compiler = [sys.executable, "-m", "ziglang", "cc"]
+        elif cc:
+            compiler = [cc]
+        else:
             self.skipTest("host C compiler unavailable")
         selected = {0x1000 + 2*i for i in range(40)} | {0x2000, 0x2002}
         ins = {pc: (b"\x90", "nop", "") for pc in selected}
@@ -49,10 +55,10 @@ int main(void) {
                 path = root / f"unit-{i}.c"
                 path.write_text(source, encoding="utf-8")
                 paths.append(str(path))
-            exe = root / "test"
-            subprocess.run([cc, "-std=c11", "-O2", "-Wall", "-Wextra",
+            exe = root / ("test.exe" if os.name == "nt" else "test")
+            subprocess.run([*compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
                             "-Werror", "-Wno-unused-function", *paths,
-                            "-lm", "-o", str(exe)], check=True)
+                            *([] if os.name == "nt" else ["-lm"]), "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 
 
