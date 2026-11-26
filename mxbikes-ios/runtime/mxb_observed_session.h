@@ -20,6 +20,8 @@ typedef struct {
 int mxb_observed_session_init(mxb_observed_session *,mxb_observed_memory *,
     mxb_startup_imports *,const mxb_observed_import_site *,size_t,
     mxb_observed_step,uint64_t entry,uint64_t stack,uint64_t stop);
+/* Platform adapter and context must outlive this session. Attach once, before execution. */
+int mxb_observed_session_attach_platform(mxb_observed_session *,mxb_observed_platform_service,void *);
 mxb_observed_result mxb_observed_session_tick(mxb_observed_session *,uint64_t budget);
 #ifdef __cplusplus
 }
