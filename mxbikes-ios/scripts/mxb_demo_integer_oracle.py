@@ -11,6 +11,14 @@ static uint64_t cell;
 static int allow_write;
 static int test_rd(void*c,uint64_t p,unsigned n,uint64_t*out){if(p!=64||n!=8)return 0;*out=cell;return 1;}
 static int test_wr(void*c,uint64_t p,unsigned n,uint64_t v){if(p!=64||n!=8||!allow_write)return 0;cell=v;return 1;}
+static uint8_t cmps_left[32],cmps_right[32];
+static int cmps_rd(void*c,uint64_t p,unsigned n,uint64_t*out){
+ if(n!=1)return 0;
+ if(p>=64&&p<96)*out=cmps_left[p-64];
+ else if(p>=128&&p<160)*out=cmps_right[p-128];
+ else return 0;
+ return 1;
+}
 int main(void){
  unsigned count=0;
  for(unsigned k=0;k<2048;++k){
@@ -67,7 +75,28 @@ int main(void){
  allow_write=1;a.exclusive_guest=0;
  if(mx_crt_xchg64(&a,64,0)!=-8||cell!=17||a.r[0]!=4)return 12;
  a.exclusive_guest=1;if(mx_crt_xchg64(&a,64,0)!=1||cell!=4||a.r[0]!=17||a.flags!=f)return 13;
- printf("INTEGER_CPU_COMPARISONS %u; fault checks 3; atomic contract checks 5\n",count);return 0;
+ unsigned compares=0;
+ for(unsigned k=0;k<2048;++k){
+  for(unsigned i=0;i<32;++i){cmps_left[i]=(uint8_t)next();cmps_right[i]=cmps_left[i];}
+  if(k&8)cmps_right[(unsigned)(next()%32)]^=1;
+  unsigned reverse=k&1,equal=(k>>1)&1;
+  uint64_t n=k%33,rc=n,f=0;
+  unsigned index=reverse?31:0;
+  const uint8_t *l=cmps_left+index,*r=cmps_right+index;
+  if(reverse){
+   if(equal){__asm__ volatile("std; repe cmpsb; pushfq; popq %3; cld":"+S"(l),"+D"(r),"+c"(rc),"=r"(f)::"cc","memory");}
+   else{__asm__ volatile("std; repne cmpsb; pushfq; popq %3; cld":"+S"(l),"+D"(r),"+c"(rc),"=r"(f)::"cc","memory");}
+  }else{
+   if(equal){__asm__ volatile("cld; repe cmpsb; pushfq; popq %3":"+S"(l),"+D"(r),"+c"(rc),"=r"(f)::"cc","memory");}
+   else{__asm__ volatile("cld; repne cmpsb; pushfq; popq %3":"+S"(l),"+D"(r),"+c"(rc),"=r"(f)::"cc","memory");}
+  }
+  mxb_cfg z={0};z.read=cmps_rd;z.r[1]=n;z.r[6]=64+index;z.r[7]=128+index;z.flags=reverse?MXB_DF:0;z.known=STATUS;
+  if(mxb_compare_byte(&z,equal)!=1||z.r[1]!=rc||z.r[6]!=64+(uint64_t)((uintptr_t)l-(uintptr_t)cmps_left)||z.r[7]!=128+(uint64_t)((uintptr_t)r-(uintptr_t)cmps_right)||(n&&((z.flags^f)&STATUS))||(!n&&z.known!=STATUS))return 14;
+  ++compares;
+ }
+ mxb_cfg z={0};z.read=cmps_rd;z.r[1]=2;z.r[6]=95;z.r[7]=159;cmps_left[31]=cmps_right[31]=0;
+ if(mxb_compare_byte(&z,1)!=-2||z.r[1]!=1||z.r[6]!=96||z.r[7]!=160||!(z.flags&ZF))return 15;
+ printf("INTEGER_CPU_COMPARISONS %u; fault checks 3; atomic contract checks 5; CMPS CPU comparisons %u; CMPS fault checks 1\n",count,compares);return 0;
 }
 '''
 def run(root):
@@ -79,8 +108,10 @@ def run(root):
     rows.update({10:(b"\x65\x48\x8b\x04\x25\x30\x00\x00\x00","mov","rax, qword ptr gs:[0x30]"),
                  19:(b"\xf0\x48\x0f\xb1\x3d\x24\x00\x00\x00","lock cmpxchg","qword ptr [rip + 0x24], rdi"),
                  28:(b"\x48\x87\x05\x80\x00\x00\x00","xchg","qword ptr [rip + 0x80], rax")})
+    rows.update({35:(b"\xf3\xa6","repe cmpsb","byte ptr [rsi], byte ptr [rdi]"),
+                 37:(b"\x65\x4c\x8b\x1c\x25\x10\x00\x00\x00","mov","r11, qword ptr gs:[0x10]")})
     src,accepted,reject=generate(rows,set(rows))
-    if len(accepted)!=7 or reject:raise RuntimeError("scalar/CRT generator fixture")
+    if len(accepted)!=9 or reject:raise RuntimeError("scalar/CRT generator fixture")
     source=root/"integer-arm.c";source.write_text(src)
     obj=root/"integer-arm.o"
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","aarch64-linux-musl","-O2","-ffreestanding","-fno-builtin","-c",str(source),"-o",str(obj)],check=True,timeout=120)

@@ -30,6 +30,10 @@ def emit(row,pc):
     if raw==b'\x65\x48\x8b\x04\x25\x30\x00\x00\x00' and op=='mov':
         if len(args)!=2 or args[0]!='rax' or not re.fullmatch(r'qword ptr gs:\[?(?:0x30|48)\]?',args[1]):raise ValueError("gs_operand")
         return f'uint64_t v;if(!s->gs_base||!s->read||!s->read(s->ctx,s->gs_base+48,8,&v))return -2;s->r[0]=v;s->rip=UINT64_C({end});break;',[end]
+    # MSVC stack probing reads the current thread's guest stack limit.
+    if raw==b'\x65\x4c\x8b\x1c\x25\x10\x00\x00\x00' and op=='mov':
+        if len(args)!=2 or args[0]!='r11' or not re.fullmatch(r'qword ptr gs:\[?(?:0x10|16)\]?',args[1]):raise ValueError("gs_stack_limit_operand")
+        return f'uint64_t v;if(!s->gs_base||!s->read||!s->read(s->ctx,s->gs_base+16,8,&v))return -2;s->r[11]=v;s->rip=UINT64_C({end});break;',[end]
     # RIP-relative qword CMPXCHG with LOCK, or implicit-LOCK XCHG.
     cmp=op in ('lock cmpxchg','cmpxchg') and len(raw)==9 and raw[:4]==b'\xf0\x48\x0f\xb1'
     xchg=op=='xchg' and len(raw)==7 and raw[:2]==b'\x48\x87'
