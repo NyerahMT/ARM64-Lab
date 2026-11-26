@@ -193,3 +193,19 @@ python mxbikes-ios/scripts/mxb_demo_leaf_batch.py /path/to/demo/mxbikes.exe /pri
 ```
 
 Remaining Batch B gates: general control flow and calls, stack/unwind and flags, SIMD/floating point, import dispatch, original x64 vs actual ARM64 differentials and continuous native execution. These remain incomplete; the pilot is not full-game recompilation.
+
+### Roadmap Batch B: unwind-bounded scalar CFG and direct-call linking
+
+Added a separate ahead-of-time C generator for bounded original scalar control-flow graphs. It models the sixteen guest GPRs, RIP, known/unknown arithmetic status flags, callback-mediated little-endian memory, stack pushes/pops, conditional branches, loops, direct calls and RET. The caller must supply bounded memory callbacks, a guest return sentinel and a finite instruction budget. Unknown flags stop execution rather than fabricating branch outcomes. Cross-interval transfers are limited to direct CALL/JMP targets at exact unwind starts; conditional branches and ordinary fallthrough cannot escape the interval. Unsupported instructions reject the graph. No imported API calls, SIMD, exception/unwind semantics, general indirect branches, or integrated guest process execution yet.
+
+Same pinned public beta21e executable: LLVM disassembly matched 735,694 decoded addresses to raw executable bytes; 8,747 unwind intervals inventoried. Initial interval-only pass compiled 474 CFG candidates (46 with branches). With cross-interval direct-call linking, 481 candidate graphs compiled as one iOS ARM64 Mach-O object: 53 containing branches, 8 containing calls, 7 spanning multiple unwind intervals, 4,285 summed graph instruction nodes / 4,089 unique original addresses. These are bounded static graph candidates, not proven dynamically reachable complete functions or native game execution. Separate prior leaf pilot counts are not added to this total.
+
+Local host validation: 24 unittest methods passed, including direct CPU differential of 11 scalar arithmetic/logical operations across four widths with 64 deterministic boundary/random input pairs per operation/width (2,816 actual x86-64 fixture comparisons with host-generated C register output and defined status flags). Other synthetic tests exercise stack restoration, calls, loops, known/unknown flags, bounded execution, memory failures, and cross-interval edge rejection. An iOS ARM64 compilation fixture also passed. The original candidate graphs were not executed or differential-tested, and the generated ARM64 object has not been run on ARM64. This module does not prove actual game startup, native runtime integration, or full Batch B completion.
+
+Run locally with LLVM/Clang:
+```sh
+python mxbikes-ios/tests/test_mxb_demo_cfg_batch.py
+python mxbikes-ios/scripts/mxb_demo_cfg_batch.py /path/to/demo/mxbikes.exe /private/new-cfg
+```
+
+The generated C and object remain in caller-selected private storage, not in the repository. Next: original-graph differential execution, imported-call dispatch, shared runtime integration, additional integer operations, SIMD and floating point. Batch A's genuine asset frontier remains blocked on the standalone data files. No Actions runs started.
