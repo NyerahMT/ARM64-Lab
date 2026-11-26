@@ -251,7 +251,15 @@ def emit(row,pc):
             code.append(f'mxb_xmm x={v};uint64_t r;if(!fp_toint(&s->mxcsr,{w},{to},{int(op.startswith("cvtt"))},x.lo,&r))return -5;regset(s,{i},{to},r);')
         else:raise ValueError('sse_conversion_operand')
     elif op in ('ucomiss','ucomisd','comiss','comisd') and len(args)==2 and args[0] in XMM:
-        n=4 if op.endswith('ss') else 8;v=read(args[1],n,0,'v');code.append(f'mxb_xmm x={v};if(!xcompare(s,s->xmm[{XMM[args[0]]}].lo,x.lo,{n*8}))return -5;')
+        n=4 if op.endswith('ss') else 8
+        source=args[1]
+        # Capstone can label the memory operand of legacy COMISD as
+        # xmmword. The actual 66 0F 2F /r encoding reads only m64.
+        # Normalize only this verified encoding and memory ModRM form.
+        if op=='comisd' and source.startswith('xmmword ptr '):
+            if raw[0]!=0x66 or raw[i:i+2]!=b'\x0f\x2f' or len(raw)<=i+2 or raw[i+2]>=0xc0:raise ValueError('sse_compare_encoding')
+            source='qword ptr '+source[len('xmmword ptr '):]
+        v=read(source,n,0,'v');code.append(f'mxb_xmm x={v};if(!xcompare(s,s->xmm[{XMM[args[0]]}].lo,x.lo,{n*8}))return -5;')
     else:raise ValueError('sse_operand')
     code.append(f's->rip=UINT64_C({end});break;');return ''.join(code),[end]
 
