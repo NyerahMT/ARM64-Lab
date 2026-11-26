@@ -13,9 +13,13 @@ int mxb_observed_session_init(mxb_observed_session *s,mxb_observed_memory *mem,
     ready.cpu.write=mxb_observed_write;ready.cpu.write128=mxb_observed_write128;
     ready.cpu.rip=entry;ready.cpu.r[4]=stack;
     ready.cpu.flags=2;ready.cpu.mxcsr=0x1f80;
-    ready.imports=(mxb_observed_imports){mem,startup,sites,count};
+    ready.imports=(mxb_observed_imports){mem,startup,sites,count,0,0};
     ready.step=step;ready.stop=stop;ready.initialized=1;ready.status=MXB_RUN_BUDGET;
     *s=ready;return 1;
+}
+int mxb_observed_session_attach_platform(mxb_observed_session *s,mxb_observed_platform_service service,void *ctx){
+    if(!s||!s->initialized||s->terminal||s->instructions||s->services||!service||!ctx||s->imports.platform_service)return 0;
+    s->imports.platform_service=service;s->imports.platform_context=ctx;return 1;
 }
 mxb_observed_result mxb_observed_session_tick(mxb_observed_session *s,uint64_t budget){
     mxb_observed_result result={0,0,s?s->cpu.rip:0,MXB_RUN_INVALID};
