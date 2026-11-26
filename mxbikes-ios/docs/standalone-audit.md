@@ -311,3 +311,7 @@ DEFLATE entries, CRC, and sample SHA-256 digests without extraction. Synthetic
 tests passed, including a 70,105-byte sampled fixture. Independent oracle
 results must never be counted as original engine reads. Actual publisher
 archive sampling is a separate pending validation until its run logs confirm it.
+
+### Publisher resource oracle: verified (2026-11-26)
+
+Self-hosted [run 45765177289](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45765177289) completed successfully. All six synthetic resource regression tests passed. All eight genuine publisher PKZ archives were indexed (1056 total file entries); three entries per archive were independently decoded, for 24 samples and 33,004 decompressed bytes. Every sample passed CRC verification and yielded SHA-256 evidence; both stored and DEFLATE methods were exercised. This is independent resource-oracle evidence, not full archive integrity verification or original-engine asset consumption. The same run repeated 604,407 translated architectural instructions across 5,970 distinct PCs and 367 checkpoints with no mismatch, stopping at the original license.ini dependency. Original engine archive reads and first actual game frame remain unverified. Batch A archive sampling subgate passes; full Batch A and Batch C closure remain open.
