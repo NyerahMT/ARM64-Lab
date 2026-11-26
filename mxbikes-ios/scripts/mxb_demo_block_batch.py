@@ -10,12 +10,15 @@ import mxb_demo_cfg_batch as cfg
 import mxb_demo_simd_batch as simd
 import mxb_demo_hot_string as hot
 import mxb_demo_integer_extra as integer_extra
-PREAMBLE=simd.PREAMBLE+hot.PREAMBLE+integer_extra.PREAMBLE
+import mxb_demo_crt_atomic as atomic
+PREAMBLE=simd.PREAMBLE.replace('} mxb_cfg;', ' uint64_t gs_base; uint32_t exclusive_guest; } mxb_cfg;',1)+hot.PREAMBLE+integer_extra.PREAMBLE+atomic.PREAMBLE
 
 def emit(row,pc):
     extra=hot.emit(row,pc)
     if extra is not None:return extra
     extra=integer_extra.emit(row,pc)
+    if extra is not None:return extra
+    extra=atomic.emit(row,pc)
     if extra is not None:return extra
     raw,op,args=row;end=pc+len(raw)
     if op in ('call','jmp'):

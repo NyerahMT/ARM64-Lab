@@ -8,7 +8,7 @@ Read=C.CFUNCTYPE(C.c_int,C.c_void_p,C.c_uint64,C.c_uint,C.POINTER(C.c_uint64))
 Write=C.CFUNCTYPE(C.c_int,C.c_void_p,C.c_uint64,C.c_uint,C.c_uint64)
 Write128=C.CFUNCTYPE(C.c_int,C.c_void_p,C.c_uint64,C.c_uint64,C.c_uint64)
 class Xmm(C.Structure):_fields_=[('lo',C.c_uint64),('hi',C.c_uint64)]
-class State(C.Structure):_fields_=[('r',C.c_uint64*16),('rip',C.c_uint64),('flags',C.c_uint64),('known',C.c_uint64),('ctx',C.c_void_p),('read',Read),('write',Write),('xmm',Xmm*16),('mxcsr',C.c_uint32),('write128',Write128)]
+class State(C.Structure):_fields_=[('r',C.c_uint64*16),('rip',C.c_uint64),('flags',C.c_uint64),('known',C.c_uint64),('ctx',C.c_void_p),('read',Read),('write',Write),('xmm',Xmm*16),('mxcsr',C.c_uint32),('write128',Write128),('gs_base',C.c_uint64),('exclusive_guest',C.c_uint32)]
 STATUS=0x8d5;STOP=0xdeadbeef
 class Tests(unittest.TestCase):
     def setUp(self):

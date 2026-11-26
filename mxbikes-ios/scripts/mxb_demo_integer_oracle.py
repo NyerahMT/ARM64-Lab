@@ -7,6 +7,10 @@ HARNESS=r'''
 #include <stdio.h>
 static uint64_t rng=0x87654321abcdef00ull;
 static uint64_t next(void){rng^=rng<<13;rng^=rng>>7;rng^=rng<<17;return rng;}
+static uint64_t cell;
+static int allow_write;
+static int test_rd(void*c,uint64_t p,unsigned n,uint64_t*out){if(p!=64||n!=8)return 0;*out=cell;return 1;}
+static int test_wr(void*c,uint64_t p,unsigned n,uint64_t v){if(p!=64||n!=8||!allow_write)return 0;cell=v;return 1;}
 int main(void){
  unsigned count=0;
  for(unsigned k=0;k<2048;++k){
@@ -55,7 +59,15 @@ int main(void){
  mxb_cfg s={0};s.r[0]=0x80000000;s.r[2]=0xffffffff;s.flags=0x123;s.known=STATUS;
  if(mx_div(&s,32,1,0xffffffff)||mx_div(&s,32,1,0)||s.r[0]!=0x80000000||s.r[2]!=0xffffffff||s.flags!=0x123)return 7;
  s.r[2]=1;s.r[0]=1;if(mx_div(&s,64,0,1))return 8;
- printf("INTEGER_CPU_COMPARISONS %u; fault checks 3\n",count);return 0;
+ mxb_cfg a={0};a.read=test_rd;a.write=test_wr;a.exclusive_guest=1;a.r[0]=9;cell=9;allow_write=1;
+ if(mx_crt_cmpxchg64(&a,64,17)!=1||cell!=17||a.r[0]!=9||!(a.flags&ZF))return 9;
+ if(mx_crt_cmpxchg64(&a,64,21)!=1||cell!=17||a.r[0]!=17||(a.flags&ZF))return 10;
+ a.r[0]=4;allow_write=0;uint64_t f=a.flags;
+ if(mx_crt_cmpxchg64(&a,64,21)!=-2||a.r[0]!=4||a.flags!=f||cell!=17)return 11;
+ allow_write=1;a.exclusive_guest=0;
+ if(mx_crt_xchg64(&a,64,0)!=-8||cell!=17||a.r[0]!=4)return 12;
+ a.exclusive_guest=1;if(mx_crt_xchg64(&a,64,0)!=1||cell!=4||a.r[0]!=17||a.flags!=f)return 13;
+ printf("INTEGER_CPU_COMPARISONS %u; fault checks 3; atomic contract checks 5\n",count);return 0;
 }
 '''
 def run(root):
@@ -64,8 +76,11 @@ def run(root):
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","x86_64-windows-gnu","-O2",str(source),"-o",str(exe)],check=True,timeout=120)
     subprocess.run([str(exe)],check=True,timeout=30)
     rows={0:(b"\x48\xc1\xc1\x10","rol","rcx, 0x10"),4:(b"\x41\xf7\xe0","mul","r8d"),7:(b"\xf7\xf9","idiv","ecx"),9:(b"\xc3","ret","")}
+    rows.update({10:(b"\x65\x48\x8b\x04\x25\x30\x00\x00\x00","mov","rax, qword ptr gs:[0x30]"),
+                 19:(b"\xf0\x48\x0f\xb1\x3d\x24\x00\x00\x00","lock cmpxchg","qword ptr [rip + 0x24], rdi"),
+                 28:(b"\x48\x87\x05\x80\x00\x00\x00","xchg","qword ptr [rip + 0x80], rax")})
     src,accepted,reject=generate(rows,set(rows))
-    if len(accepted)!=4 or reject:raise RuntimeError("scalar generator fixture")
+    if len(accepted)!=7 or reject:raise RuntimeError("scalar/CRT generator fixture")
     source=root/"integer-arm.c";source.write_text(src)
     obj=root/"integer-arm.o"
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","aarch64-linux-musl","-O2","-ffreestanding","-fno-builtin","-c",str(source),"-o",str(obj)],check=True,timeout=120)
