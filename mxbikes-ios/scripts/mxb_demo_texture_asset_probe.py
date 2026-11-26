@@ -71,7 +71,7 @@ Read=C.CFUNCTYPE(C.c_int,C.c_void_p,C.c_uint64,C.c_void_p,C.c_size_t)
 Write=Read
 
 
-def upload(library,w,h,rgba):
+def upload(library,w,h,rgba,readback=None):
     if not 1<=w<=MAX_DIM or not 1<=h<=MAX_DIM or len(rgba)!=w*h*4:
         raise ValueError('invalid_rgba')
     lib=C.CDLL(str(Path(library).resolve()))
@@ -119,11 +119,15 @@ def upload(library,w,h,rgba):
             raise RuntimeError('texture_storage_mismatch')
         actual=C.string_at(ptr,len(rgba))
         if actual!=rgba:raise RuntimeError('texture_pixel_mismatch')
+        # Optional host-render oracle consumes the actual adapter-owned pixels,
+        # not the pre-upload reference. It must independently verify readback.
+        gpu_result=readback(ow.value,oh.value,actual) if readback is not None else None
         call('glDeleteTextures',1,ID)
         if lib.mxb_tex_storage_bytes(texture)!=0:raise RuntimeError('texture_release')
         return {'width':w,'height':h,'rgba_bytes':len(actual),
                 'rgba_sha256':hashlib.sha256(actual).hexdigest(),
-                'native_texture_upload_verified':True,'original_game_frame':False}
+                'native_texture_upload_verified':True,'original_game_frame':False,
+                **({'gpu_readback':gpu_result} if gpu_result is not None else {})}
     finally:
         lib.mxb_tex_destroy(texture)
         # Windows holds loaded DLL files open; release the temporary test DLL.
@@ -132,7 +136,7 @@ def upload(library,w,h,rgba):
             _ctypes.FreeLibrary(lib._handle)
 
 
-def probe(archive,library,max_images=4):
+def probe(archive,library,max_images=4,readback=None):
     if not 1<=max_images<=16:raise ValueError('invalid_probe_budget')
     samples=[];rejected=0
     with zipfile.ZipFile(archive) as z:
@@ -145,6 +149,6 @@ def probe(archive,library,max_images=4):
             if rejected>=64:break
             try:w,h,rgba=decode_tga(z.read(item))
             except (ValueError,zipfile.BadZipFile):rejected+=1;continue
-            samples.append(upload(library,w,h,rgba))
+            samples.append(upload(library,w,h,rgba,readback=readback))
     return {'candidates':len(candidates),'rejected':rejected,
             'uploads':samples,'original_engine_calls_verified':False}
