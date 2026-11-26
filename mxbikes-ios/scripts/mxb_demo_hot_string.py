@@ -43,16 +43,20 @@ static inline int mx_repeat_move(mxb_cfg*s,unsigned bytes,unsigned copy){
 }
 '''
 
+REPEAT_FORMS={bytes.fromhex(prefix+opcode):(width,copy)
+              for opcode,copy in (("a4",1),("aa",0),("a5",1),("ab",0))
+              for prefix,width in (("f3",1),("f366",2),("66f3",2),("f348",8))
+              if (opcode in ("a4","aa"))==(width==1)}
+REPEAT_FORMS.update({bytes.fromhex("f3a5"):(4,1),bytes.fromhex("f3ab"):(4,0)})
+
+# Shared architectural REP inventory for reference tracing.
+REPEAT_BYTES=frozenset(REPEAT_FORMS)|frozenset((b'\xf2\xae',b'\xf3\xae',b'\xf2\xa6',b'\xf3\xa6'))
+
 def emit(row,pc):
     raw,op,args=row;end=pc+len(raw)
     # Legacy REP MOVS/STOS, with exact operand width from the opcode.
-    repeat_forms={bytes.fromhex(prefix+opcode):(width,copy)
-                  for opcode,copy in (("a4",1),("aa",0),("a5",1),("ab",0))
-                  for prefix,width in (("f3",1),("f366",2),("66f3",2),("f348",8))
-                  if (opcode in ("a4","aa"))==(width==1)}
-    repeat_forms.update({bytes.fromhex("f3a5"):(4,1),bytes.fromhex("f3ab"):(4,0)})
-    if raw in repeat_forms and op.startswith("rep"):
-        width,copy=repeat_forms[raw]
+    if raw in REPEAT_FORMS and op.startswith("rep"):
+        width,copy=REPEAT_FORMS[raw]
         return f'int rc=mx_repeat_move(s,{width},{copy});if(rc!=1)return rc;s->rip=UINT64_C({end});break;',[end]
     # Accept exact legacy encodings only. ES is implicit and ignored in long mode.
     if raw in (b'\xf2\xae',b'\xf3\xae') and (op=='scasb' or op.endswith(' scasb') or op in ('repne','repnz','repe','repz','rep')):
