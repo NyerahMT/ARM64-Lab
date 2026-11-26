@@ -7,6 +7,8 @@ from pathlib import Path
 
 MAX_MEMBERS = 100_000
 MAX_MEMBER = 64 * 1024 * 1024
+FULL_MEMBER_LIMIT = 512 * 1024 * 1024
+FULL_ARCHIVE_LIMIT = 8 * 1024 * 1024 * 1024
 CHUNK = 64 * 1024
 
 
@@ -36,7 +38,7 @@ def index(zf):
 
 
 def verify(zf, item, max_bytes=MAX_MEMBER):
-    if not 0 <= item.file_size <= max_bytes <= MAX_MEMBER:
+    if not 0 <= item.file_size <= max_bytes <= FULL_MEMBER_LIMIT:
         raise ValueError('resource_size_limit')
     if item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
         raise ValueError('unsupported_compression')
@@ -78,9 +80,60 @@ def audit(path, max_bytes=MAX_MEMBER, max_samples=3):
                 'samples': results, 'original_engine_reads_verified': False}
 
 
+def audit_all(path, *, member_limit=FULL_MEMBER_LIMIT, total_limit=FULL_ARCHIVE_LIMIT):
+    """Stream every supported member within explicit memory/work limits.
+    No member is extracted; the aggregate digest commits to sorted names,
+    uncompressed sizes and content hashes without exposing filenames.
+    Skipped entries must prevent a complete-integrity claim.
+    """
+    if not 1 <= member_limit <= FULL_MEMBER_LIMIT or not 1 <= total_limit <= FULL_ARCHIVE_LIMIT:
+        raise ValueError('invalid_full_audit_budget')
+    total = 0
+    verified = 0
+    methods = {}
+    skipped = {}
+    failed = {}
+    manifest = hashlib.sha256()
+    def bump(d, reason):
+        d[reason] = d.get(reason, 0) + 1
+    with zipfile.ZipFile(Path(path), 'r') as zf:
+        items = index(zf)
+        for name, item in sorted(items.items()):
+            if item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                bump(skipped, 'unsupported_compression')
+                continue
+            if not 0 <= item.file_size <= member_limit:
+                bump(skipped, 'member_limit')
+                continue
+            if item.file_size > total_limit - total:
+                bump(skipped, 'total_limit')
+                continue
+            # Reserve the budget before attempting decompression, even if CRC
+            # verification fails, so malformed entries cannot exceed it.
+            total += item.file_size
+            try:
+                result = verify(zf, item, member_limit)
+            except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, EOFError) as exc:
+                bump(failed, type(exc).__name__)
+                continue
+            record = json.dumps([name, result['bytes'], result['sha256']],
+                                ensure_ascii=True, separators=(',', ':')).encode('ascii')
+            manifest.update(record + b'\n')
+            verified += 1
+            bump(methods, str(item.compress_type))
+        return {'members': len(items), 'verified_members': verified,
+                'verified_bytes': total if not failed else None,
+                'attempted_bytes': total, 'compression_methods': methods,
+                'skipped': skipped, 'failed': failed,
+                'verified_manifest_sha256': manifest.hexdigest(),
+                'complete_integrity': verified == len(items) and not skipped and not failed,
+                'original_engine_reads_verified': False}
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', type=Path)
+    parser.add_argument('--all', action='store_true', help='Stream every supported member within bounded budgets')
     args = parser.parse_args()
-    print(json.dumps(audit(args.archive), indent=2))
+    print(json.dumps(audit_all(args.archive) if args.all else audit(args.archive), indent=2))
