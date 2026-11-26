@@ -52,29 +52,29 @@ def generate_shards(ins,selected,shard_nodes=MAX_SHARD_NODES):
     """
     if not 1<=shard_nodes<=MAX_SHARD_NODES or not 0<len(selected)<=MAX_NODES:
         raise ValueError("shard budget")
-    groups=[];current=[]
-    # Never split an original 4 KiB page between two dispatchers unless
-    # absolutely necessary (page size bounds original instruction count).
-    for pc in sorted(selected):
-        if current and len(current)>=shard_nodes and pc>>12!=current[-1]>>12:
-            groups.append(current);current=[]
-        current.append(pc)
-    if current:groups.append(current)
-    shards=[];page_owner={}
+    # Cap every compilation unit, even when thousands of PCs share one page.
+    # Page ranges are ordered by the last selected PC in each shard; the
+    # shard's own dispatcher still rejects any holes in its instruction map.
+    ordered=sorted(selected)
+    groups=[ordered[i:i+shard_nodes] for i in range(0,len(ordered),shard_nodes)]
+    shards=[];page_ranges=defaultdict(list)
     for i,group in enumerate(groups):
-        if len(group)>MAX_NODES:raise ValueError("oversized shard")
         src,accepted,rejected=blocks.generate(ins,set(group))
         if accepted!=set(group) or rejected:raise ValueError("planner/generator disagreement")
         src=("#define mxb_block_step mxb_auto_step_"+str(i)+"\n"
              "#define mxb_block_run mxb_auto_run_"+str(i)+"\n"+src)
-        for pc in group:
-            prior=page_owner.setdefault(pc>>12,i)
-            if prior!=i:raise ValueError("page ownership overlap")
+        last_by_page={pc>>12:pc for pc in group}
+        for page,last in last_by_page.items():
+            page_ranges[page].append((last,i))
         shards.append(src)
     dispatch=[blocks.PREAMBLE]
     dispatch.extend(f"extern int mxb_auto_step_{i}(mxb_cfg*);\n" for i in range(len(shards)))
     dispatch.append("int mxb_auto_step(mxb_cfg*s){if(!s)return -1;switch(s->rip>>12){\n")
-    dispatch.extend(f"case UINT64_C({page}):return mxb_auto_step_{i}(s);\n" for page,i in sorted(page_owner.items()))
+    for page,ranges in sorted(page_ranges.items()):
+        dispatch.append(f"case UINT64_C({page}):\n")
+        for last,i in ranges[:-1]:
+            dispatch.append(f"if(s->rip<=UINT64_C({last}))return mxb_auto_step_{i}(s);\n")
+        dispatch.append(f"return mxb_auto_step_{ranges[-1][1]}(s);\n")
     dispatch.append("default:return 2;}}\nint mxb_auto_run(mxb_cfg*s,uint64_t stop,unsigned budget){if(!s)return -1;while(budget--){if(s->rip==stop)return 1;int r=mxb_auto_step(s);if(r!=1)return r;}return s->rip==stop?1:0;}\n")
     return shards,"".join(dispatch)
 
@@ -106,11 +106,18 @@ def regressions():
     src,dispatch=generate_shards(ins,chosen,1)
     assert len(src)==2 and "mxb_auto_step_0" in src[0] and "mxb_auto_step_1" in src[1]
     assert "case UINT64_C(1):" in dispatch and "case UINT64_C(3):" in dispatch
+    # Dense same-page maps must honor the requested cap, including gaps.
+    dense={pc:(b"\x90","nop","") for pc in (0x1000,0x1002,0x1004,0x1006,0x2000)}
+    parts,dispatch=generate_shards(dense,set(dense),2)
+    assert len(parts)==3
+    assert "if(s->rip<=UINT64_C(4098))return mxb_auto_step_0(s);" in dispatch
+    assert "return mxb_auto_step_1(s);" in dispatch
+    assert "case UINT64_C(2):" in dispatch and "return mxb_auto_step_2(s);" in dispatch
     for fn in (lambda:plan(ins,{1:0}),lambda:plan(ins,max_nodes=0),lambda:generate_shards(ins,set()),lambda:generate_shards(ins,{0x2000})):
         try:fn()
         except ValueError:pass
         else:raise AssertionError("invalid plan accepted")
-    return 11
+    return 15
 
 if __name__=="__main__":
     print("AUTO_TRANSLATOR_REGRESSIONS",regressions())
