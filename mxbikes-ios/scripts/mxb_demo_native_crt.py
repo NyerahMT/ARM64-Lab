@@ -8,7 +8,7 @@ from pathlib import Path
 
 PAGE=4096
 APIS=frozenset({"__set_app_type","_configthreadlocale","__getmainargs",
-                "_encode_pointer","_decode_pointer","_onexit","_ismbblead"})
+                "_encode_pointer","_decode_pointer","_onexit","_ismbblead","_mktime64"})
 
 class _Process(C.Structure):
     _fields_=[("app_type",C.c_uint32),("locale_mode",C.c_uint32),
