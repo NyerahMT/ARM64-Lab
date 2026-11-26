@@ -58,6 +58,33 @@ static inline uint64_t alu(mxb_cfg*s,unsigned w,unsigned kind,uint64_t a,uint64_
  else {v=kind==2?a&b:kind==3?a|b:a^b;known&=~AF;}
  flagset(s,affected,known,zsp(v,w)|(carry?CF:0)|(overflow?OF:0)|((a^b^v)&16?AF:0));return v;
 }
+/* Carry arithmetic uses a known input CF. All arithmetic status bits defined. */
+static inline int carry_alu(mxb_cfg*s,unsigned w,unsigned sub,uint64_t a,uint64_t b,uint64_t*out){
+ if(!(s->known&CF))return 0;
+ uint64_t m=mask(w),h=signbit(w),c=!!(s->flags&CF),v,t,cf,of;
+ a&=m;b&=m;
+ if(sub){t=(a-b)&m;v=(t-c)&m;cf=(a<b)||(t<c);of=!!((a^b)&(a^v)&h);}
+ else {t=(a+b)&m;v=(t+c)&m;cf=(t<a)||(v<t);of=!!(~(a^b)&(a^v)&h);}
+ flagset(s,STATUS,STATUS,zsp(v,w)|(cf?CF:0)|(of?OF:0)|((a^b^v)&16?AF:0));*out=v;return 1;
+}
+/* SHL/SHR/SAR: only architecturally bounded counts. Zero preserves all flags.
+ * CF is unknown for logical shifts with count >= width; SAR uses sign fill. */
+static inline uint64_t shift(mxb_cfg*s,unsigned w,unsigned kind,uint64_t a,uint64_t count){
+ uint64_t m=mask(w),h=signbit(w),v,cf=0,of=0,known=ZF|SF|PF;
+ unsigned n=(unsigned)(count&(w==64?63:31));a&=m;
+ if(!n)return a;
+ if(kind==0){v=n>=w?0:(a<<n)&m;if(n<w){known|=CF;cf=(a>>(w-n))&1;}}
+ else if(kind==1){v=n>=w?0:a>>n;if(n<w){known|=CF;cf=(a>>(n-1))&1;}}
+ else {v=n>=w?(a&h?m:0):(a>>n)|((a&h)?(m^(m>>n)):0);known|=CF;cf=n>=w?!!(a&h):((a>>(n-1))&1);}
+ if(n==1){known|=OF;of=kind==0?(!!(v&h)^cf):kind==1?!!(a&h):0;}
+ flagset(s,STATUS,known,zsp(v,w)|(cf?CF:0)|(of?OF:0));return v;
+}
+/* Signed two/three operand IMUL: exact widened product, only OF/CF defined. */
+static inline uint64_t signed_mul(mxb_cfg*s,unsigned w,uint64_t a,uint64_t b){
+ __int128 x=(__int128)(int64_t)sx(a,w),y=(__int128)(int64_t)sx(b,w),p=x*y;
+ uint64_t v=(uint64_t)p&mask(w);int overflow=p!=(__int128)(int64_t)sx(v,w);
+ flagset(s,STATUS,CF|OF,overflow?(CF|OF):0);return v;
+}
 /* condition number follows the low nibble of x86 Jcc. -1 unknown. */
 static inline int cond(mxb_cfg*s,unsigned c){
  uint64_t needed=0,f=s->flags;int yes=0;
@@ -131,6 +158,21 @@ def emit(row,pc):
             if b!=w:raise ValueError('width')
             code.append(f'if(!s->write||!s->write(s->ctx,{a},{w//8},({v})&mask({w})))return -2;');return
         raise ValueError('destination')
+    def condition_code():
+        # Derive from original opcode, not decoder aliases (e.g. cmovz/e).
+        pos=0
+        while pos<len(raw) and (raw[pos]==0x66 or 0x40<=raw[pos]<=0x4f):pos+=1
+        if pos+1>=len(raw) or raw[pos]!=0x0f:raise ValueError('condition_opcode')
+        v=raw[pos+1];family=0x40 if op.startswith('cmov') else 0x90
+        if not family<=v<family+16:raise ValueError('condition_opcode')
+        return v&15
+    def transactional(dst,w,v):
+        # Stage flags before memory write; memory callback must be atomic.
+        if MEM.fullmatch(dst):
+            code.append('mxb_cfg tmp=*s;')
+            code.append(f'uint64_t value={v.replace("(s,","(&tmp,")};')
+            write(dst,w,'value');code.append('s->flags=tmp.flags;s->known=tmp.known;')
+        else:write(dst,w,v)
     def advance(dest):code.append(f's->rip=UINT64_C({dest});break;')
     if op=='ret':
         if raw!=b'\xc3' or arg:raise ValueError('return')
@@ -144,7 +186,9 @@ def emit(row,pc):
         else:raise ValueError('control')
         advance(dest);return ''.join(code),edges
     if op=='nop':pass
-    elif op=='push' and len(args)==1 and args[0] in GPRS:code.append(f'if(!push(s,s->r[{GPRS.index(args[0])}]))return -2;')
+    elif op=='push' and len(args)==1:
+        if raw[0]==0x66:raise ValueError('push_width')
+        value=read(args[0],64,'a');code.append(f'if(!push(s,{value}))return -2;')
     elif op=='pop' and len(args)==1 and args[0] in GPRS and args[0]!='rsp':code.append(f'uint64_t v;if(!pop(s,&v))return -2;s->r[{GPRS.index(args[0])}]=v;')
     elif op=='lea' and len(args)==2 and args[0] in REGS and width(args[0])>=32:
         a,_=address(args[1],end);write(args[0],width(args[0]),a)
@@ -152,6 +196,48 @@ def emit(row,pc):
         w=width(args[0]);src=width(args[1]) or w
         if not w or not src or (op in ('mov','movabs') and w!=src) or (op not in ('mov','movabs') and (src>=w or args[0] not in REGS or width(args[1]) is None)):raise ValueError('width')
         v=read(args[1],src,'a');write(args[0],w,f'sx({v},{src})' if op in ('movsx','movsxd') else v)
+    elif op.startswith('cmov') and len(args)==2:
+        w=width(args[0]);cc=condition_code()
+        if args[0] not in REGS or w not in (16,32,64):raise ValueError('cmov_width')
+        a=read(args[1],w,'a');i=REGS[args[0]][0]
+        # CMOV reads its source even when false. A 32-bit CMOV clears the
+        # upper half of the destination in 64-bit mode, even when false.
+        code.append(f'int c=cond(s,{cc});if(c<0)return -3;')
+        write(args[0],w,f'c?{a}:s->r[{i}]')
+    elif op.startswith('set') and len(args)==1:
+        cc=condition_code()
+        if width(args[0])!=8:raise ValueError('set_width')
+        code.append(f'int c=cond(s,{cc});if(c<0)return -3;');write(args[0],8,'(uint64_t)c')
+    elif op in ('shl','sal','shr','sar') and len(args)==2:
+        w=width(args[0]);k={'shl':0,'sal':0,'shr':1,'sar':2}[op]
+        if not w or (args[1] in REGS and args[1]!='cl') or MEM.fullmatch(args[1]):raise ValueError('shift_width')
+        a=read(args[0],w,'a');b=read(args[1],8,'b')
+        transactional(args[0],w,f'shift(s,{w},{k},{a},{b})')
+    elif op in ('adc','sbb') and len(args)==2:
+        w=width(args[0]);k=int(op=='sbb')
+        if not w:raise ValueError('carry_width')
+        a=read(args[0],w,'a');b=read(args[1],w,'b')
+        # Evaluate source reads first, commit flags only if write succeeds.
+        code.append('mxb_cfg tmp=*s;uint64_t value;')
+        code.append(f'if(!carry_alu(&tmp,{w},{k},{a},{b},&value))return -3;')
+        write(args[0],w,'value');code.append('s->flags=tmp.flags;s->known=tmp.known;')
+    elif op=='imul' and len(args) in (2,3):
+        w=width(args[0]);
+        if args[0] not in REGS or w not in (16,32,64):raise ValueError('imul_width')
+        a=read(args[0] if len(args)==2 else args[1],w,'a');b=read(args[-1],w,'b')
+        write(args[0],w,f'signed_mul(s,{w},{a},{b})')
+    elif op in ('cbw','cwde','cdqe','cwd','cdq','cqo') and not arg:
+        w={'cbw':8,'cwde':16,'cdqe':32,'cwd':16,'cdq':32,'cqo':64}[op]
+        if op in ('cbw','cwde','cdqe'):code.append(f'regset(s,0,{w*2},sx(s->r[0],{w}));')
+        else:code.append(f'regset(s,2,{w},s->r[0]&signbit({w})?mask({w}):0);')
+    elif op=='bswap' and len(args)==1 and args[0] in REGS and width(args[0]) in (32,64):
+        w=width(args[0]);a=read(args[0],w,'a');write(args[0],w,f'__builtin_bswap{w}({a})')
+    elif op=='xchg' and len(args)==2 and all(t in REGS for t in args):
+        w=width(args[0]);a=read(args[0],w,'a');b=read(args[1],w,'b')
+        code.append(f'uint64_t av={a},bv={b};');write(args[0],w,'bv');write(args[1],w,'av')
+    elif op in ('clc','stc','cmc') and not arg:
+        if op=='cmc':code.append('if(!(s->known&CF))return -3;flagset(s,CF,CF,(s->flags^CF)&CF);')
+        else:code.append('flagset(s,CF,CF,'+('CF' if op=='stc' else '0')+');')
     elif op in ('add','sub','and','or','xor','cmp','test','inc','dec','neg','not') and len(args)==(1 if op in ('inc','dec','neg','not') else 2):
         w=width(args[0]);
         if not w:raise ValueError('width')
@@ -159,12 +245,10 @@ def emit(row,pc):
         if op=='not':v=f'~({a})'
         else:
             k={'add':0,'sub':1,'cmp':1,'and':2,'test':2,'or':3,'xor':4,'inc':5,'dec':6,'neg':7}[op]
-            # For memory RMW, preflight isn't possible with the minimal callbacks;
-            # reject rather than changing flags before a failed write.
-            if MEM.fullmatch(args[0]) and op not in ('cmp','test'):raise ValueError('memory_rmw')
             v=f'alu(s,{w},{k},{a},{b})'
         if op in ('cmp','test'):code.append(f'(void){v};')
-        else:write(args[0],w,v)
+        elif op=='not':write(args[0],w,v)
+        else:transactional(args[0],w,v)
     else:raise ValueError('opcode:'+op)
     advance(end);return ''.join(code),edges
 

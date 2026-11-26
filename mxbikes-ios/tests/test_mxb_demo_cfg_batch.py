@@ -78,8 +78,36 @@ class Tests(unittest.TestCase):
         with self.assertRaises(ValueError):self.translate('call rax\nret')
     def test_reject_simd(self):
         with self.assertRaises(ValueError):self.translate('addss xmm0,xmm1\nret')
-    def test_reject_rmw(self):
-        with self.assertRaises(ValueError):self.translate('add dword ptr [rcx],1\nret')
+    def test_rmw(self):
+        self.s.r[1]=32;self.mem[32:36]=(0xffffffff).to_bytes(4,'little')
+        self.assertEqual(self.run_lift('add dword ptr [rcx],1\nret'),1)
+        self.assertEqual(self.mem[32:36],bytes(4));self.assertEqual(self.s.flags&STATUS,0x55)
+    def test_rmw_rejected_write_preserves_flags(self):
+        self.s.r[1]=32;self.mem[32:36]=(0xffffffff).to_bytes(4,'little');self.s.flags=0x80
+        self.s.write=Write(lambda *_:0)
+        self.assertEqual(self.run_lift('add dword ptr [rcx],1\nret'),-2)
+        self.assertEqual(self.s.flags,0x80);self.assertEqual(self.s.known,STATUS)
+        self.assertEqual(self.mem[32:36],b'\xff'*4)
+    def test_unknown_carry(self):
+        self.s.known=STATUS&~1;self.s.r[0]=2
+        self.assertEqual(self.run_lift('adc eax,1\nret'),-3);self.assertEqual(self.s.r[0],2)
+    def test_cmov_fault_even_false(self):
+        self.s.r[1]=511;self.s.flags=0
+        self.assertEqual(self.run_lift('cmove eax,dword ptr [rcx]\nret'),-2)
+    def test_set_memory(self):
+        self.s.r[1]=32;self.s.flags=0x40
+        self.assertEqual(self.run_lift('setz byte ptr [rcx]\nret'),1);self.assertEqual(self.mem[32],1)
+    def test_sign_extend(self):
+        self.s.r[0]=0xffff000080000000
+        self.assertEqual(self.run_lift('cdqe\ncqo\nret'),1);self.assertEqual(self.s.r[0],0xffffffff80000000);self.assertEqual(self.s.r[2],0xffffffffffffffff)
+    def test_push_immediate(self):
+        self.assertEqual(self.run_lift('push -1\npop rax\nret'),1);self.assertEqual(self.s.r[0],0xffffffffffffffff)
+    def test_bswap_xchg(self):
+        self.s.r[0]=0x1122334455667788;self.s.r[1]=0xaabbccdd
+        self.assertEqual(self.run_lift('bswap rax\nxchg eax,ecx\nret'),1);self.assertEqual(self.s.r[1],0x44332211);self.assertEqual(self.s.r[0],0xaabbccdd)
+    def test_carry_controls(self):
+        self.s.r[0]=5
+        self.assertEqual(self.run_lift('stc\nadc eax,1\ncmc\nsbb eax,1\nclc\nret'),1);self.assertEqual(self.s.r[0],5);self.assertEqual(self.s.flags&1,0)
     def test_reject_ret_imm(self):
         with self.assertRaises(ValueError):self.translate('ret 8')
     def test_cross_interval_call_policy(self):
@@ -115,6 +143,36 @@ class Tests(unittest.TestCase):
                     mask=(1<<bits)-1;sign=1<<(bits-1)
                     cases=[(0,0),(mask,1),(sign-1,1),(sign,1),(sign,sign),(mask,mask)]
                     cases += [(rng.getrandbits(64),rng.getrandbits(64)) for _ in range(58)]
+                    for a,b in cases:
+                        initial=rng.getrandbits(12)&STATUS
+                        self.s.r[0]=a;self.s.r[1]=b;self.s.r[4]=400;self.s.rip=0;self.s.flags=initial;self.s.known=STATUS
+                        result=(C.c_uint64*2)();ref(a,b,initial|0x202,result)
+                        self.assertEqual(fn(C.byref(self.s),STOP,8),1)
+                        self.assertEqual(self.s.r[0],result[0])
+                        self.assertEqual(self.s.flags&self.s.known&STATUS,result[1]&self.s.known&STATUS)
+    def test_x64_extended_differential(self):
+        if platform.machine().lower() not in ('x86_64','amd64') or sys.platform!='linux':self.skipTest('native Linux x64 required')
+        rng=random.Random(21021)
+        for bits,reg,src in [(8,'al','cl'),(16,'ax','cx'),(32,'eax','ecx'),(64,'rax','rcx')]:
+            for op in ('adc','sbb','shl','shr','sar','imul','cmove','cmovne','cmovl','cmova','seto','setbe','setne'):
+                if (op=='imul' or op.startswith('cmov')) and bits==8:continue
+                if op.startswith('set') and bits!=8:continue
+                asm=f'{op} {reg}'+('' if op.startswith('set') else ', cl' if op in ('shl','shr','sar') else f', {src}')
+                with self.subTest(bits=bits,op=op):
+                    lifted,_=self.translate(asm+'\nret');cp=self.p/'lift.c';so=self.p/'lift.so'
+                    cp.write_text(PREAMBLE+lifted)
+                    # A unique library path avoids dlopen caching the previous fixture.
+                    so=self.p/f'lift-{bits}-{op}.so'
+                    subprocess.run(['clang','-shared','-fPIC','-O2',str(cp),'-o',str(so)],check=True)
+                    lib=C.CDLL(str(so));fn=lib.fixture;fn.argtypes=[C.POINTER(State),C.c_uint64,C.c_uint];fn.restype=C.c_int
+                    ap=self.p/'ref.s';ro=self.p/f'ref-{bits}-{op}.so'
+                    ap.write_text('.text\n.intel_syntax noprefix\n.globl reference\nreference:\nmov rax,rdi\nmov r8,rcx\nmov rcx,rsi\npush rdx\npopfq\n'+asm+'\npushfq\npop rdx\nmov [r8],rax\nmov [r8+8],rdx\nret\n.section .note.GNU-stack,"",@progbits\n')
+                    subprocess.run(['clang','-shared','-fPIC',str(ap),'-o',str(ro)],check=True)
+                    rl=C.CDLL(str(ro));ref=rl.reference;ref.argtypes=[C.c_uint64,C.c_uint64,C.c_uint64,C.POINTER(C.c_uint64)];ref.restype=None
+                    mask=(1<<bits)-1;sign=1<<(bits-1)
+                    cases=[(0,0),(mask,1),(sign-1,1),(sign,1),(sign,sign),(mask,mask)]
+                    cases += [(rng.getrandbits(64),k) for k in (0,1,7,8,15,16,31,32,63,64)]
+                    cases += [(rng.getrandbits(64),rng.getrandbits(64)) for _ in range(48)]
                     for a,b in cases:
                         initial=rng.getrandbits(12)&STATUS
                         self.s.r[0]=a;self.s.r[1]=b;self.s.r[4]=400;self.s.rip=0;self.s.flags=initial;self.s.known=STATUS
