@@ -14,7 +14,12 @@ typedef struct {
     uint64_t token,return_pc;
     const char *library,*symbol;
 } mxb_observed_import_site;
-/* Optional platform adapter receives only validated import-site identity.\n * Return 1 for completed service, 0 for unsupported, negative on failure.\n * Adapter must not modify RIP or RSP; central dispatcher owns guest RET. */\ntypedef int (*mxb_observed_platform_service)(void *,const mxb_observed_import_site *,mxb_observed_cpu *);\ntypedef struct {\n    mxb_observed_memory *memory;
+/* Optional platform adapter receives only validated import-site identity.
+ * Return 1 for completed service, 0 for unsupported, negative on failure.
+ * Adapter must not modify RIP or RSP; central dispatcher owns guest RET. */
+typedef int (*mxb_observed_platform_service)(void *,const mxb_observed_import_site *,mxb_observed_cpu *);
+typedef struct {
+    mxb_observed_memory *memory;
     mxb_startup_imports *startup;
     const mxb_observed_import_site *sites;
     size_t count;
