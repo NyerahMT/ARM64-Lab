@@ -39,7 +39,7 @@ class ObservedAOTTests(unittest.TestCase):
         extras=[]
         if native_imports:
             extras=[str(ROOT/"runtime"/name) for name in (
-                "mxb_observed_imports.c","mxb_standalone_crt.c","mxb_standalone_platform.c",
+                "mxb_observed_imports.c","mxb_observed_session.c","mxb_standalone_crt.c","mxb_standalone_platform.c",
                 "mxb_standalone_imports.c","mxb_standalone_heap.c","mxb_standalone_memory.c",
                 "mxb_standalone_winsock.c","mxb_standalone_format.c","mxb_standalone_files.c")]
         fixture="mxb_observed_imports_smoke.c" if native_imports else "mxb_observed_aot_smoke.c"
