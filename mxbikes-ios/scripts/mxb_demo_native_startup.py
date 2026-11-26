@@ -3,7 +3,7 @@ import ctypes as C
 from mxb_demo_assets import AssetMounts, Files as _Files
 from mxb_demo_native_crt import NativeCRT, APIS, _Process, _Regs, _Memory, _Read, _Check, _Write, _Exec
 
-CRT_APIS=APIS|{"strcpy","strrchr","malloc","calloc","free","memset","memcpy","memmove","memcmp","sprintf","fopen","fread","fseek","ftell","fclose","feof","ferror","fgets","fgetc","clearerr","rewind"}
+CRT_APIS=APIS|{"_strupr","_strlwr","strcpy","strrchr","malloc","calloc","free","memset","memcpy","memmove","memcmp","sprintf","fopen","fread","fseek","ftell","fclose","feof","ferror","fgets","fgetc","clearerr","rewind"}
 HEAP_BASE=0x770000000
 HEAP_CAP=16*1024*1024
 WIN_APIS=frozenset({"GetTickCount","GetTickCount64","GetLastError","SetLastError",
