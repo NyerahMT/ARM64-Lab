@@ -1,4 +1,4 @@
-"""Bounded SSE/SSE2 AOT extension. No general floating-point arithmetic.
+"""Bounded SSE/SSE2 AOT extension. Normal/zero IEEE754 arithmetic only.
 
 The scalar ABI is extended, not silently changed. 128-bit guest writes require
 an atomic write128 callback. XMM registers are private guest state, not host
@@ -50,6 +50,103 @@ static inline int xcompare(mxb_cfg*s,uint64_t a,uint64_t b,unsigned w){
  else if((a&sign)?(!(b&sign)||a>b):(!(b&sign)&&a<b))f=CF;
  flagset(s,STATUS,STATUS,f);return 1;
 }
+/* Deterministic IEEE754 normal/zero SSE arithmetic with round-to-nearest-even.
+ * Never depend on the host FP environment. Denormal, NaN, infinity, invalid,
+ * underflow and overflow are explicit unsupported cases, not approximations. */
+typedef unsigned __int128 u128;
+typedef struct {uint64_t sig;int exp;unsigned sign;} fp;
+static inline unsigned fp_p(unsigned w){return w==32?24:53;}
+static inline unsigned fp_bias(unsigned w){return w==32?127:1023;}
+static inline int fp_unpack(uint64_t raw,unsigned w,fp*v){
+ unsigned p=fp_p(w);uint64_t frac=mask(p-1);v->sign=!!(raw&signbit(w));v->exp=(int)((raw>>(p-1))&(2*fp_bias(w)+1));v->sig=raw&frac;
+ if(v->exp==0)return v->sig==0;
+ if(v->exp==(int)(2*fp_bias(w)+1))return 0;
+ v->sig|=UINT64_C(1)<<(p-1);return 1;
+}
+static inline u128 jam(u128 a,unsigned n){
+ if(!n)return a;if(n>=128)return a!=0;
+ return (a>>n)|((a&(((u128)1<<n)-1))!=0);
+}
+static inline int fp_pack(uint32_t*csr,unsigned w,unsigned sign,int e,u128 x,uint64_t*out){
+ unsigned p=fp_p(w);uint64_t s=sign?signbit(w):0;
+ if(!x){*out=s;return 1;}
+ while(x>=((u128)1<<(p+3))){x=jam(x,1);++e;}
+ while(x<((u128)1<<(p+2))){x<<=1;--e;}
+ if(e<=0||e>=(int)(2*fp_bias(w)+1))return 0;
+ uint64_t m=(uint64_t)(x>>3),r=(uint64_t)x&7;
+ if(r>4||(r==4&&(m&1)))++m;
+ if(m==(UINT64_C(1)<<p)){m>>=1;++e;}
+ if(e>=(int)(2*fp_bias(w)+1))return 0;
+ if(r)*csr|=0x20;
+ *out=s|((uint64_t)e<<(p-1))|(m&mask(p-1));return 1;
+}
+static inline int fp_less(uint64_t a,uint64_t b,unsigned w){
+ uint64_t s=signbit(w);a&=mask(w);b&=mask(w);
+ if(a==b||(!(a&~s)&&!(b&~s)))return 0;
+ return (a&s)?(!(b&s)||a>b):(!(b&s)&&a<b);
+}
+static inline int fp_bin(uint32_t*csr,unsigned w,unsigned op,uint64_t a,uint64_t b,uint64_t*out){
+ fp x,y;unsigned p=fp_p(w);uint64_t s=signbit(w);a&=mask(w);b&=mask(w);
+ if((*csr&0xffc0)!=0x1f80||!fp_unpack(a,w,&x)||!fp_unpack(b,w,&y))return 0;
+ if(op>=4){*out=op==4?(fp_less(a,b,w)?a:b):(fp_less(b,a,w)?a:b);return 1;}
+ if(op==1){y.sign^=1;b^=s;}
+ if(op<=1){
+  if(!x.sig&&!y.sig){*out=(x.sign&&y.sign)?s:0;return 1;}
+  if(!x.sig){*out=b;return 1;}if(!y.sig){*out=a;return 1;}
+  if(x.exp<y.exp||(x.exp==y.exp&&x.sig<y.sig)){fp tmp=x;x=y;y=tmp;}
+  u128 A=(u128)x.sig<<3,B=jam((u128)y.sig<<3,(unsigned)(x.exp-y.exp));
+  u128 z=x.sign==y.sign?A+B:A-B;
+  return fp_pack(csr,w,z?x.sign:0,x.exp,z,out);
+ }
+ unsigned sign=x.sign^y.sign;
+ if(op==2){if(!x.sig||!y.sig){*out=sign?s:0;return 1;}
+  return fp_pack(csr,w,sign,x.exp+y.exp-(int)fp_bias(w),jam((u128)x.sig*y.sig,p-4),out);
+ }
+ if(!y.sig)return 0;if(!x.sig){*out=sign?s:0;return 1;}
+ int e=x.exp-y.exp+(int)fp_bias(w);
+ if(x.sig<y.sig){x.sig<<=1;--e;}
+ u128 n=(u128)x.sig<<(p+2),q=n/y.sig;if(n%y.sig)q|=1;
+ return fp_pack(csr,w,sign,e,q,out);
+}
+static inline int xarith(mxb_cfg*s,unsigned w,unsigned scalar,unsigned op,mxb_xmm a,mxb_xmm b,mxb_xmm*out){
+ unsigned lanes=scalar?1:128/w;uint32_t csr=s->mxcsr;mxb_xmm r=a;
+ for(unsigned i=0;i<lanes;i++){
+  unsigned j=i*w,shift=j&63;uint64_t x=j<64?a.lo:a.hi,y=j<64?b.lo:b.hi,v;
+  if(!fp_bin(&csr,w,op,x>>shift,y>>shift,&v))return 0;
+  uint64_t m=mask(w)<<shift,*dst=j<64?&r.lo:&r.hi;
+  *dst=(*dst&~m)|((v&mask(w))<<shift);
+ }
+ s->mxcsr=csr;*out=r;return 1;
+}
+static inline int fp_convert(uint32_t*csr,unsigned from,unsigned to,uint64_t a,uint64_t*out){
+ fp x;if((*csr&0xffc0)!=0x1f80||!fp_unpack(a,from,&x))return 0;
+ if(!x.sig){*out=x.sign?signbit(to):0;return 1;}
+ int e=x.exp-(int)fp_bias(from)+(int)fp_bias(to);
+ int delta=(int)fp_p(from)-(int)fp_p(to)-3;
+ u128 sig=delta>=0?jam(x.sig,(unsigned)delta):(u128)x.sig<<-delta;
+ return fp_pack(csr,to,x.sign,e,sig,out);
+}
+static inline int fp_fromint(uint32_t*csr,unsigned from,unsigned to,uint64_t a,uint64_t*out){
+ if((*csr&0xffc0)!=0x1f80)return 0;
+ a&=mask(from);unsigned sign=!!(a&signbit(from));uint64_t m=sign?(-a)&mask(from):a;
+ if(!m){*out=0;return 1;}
+ unsigned bit=63-__builtin_clzll(m),p=fp_p(to);int delta=(int)bit-(int)(p+2);
+ u128 sig=delta>=0?jam(m,(unsigned)delta):(u128)m<<-delta;
+ return fp_pack(csr,to,sign,(int)fp_bias(to)+(int)bit,sig,out);
+}
+static inline int fp_toint(uint32_t*csr,unsigned from,unsigned to,unsigned truncate,uint64_t a,uint64_t*out){
+ fp x;if((*csr&0xffc0)!=0x1f80||!fp_unpack(a,from,&x))return 0;
+ if(!x.sig){*out=0;return 1;}
+ int shift=x.exp-(int)fp_bias(from)-(int)(fp_p(from)-1);u128 m=0;int inexact=0;
+ if(shift>=0){if(shift>=64)return 0;m=(u128)x.sig<<shift;}
+ else {unsigned n=(unsigned)-shift;uint64_t v=x.sig;
+  if(n>=64){m=0;inexact=1;}
+  else {uint64_t rem=v&mask(n),half=UINT64_C(1)<<(n-1);m=v>>n;inexact=rem!=0;
+   if(!truncate&&(rem>half||(rem==half&&(m&1))))++m;}
+ }
+ u128 limit=(u128)1<<(to-1);if(m>limit||(!x.sign&&m==limit))return 0;
+ if(inexact)*csr|=0x20;*out=(x.sign?-(uint64_t)m:(uint64_t)m)&mask(to);return 1;
+}
 '''
 XMM={f'xmm{i}':i for i in range(16)}
 XM=re.compile(r'(?:(byte|word|dword|qword|xmmword|oword) ptr )?\[(.+)\]$')
@@ -57,9 +154,12 @@ MOVES={'movaps':(16,16),'movapd':(16,16),'movdqa':(16,16),'movups':(16,0),'movup
 LOGIC={op:k for k,names in enumerate(('pand andps andpd','por orps orpd','pxor xorps xorpd','pandn andnps andnpd')) for op in names.split()}
 PACKED={name+suffix:(w,k) for k,name in enumerate(('padd','psub','pcmpeq','pcmpgt')) for suffix,w in zip('bwdq',(8,16,32,64)) if not(w==64 and k>=2)}
 
+ARITH={name+suffix:(w,scalar,k) for k,name in enumerate(('add','sub','mul','div','min','max')) for suffix,w,scalar in (('ss',32,1),('sd',64,1),('ps',32,0),('pd',64,0))}
+CONVERT=('cvtss2sd','cvtsd2ss','cvtsi2ss','cvtsi2sd','cvtss2si','cvtsd2si','cvttss2si','cvttsd2si')
+
 def emit(row,pc):
     raw,op,arg=row;end=pc+len(raw);args=[x.strip() for x in arg.split(',')]
-    if op not in MOVES and op not in LOGIC and op not in PACKED and op not in ('shufps','pshufd','unpcklps','unpckhps','ucomiss','ucomisd','comiss','comisd'):
+    if op not in MOVES and op not in LOGIC and op not in PACKED and op not in ARITH and op not in CONVERT and op not in ('shufps','pshufd','unpcklps','unpckhps','ucomiss','ucomisd','comiss','comisd'):
         return cfg.emit(row,pc)
     # Only legacy two-operand SSE encodings, no segment/address override or VEX.
     i=0
@@ -108,6 +208,25 @@ def emit(row,pc):
         else:
             k=2 if op=='unpckhps' else 0
             write(d,16,0,f'lanes32(lane32({a},{k}),lane32(x,{k}),lane32({a},{k+1}),lane32(x,{k+1}))')
+    elif op in ARITH and len(args)==2 and args[0] in XMM:
+        w,scalar,k=ARITH[op];d,b=args;a=f's->xmm[{XMM[d]}]';v=read(b,w//8 if scalar else 16,0 if scalar else 16,'v')
+        code.append(f'mxb_xmm x={v},r;if(!xarith(s,{w},{scalar},{k},{a},x,&r))return -5;');write(d,16,0,'r')
+    elif op in CONVERT and len(args)==2:
+        d,b=args
+        if op in ('cvtss2sd','cvtsd2ss') and d in XMM:
+            w=32 if op=='cvtss2sd' else 64;to=96-w;v=read(b,w//8,0,'v')
+            code.append(f'mxb_xmm x={v};uint64_t r;if(!fp_convert(&s->mxcsr,{w},{to},x.lo,&r))return -5;')
+            i=XMM[d];code.append(f's->xmm[{i}].lo=(s->xmm[{i}].lo&~mask({to}))|r;')
+        elif op in ('cvtsi2ss','cvtsi2sd') and d in XMM:
+            w=cfg.REGS[b][1] if b in cfg.REGS else (32 if b.startswith('dword ptr ') else 64 if b.startswith('qword ptr ') else 0)
+            if w not in (32,64):raise ValueError('sse_conversion_width')
+            to=32 if op.endswith('ss') else 64;v=read(b,w//8,0,'v',True)
+            code.append(f'mxb_xmm x={v};uint64_t r;if(!fp_fromint(&s->mxcsr,{w},{to},x.lo,&r))return -5;')
+            i=XMM[d];code.append(f's->xmm[{i}].lo=(s->xmm[{i}].lo&~mask({to}))|r;')
+        elif op.endswith('2si') and d in cfg.REGS and cfg.REGS[d][1] in (32,64):
+            w=32 if 'ss' in op else 64;i,to=cfg.REGS[d];v=read(b,w//8,0,'v')
+            code.append(f'mxb_xmm x={v};uint64_t r;if(!fp_toint(&s->mxcsr,{w},{to},{int(op.startswith("cvtt"))},x.lo,&r))return -5;regset(s,{i},{to},r);')
+        else:raise ValueError('sse_conversion_operand')
     elif op in ('ucomiss','ucomisd','comiss','comisd') and len(args)==2 and args[0] in XMM:
         n=4 if op.endswith('ss') else 8;v=read(args[1],n,0,'v');code.append(f'mxb_xmm x={v};if(!xcompare(s,s->xmm[{XMM[args[0]]}].lo,x.lo,{n*8}))return -5;')
     else:raise ValueError('sse_operand')

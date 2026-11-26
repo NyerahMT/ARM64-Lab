@@ -77,6 +77,58 @@ class Tests(unittest.TestCase):
                         else:a.lo=struct.unpack('<Q',struct.pack('<d',x))[0];b.lo=struct.unpack('<Q',struct.pack('<d',y))[0]
                     out=Xmm();flags=ref(C.byref(a),C.byref(b),C.byref(out));self.reset();self.s.xmm[0]=a;self.s.xmm[1]=b
                     self.assertEqual(fn(C.byref(self.s),STOP,8),1);self.assertEqual((self.s.xmm[0].lo,self.s.xmm[0].hi),(out.lo,out.hi));self.assertEqual(self.s.flags&STATUS,flags&STATUS)
+    def test_x64_fp_arithmetic(self):
+        if platform.machine().lower() not in ('x86_64','amd64') or sys.platform!='linux':self.skipTest('native Linux x64 required')
+        rng=random.Random(20261125);cases=0;rejections=0
+        for suffix,w in [('ss',32),('sd',64),('ps',32),('pd',64)]:
+            p=24 if w==32 else 53;bias=127 if w==32 else 1023
+            for stem in ('add','sub','mul','div','min','max'):
+                op=stem+suffix+' xmm0,xmm1'
+                with self.subTest(op=op):
+                    fn=self.compile(op);ap=self.p/f'fp{self.seq}.s';so=ap.with_suffix('.so')
+                    ap.write_text('.text\n.intel_syntax noprefix\n.globl reference\nreference:\nstmxcsr [rsp-4]\nmov dword ptr [rsp-8],0x1f80\nldmxcsr [rsp-8]\nmovups xmm0,[rdi]\nmovups xmm1,[rsi]\n'+op+'\nmovups [rdx],xmm0\nstmxcsr [rdx+16]\nldmxcsr [rsp-4]\nret\n.section .note.GNU-stack,"",@progbits\n')
+                    subprocess.run(['clang','-shared','-fPIC',str(ap),'-o',str(so)],check=True);lib=C.CDLL(str(so));ref=lib.reference;ref.argtypes=[C.POINTER(Xmm),C.POINTER(Xmm),C.c_void_p];ref.restype=None
+                    def vector(i,second):
+                        lanes=[]
+                        for j in range(128//w):
+                            if i<4:
+                                x=[0.0,-0.0,1.0,-1.0][(i+j+second)%4];v=int.from_bytes(struct.pack('<f' if w==32 else '<d',x),'little')
+                            else:
+                                exp=rng.randint(max(1,bias-90),min(2*bias,bias+90)) if i<100 else rng.randint(1,2*bias)
+                                v=(rng.getrandbits(1)<<(w-1))|(exp<<(p-1))|rng.getrandbits(p-1)
+                            lanes.append(v)
+                        val=sum(v<<(i*w) for i,v in enumerate(lanes));return Xmm(val&((1<<64)-1),val>>64)
+                    for i in range(128):
+                        a,b=vector(i,0),vector(i,1);out=(C.c_uint64*3)();ref(C.byref(a),C.byref(b),out)
+                        self.reset();self.s.mxcsr=0x1f80;self.s.xmm[0]=a;self.s.xmm[1]=b
+                        status=fn(C.byref(self.s),STOP,8)
+                        if status==-5:
+                            self.assertEqual((self.s.xmm[0].lo,self.s.xmm[0].hi),(a.lo,a.hi));self.assertEqual(self.s.mxcsr,0x1f80);rejections+=1;continue
+                        self.assertEqual(status,1);self.assertEqual((self.s.xmm[0].lo,self.s.xmm[0].hi),(out[0],out[1]));self.assertEqual(self.s.mxcsr,out[2]&0xffffffff);cases+=1
+        self.assertGreater(cases,2500);self.assertGreater(rejections,0)
+        print(f'FP arithmetic: {cases} native CPU comparisons passed, {rejections} explicit domain rejections')
+    def test_x64_fp_conversions(self):
+        if platform.machine().lower() not in ('x86_64','amd64') or sys.platform!='linux':self.skipTest('native Linux x64 required')
+        rng=random.Random(12);passed=0;rejected=0
+        ops=['cvtss2sd xmm0,xmm1','cvtsd2ss xmm0,xmm1','cvtsi2ss xmm0,eax','cvtsi2sd xmm0,eax','cvtsi2ss xmm0,rax','cvtsi2sd xmm0,rax','cvtss2si eax,xmm1','cvtsd2si eax,xmm1','cvttss2si eax,xmm1','cvttsd2si eax,xmm1','cvtss2si rax,xmm1','cvtsd2si rax,xmm1','cvttss2si rax,xmm1','cvttsd2si rax,xmm1']
+        for op in ops:
+            with self.subTest(op=op):
+                fn=self.compile(op);ap=self.p/f'fp{self.seq}.s';so=ap.with_suffix('.so')
+                ap.write_text('.text\n.intel_syntax noprefix\n.globl reference\nreference:\nstmxcsr [rsp-4]\nmov dword ptr [rsp-8],0x1f80\nldmxcsr [rsp-8]\nmovups xmm0,[rdi]\nmovups xmm1,[rsi]\nmov rax,rdx\n'+op+'\nmovups [rcx],xmm0\nmov [rcx+16],rax\nstmxcsr [rcx+24]\nldmxcsr [rsp-4]\nret\n.section .note.GNU-stack,"",@progbits\n')
+                subprocess.run(['clang','-shared','-fPIC',str(ap),'-o',str(so)],check=True);lib=C.CDLL(str(so));ref=lib.reference;ref.argtypes=[C.POINTER(Xmm),C.POINTER(Xmm),C.c_uint64,C.c_void_p];ref.restype=None
+                for i in range(128):
+                    a=Xmm(rng.getrandbits(64),rng.getrandbits(64));b=Xmm(rng.getrandbits(64),rng.getrandbits(64));v=rng.getrandbits(64)
+                    if 'si2' not in op:
+                        f=[-0.0,0.0,0.5,1.5,2.5,-2.5,-0.75,2147483648.0][i] if i<8 else rng.uniform(-1e10,1e10)
+                        if 'ss2' in op:b.lo=(b.lo&0xffffffff00000000)|int.from_bytes(struct.pack('<f',f),'little')
+                        else:b.lo=int.from_bytes(struct.pack('<d',f),'little')
+                    out=(C.c_uint64*4)();ref(C.byref(a),C.byref(b),v,out);self.reset();self.s.mxcsr=0x1f80;self.s.xmm[0]=a;self.s.xmm[1]=b;self.s.r[0]=v
+                    status=fn(C.byref(self.s),STOP,8)
+                    if status==-5:
+                        self.assertTrue(out[3]&1);self.assertEqual(self.s.r[0],v);self.assertEqual(self.s.mxcsr,0x1f80);rejected+=1;continue
+                    self.assertEqual(status,1);self.assertEqual((self.s.xmm[0].lo,self.s.xmm[0].hi,self.s.r[0],self.s.mxcsr),(out[0],out[1],out[2],out[3]&0xffffffff));passed+=1
+        self.assertGreater(passed,1000);self.assertGreater(rejected,0)
+        print(f'FP conversion: {passed} native CPU comparisons passed, {rejected} explicit domain rejections')
     def test_arm64_compile(self):
         c=self.p/'arm.c';o=self.p/'arm.o';c.write_text(PREAMBLE+'int fixture(mxb_cfg*s){s->xmm[0]=xlogic(s->xmm[0],s->xmm[1],2);return xcompare(s,s->xmm[0].lo,s->xmm[1].lo,32);}')
         subprocess.run(['clang','--target=arm64-apple-ios15.0','-ffreestanding','-fno-builtin','-O2','-c',str(c),'-o',str(o)],check=True);self.assertEqual(o.read_bytes()[:8],b'\xcf\xfa\xed\xfe\x0c\x00\x00\x01')
