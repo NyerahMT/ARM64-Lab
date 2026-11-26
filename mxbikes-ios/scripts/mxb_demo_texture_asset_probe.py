@@ -6,6 +6,7 @@ texture adapter, not through a replacement renderer or a simulated result.
 """
 import ctypes as C
 import hashlib
+import os
 import struct
 import zipfile
 from pathlib import Path
@@ -123,7 +124,12 @@ def upload(library,w,h,rgba):
         return {'width':w,'height':h,'rgba_bytes':len(actual),
                 'rgba_sha256':hashlib.sha256(actual).hexdigest(),
                 'native_texture_upload_verified':True,'original_game_frame':False}
-    finally:lib.mxb_tex_destroy(texture)
+    finally:
+        lib.mxb_tex_destroy(texture)
+        # Windows holds loaded DLL files open; release the temporary test DLL.
+        if os.name=='nt':
+            import _ctypes
+            _ctypes.FreeLibrary(lib._handle)
 
 
 def probe(archive,library,max_images=4):
