@@ -13,13 +13,14 @@ static inline uint64_t mx_rotate(mxb_cfg*s,unsigned w,unsigned right,uint64_t a,
  unsigned of=right?(!!(v&signbit(w))^!!(v&(signbit(w)>>1))):(!!(v&signbit(w))^cf);
  flagset(s,CF|OF,CF|(n==1?OF:0),(cf?CF:0)|(n==1&&of?OF:0));return v;
 }
-static inline void mx_mul(mxb_cfg*s,unsigned w,uint64_t b,unsigned signed_mul_form){
+static inline void mx_mul_form(mxb_cfg*s,unsigned w,uint64_t b,unsigned signed_mul_form){
  __uint128_t p=signed_mul_form?(__uint128_t)((__int128)(int64_t)sx(s->r[0],w)*(__int128)(int64_t)sx(b,w)):(__uint128_t)(s->r[0]&mask(w))*(b&mask(w));
  uint64_t lo=(uint64_t)p&mask(w),hi=(uint64_t)(p>>w)&mask(w);
  if(w==8)regset(s,0,16,(hi<<8)|lo);else{regset(s,0,w,lo);regset(s,2,w,hi);}
  unsigned overflow=signed_mul_form?(hi!=(lo&signbit(w)?mask(w):0)):hi!=0;
  flagset(s,STATUS,CF|OF,overflow?(CF|OF):0);
 }
+static inline void mx_mul(mxb_cfg*s,unsigned w,uint64_t b){mx_mul_form(s,w,b,0);}
 /* Wide unsigned division with a w-bit divisor and quotient. The precheck
  * excludes quotient overflow; long division uses a 128-bit remainder. */
 static inline int mx_udiv(unsigned w,__uint128_t a,uint64_t b,uint64_t*q,uint64_t*r){
@@ -152,6 +153,6 @@ def emit(row,pc):
         v=f'mx_rotate(s,{w},{int(op=="ror")},{src},{count})'
         if reg:body=f'uint64_t v={v};regset(s,{i},{w},v);'
         else:body=f'mxb_cfg tmp=*s;uint64_t v={v.replace("s,","&tmp,",1)};if(!s->write||!s->write(s->ctx,{mem},{w//8},v))return -2;s->flags=tmp.flags;s->known=tmp.known;'
-    elif op in ('mul','imul'):body=f'mx_mul(s,{w},{src},{int(op=="imul")});'
+    elif op in ('mul','imul'):body=f'mx_mul_form(s,{w},{src},{int(op=="imul")});'
     else:body=f'if(!mx_div(s,{w},{int(op=="idiv")},{src}))return -7;'
     return pre+body+f's->rip=UINT64_C({end});break;',[end]
