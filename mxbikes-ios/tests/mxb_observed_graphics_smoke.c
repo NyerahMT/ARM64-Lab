@@ -43,3 +43,24 @@ static int test(MXBGLSurface *surface){
     return 0;
 }
 int main(void){MXBGLSurface *s=mxb_gl_create();if(!s)return 15;int result=test(s);mxb_gl_destroy(s);return result;}
+
+#ifdef MXB_FREESTANDING_SMOKE
+/* Single bounded surface allocation for isolated ARM64 ELF fixture only. */
+static _Alignas(16) uint8_t arena[512*1024];
+static int allocated;
+void *calloc(size_t count,size_t size){
+    if(allocated||!size||count>sizeof(arena)/size)return 0;
+    allocated=1;
+    for(size_t i=0;i<count*size;i++)((volatile uint8_t*)arena)[i]=0;
+    return arena;
+}
+void free(void *p){if(p==arena)allocated=0;}
+void *memset(void *p,int v,size_t n){
+    for(size_t i=0;i<n;i++)((volatile uint8_t*)p)[i]=(uint8_t)v;
+    return p;
+}
+void *memcpy(void *p,const void *q,size_t n){
+    for(size_t i=0;i<n;i++)((volatile uint8_t*)p)[i]=((const volatile uint8_t*)q)[i];
+    return p;
+}
+#endif
