@@ -48,6 +48,28 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.run(C.byref(self.s),STOP,16),-2);self.assertEqual(self.s.rip,0);self.assertEqual(self.s.r[4],400)
     def test_budget(self):
         self.build('loop1: inc eax\njmp loop1');self.assertEqual(self.run(C.byref(self.s),STOP,4),0);self.assertEqual(self.s.r[0],2)
+    def test_repeat_scan(self):
+        self.build('repne scasb\nret')
+        self.mem[128:132]=b'xy\0z'
+        self.s.r[0]=0;self.s.r[1]=4;self.s.r[7]=128;self.s.flags=0x202
+        self.assertEqual(self.run(C.byref(self.s),STOP,16),1)
+        self.assertEqual((self.s.r[1],self.s.r[7],self.s.flags&0x40),(1,131,0x40))
+    def test_repeat_reverse(self):
+        self.build('repe scasb\nret')
+        self.mem[128:132]=b'yxxx'
+        self.s.r[0]=ord('x');self.s.r[1]=4;self.s.r[7]=131;self.s.flags=0x602
+        self.assertEqual(self.run(C.byref(self.s),STOP,16),1)
+        self.assertEqual((self.s.r[1],self.s.r[7],self.s.flags&0x440),(0,127,0x400))
+    def test_repeat_fault(self):
+        self.build('repne scasb\nret')
+        self.mem[510:512]=b'xy'
+        self.s.r[0]=0;self.s.r[1]=4;self.s.r[7]=510
+        self.assertEqual(self.run(C.byref(self.s),STOP,16),-2)
+        self.assertEqual((self.s.rip,self.s.r[1],self.s.r[7]),(0,2,512))
+    def test_prefixed_return(self):
+        self.build('.byte 0xf3,0xc3')
+        self.assertEqual(self.run(C.byref(self.s),STOP,16),1)
+        self.assertEqual(self.s.r[4],408)
     def test_arm64_compile(self):
         ins={0:(b'\xff\xd0','call','rax'),2:(b'\xc3','ret','')};src,_,_=generate(ins,set(ins));p=self.p/'arm.c';o=p.with_suffix('.o');p.write_text(src)
         subprocess.run(['clang','--target=arm64-apple-ios15.0','-ffreestanding','-fno-builtin','-O2','-c',str(p),'-o',str(o)],check=True);self.assertEqual(o.read_bytes()[:8],b'\xcf\xfa\xed\xfe\x0c\x00\x00\x01')
