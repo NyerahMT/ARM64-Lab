@@ -175,6 +175,10 @@ def emit(row,pc):
         else:write(dst,w,v)
     def advance(dest):code.append(f's->rip=UINT64_C({dest});break;')
     if op=='ret':
+        if len(raw)==3 and raw[0]==0xc2:
+            cleanup=int.from_bytes(raw[1:],"little")
+            if int(arg,0)!=cleanup:raise ValueError("return_immediate")
+            return f'uint64_t v;if(!pop(s,&v))return -2;s->r[4]+=UINT64_C({cleanup});s->rip=v;break;',[]
         if raw!=b'\xc3' or arg:raise ValueError('return')
         return 'uint64_t v;if(!pop(s,&v))return -2;s->rip=v;break;',[]
     if op=='call' or op.startswith('j'):
