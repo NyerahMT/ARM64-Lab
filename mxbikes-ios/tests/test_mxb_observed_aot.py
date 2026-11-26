@@ -13,7 +13,7 @@ sys.path.insert(0,str(ROOT/"scripts"))
 import mxb_demo_auto_translate as auto
 
 class ObservedAOTTests(unittest.TestCase):
-    def build_and_run(self,arm64=False,native_imports=False):
+    def build_and_run(self,arm64=False,native_imports=False,graphics=False):
         if importlib.util.find_spec("ziglang") is not None:
             cc=[sys.executable,"-m","ziglang","cc"]
         elif shutil.which("clang") or shutil.which("gcc"):
@@ -34,15 +34,23 @@ class ObservedAOTTests(unittest.TestCase):
                 0x100a:(bytes.fromhex("e801100000"),"call","0x2010"),
                 0x100f:(bytes.fromhex("90"),"nop",""),
             }
+        if graphics:
+            ins={};pc=0x1000
+            for value,token in ((4,0x2000),(0x3000,0x2010),(0x300c,0x2010),(0x3018,0x2010),(None,0x2020)):
+                if value is not None:
+                    ins[pc]=(b'\xb9'+value.to_bytes(4,'little'),'mov',f'ecx, {value:#x}');pc+=5
+                ins[pc]=(b'\xe8'+(token-pc-5).to_bytes(4,'little',signed=True),'call',f'{token:#x}');pc+=5
+            assert pc==0x102d
         shards,dispatcher=auto.generate_shards(ins,set(ins),2)
-        self.assertEqual(len(shards),2 if native_imports else 3)
+        self.assertEqual(len(shards),5 if graphics else 2 if native_imports else 3)
         extras=[]
-        if native_imports:
+        if native_imports or graphics:
             extras=[str(ROOT/"runtime"/name) for name in (
                 "mxb_observed_imports.c","mxb_observed_session.c","mxb_standalone_crt.c","mxb_standalone_platform.c",
                 "mxb_standalone_imports.c","mxb_standalone_heap.c","mxb_standalone_memory.c",
                 "mxb_standalone_winsock.c","mxb_standalone_format.c","mxb_standalone_files.c")]
-        fixture="mxb_observed_imports_smoke.c" if native_imports else "mxb_observed_aot_smoke.c"
+        if graphics:extras.extend(str(ROOT/"runtime"/name) for name in ("mxb_observed_graphics.c","mxb_gl_surface.c","mxb_gl_win64_abi.c"))
+        fixture="mxb_observed_graphics_smoke.c" if graphics else "mxb_observed_imports_smoke.c" if native_imports else "mxb_observed_aot_smoke.c"
         with tempfile.TemporaryDirectory() as temp:
             folder=Path(temp)
             sources=[]
@@ -78,6 +86,9 @@ class ObservedAOTTests(unittest.TestCase):
         if importlib.util.find_spec("unicorn") is None or importlib.util.find_spec("elftools") is None:
             self.skipTest("ARM64 execution dependencies unavailable")
         self.build_and_run(arm64=True,native_imports=True)
+
+    def test_translated_graphics_bridge_host(self):
+        self.build_and_run(graphics=True)
 
     def run_elf(self,exe):
         from elftools.elf.elffile import ELFFile
