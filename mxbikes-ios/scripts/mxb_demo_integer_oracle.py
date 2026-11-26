@@ -96,6 +96,36 @@ int main(void){
  }
  mxb_cfg z={0};z.read=cmps_rd;z.r[1]=2;z.r[6]=95;z.r[7]=159;cmps_left[31]=cmps_right[31]=0;
  if(mxb_compare_byte(&z,1)!=-2||z.r[1]!=1||z.r[6]!=96||z.r[7]!=160||!(z.flags&ZF))return 15;
+ unsigned bitcases=0;
+ for(unsigned k=0;k<2048;k++){
+  uint64_t a=k%17?next():0,actual=123,flags;
+  mxb_cfg x={0};x.r[3]=123;x.known=STATUS;
+  __asm__ volatile("bsfq %2,%0;pushfq;popq %1":"+r"(actual),"=r"(flags):"r"(a):"cc");
+  mx_bitscan(&x,3,64,0,a);
+  if((a&&x.r[3]!=actual)||((x.flags^flags)&ZF)||x.known!=ZF)return 16;
+  ++bitcases;
+  actual=123;x=(mxb_cfg){0};x.r[3]=123;
+  __asm__ volatile("bsrq %2,%0;pushfq;popq %1":"+r"(actual),"=r"(flags):"r"(a):"cc");
+  mx_bitscan(&x,3,64,1,a);
+  if((a&&x.r[3]!=actual)||((x.flags^flags)&ZF)||x.known!=ZF)return 17;
+  ++bitcases;
+  x=(mxb_cfg){0};
+  __asm__ volatile("popcntq %2,%0;pushfq;popq %1":"=r"(actual),"=r"(flags):"r"(a):"cc");
+  mx_bitscan(&x,3,64,2,a);
+  if(x.r[3]!=actual||((x.flags^flags)&STATUS)||x.known!=STATUS)return 18;
+  ++bitcases;
+  for(unsigned op=0;op<4;op++){
+   uint64_t b=next();actual=a;x=(mxb_cfg){0};x.r[3]=a;x.flags=ZF;x.known=STATUS;
+   if(op==0){__asm__ volatile("btq %2,%0;pushfq;popq %1":"+r"(actual),"=r"(flags):"r"(b):"cc");}
+   else if(op==1){__asm__ volatile("btsq %2,%0;pushfq;popq %1":"+r"(actual),"=r"(flags):"r"(b):"cc");}
+   else if(op==2){__asm__ volatile("btrq %2,%0;pushfq;popq %1":"+r"(actual),"=r"(flags):"r"(b):"cc");}
+   else{__asm__ volatile("btcq %2,%0;pushfq;popq %1":"+r"(actual),"=r"(flags):"r"(b):"cc");}
+   mx_bitreg(&x,3,64,op,b);
+   if(x.r[3]!=actual||((x.flags^flags)&CF)||!(x.flags&ZF)||x.known!=(CF|ZF))return 19;
+   ++bitcases;
+  }
+ }
+ printf("BIT_FAMILY_CPU_COMPARISONS %u\\n",bitcases);
  printf("INTEGER_CPU_COMPARISONS %u; fault checks 3; atomic contract checks 5; CMPS CPU comparisons %u; CMPS fault checks 1\n",count,compares);return 0;
 }
 '''
@@ -110,8 +140,16 @@ def run(root):
                  28:(b"\x48\x87\x05\x80\x00\x00\x00","xchg","qword ptr [rip + 0x80], rax")})
     rows.update({35:(b"\xf3\xa6","repe cmpsb","byte ptr [rsi], byte ptr [rdi]"),
                  37:(b"\x65\x4c\x8b\x1c\x25\x10\x00\x00\x00","mov","r11, qword ptr gs:[0x10]")})
+    rows.update({64:(bytes.fromhex("480fbc c1"),"bsf","rax, rcx"),
+                 68:(bytes.fromhex("660fbd c1"),"bsr","ax, cx"),
+                 72:(bytes.fromhex("f30fb8c1"),"popcnt","eax, ecx"),
+                 76:(bytes.fromhex("480fa3c8"),"bt","rax, rcx"),
+                 80:(bytes.fromhex("480fbae807"),"bts","rax, 7"),
+                 85:(bytes.fromhex("0fb3c8"),"btr","eax, ecx"),
+                 88:(bytes.fromhex("660fbb c8"),"btc","ax, cx"),
+                 92:(bytes.fromhex("480fbc01"),"bsf","rax, qword ptr [rcx]")})
     src,accepted,reject=generate(rows,set(rows))
-    if len(accepted)!=9 or reject:raise RuntimeError("scalar/CRT generator fixture")
+    if len(accepted)!=17 or reject:raise RuntimeError("scalar/CRT generator fixture")
     source=root/"integer-arm.c";source.write_text(src)
     obj=root/"integer-arm.o"
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","aarch64-linux-musl","-O2","-ffreestanding","-fno-builtin","-c",str(source),"-o",str(obj)],check=True,timeout=120)
