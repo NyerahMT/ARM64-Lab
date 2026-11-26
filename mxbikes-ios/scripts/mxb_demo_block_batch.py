@@ -12,6 +12,18 @@ import mxb_demo_hot_string as hot
 import mxb_demo_integer_extra as integer_extra
 import mxb_demo_crt_atomic as atomic
 PREAMBLE=simd.PREAMBLE.replace('} mxb_cfg;', ' uint64_t gs_base; uint32_t exclusive_guest; } mxb_cfg;',1)+hot.PREAMBLE+integer_extra.PREAMBLE+atomic.PREAMBLE
+# The mobile build uses the actual public runtime types, not a second
+# structurally similar typedef in a separate translation unit.
+_ABI_RE=re.compile(r'typedef struct \{uint64_t lo,hi;\} mxb_xmm;\s*typedef struct \{ uint64_t r\[16\].*?\} mxb_cfg;',re.S)
+def _shared_abi(m):
+    return ('#ifdef MXB_USE_OBSERVED_RUNTIME_ABI\n'
+            '#include "mxb_observed_runtime.h"\n'
+            'typedef mxb_observed_xmm mxb_xmm;\n'
+            'typedef mxb_observed_cpu mxb_cfg;\n'
+            '#else\n'+m.group(0)+'\n#endif\n')
+PREAMBLE,_abi_count=_ABI_RE.subn(_shared_abi,PREAMBLE,count=1)
+if _abi_count!=1:raise RuntimeError("generated AOT state declaration changed")
+
 
 def emit(row,pc):
     extra=hot.emit(row,pc)
