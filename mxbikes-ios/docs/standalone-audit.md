@@ -268,3 +268,46 @@ Public commit 176590686e2077648e89762f67fa6461fa8738f7 adds mxb_demo_auto_transl
 Self-hosted private run 45748705639 (commit 66ad7d0a5c1162b6977fbadd7ad421a7d50a0d7d) passed 11 planner regression checks. From the earlier 385,168-execution virtual graphics reference trace (3,294 unique PCs), 3,280 PCs were automatically selected and compiled into six ARM64 shards and a shared dispatcher. Those selected PCs account for 378,708 original reference executions (98.32% of that trace's execution count, NOT 378,708 native executions). The resulting private AArch64 ELF (2,746,176 bytes) executed 223/223 independently captured contiguous differential cases, 4,069 original instruction instances / 3,109 unique PCs, 306 calls and 92 returns. These reproduce the earlier block validation cases with automated selection and sharded linking, not additive unique coverage. The highest-weight gap was REPNE SCASB (5 addresses, 6,316 of 6,460 uncovered reference executions). Remaining gaps: REPZ RET, ROL, MUL, IDIV, LOCK CMPXCHG, a prefixed MOV, memory XCHG, and two excluded FP conversions. The run used the existing Windows self-hosted runner.
 
 Next: extend the automatic trace capture to the latest publisher-asset startup frontier and integrate verified block dispatch into continuous execution. The current driver uses the earlier virtual wglCreateContext boundary, not the latest 563,868-instruction real-graphics trace. It does not synthesize implementations of unsupported instructions or imports, and no native device launch is claimed. Batch A remains open; this automation improves Batch B throughput without changing its exit criteria.
+
+## Continuous startup checkpoint and bounded shard regression (2026-11-26)
+
+The publisher beta21e demo is the unmodified executable. Private self-hosted run
+[45755173446](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45755173446)
+and independent rerun
+[45765004226](https://github.com/NyerahMT/ReflexBuildInput/actions/runs/45765004226)
+both reached the same verified boundary:
+
+- 604,407 architectural original instructions completed by translated AArch64
+  ELF in the ARM64 emulator, 5,970 distinct guest PCs, 367 reference checkpoints,
+  zero mismatches and no denied guest-memory accesses in the original baseline.
+- 635,797 x64 reference code-hook events are not the architectural instruction count.
+  All 5,970 observed addresses translated; no unsupported address in this trace.
+  Neither the complete executable nor on-device iOS startup is established.
+- 12 verified publisher data files (2,388,698,140 bytes) staged. Original code
+  read 4,084 configuration bytes over 23 completed reads and closes; zero PKZ
+  archive bytes consumed by the engine.
+- The empty profile directory and texture cache were handled without creating
+  fictitious cached content. Both runs stopped on the request to open
+  `license.ini`; no license data fabricated or entitlement behavior modified.
+- Windows reference graphics initialization and teardown passed; zero original
+  game draw calls or swaps, and no actual game frame.
+
+The second run pins public source commit `3fd0ec7eddacb503ef3389504fdac55399e6c145`.
+The dispatcher now enforces its per-shard instruction count even within one
+4 KiB guest page; sparse holes return an untranslated-PC boundary. Both host
+compiled regression methods passed, as did all 15 planner checks. The complete
+original startup trace and terminal stop matched after the change.
+
+Batch B observed-trace translation and differential subgates pass. Full
+startup/whole-engine coverage remains unestablished. Batch C is open at the
+original license-file dependency. Batch A has genuine package staging and
+configuration reads, but original resource archive consumption remains open.
+Batch D has desktop bootstrap evidence and earlier isolated rendering proofs,
+not an original menu frame or a mobile backend integration pass.
+
+A separate bounded read-only ZIP/PKZ resource oracle was added at
+`mxbikes-ios/scripts/mxb_demo_pkz_audit.py`; it independently verifies stored and
+DEFLATE entries, CRC, and sample SHA-256 digests without extraction. Synthetic
+tests passed, including a 70,105-byte sampled fixture. Independent oracle
+results must never be counted as original engine reads. Actual publisher
+archive sampling is a separate pending validation until its run logs confirm it.
