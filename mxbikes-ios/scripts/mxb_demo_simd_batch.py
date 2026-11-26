@@ -164,7 +164,7 @@ LOGIC={op:k for k,names in enumerate(('pand andps andpd','por orps orpd','pxor x
 PACKED={name+suffix:(w,k) for k,name in enumerate(('padd','psub','pcmpeq','pcmpgt')) for suffix,w in zip('bwdq',(8,16,32,64)) if not(w==64 and k>=2)}
 
 ARITH={name+suffix:(w,scalar,k) for k,name in enumerate(('add','sub','mul','div','min','max')) for suffix,w,scalar in (('ss',32,1),('sd',64,1),('ps',32,0),('pd',64,0))}
-CONVERT=('cvtss2sd','cvtsd2ss','cvtsi2ss','cvtsi2sd','cvtss2si','cvtsd2si','cvttss2si','cvttsd2si','cvtps2pd','cvtdq2ps')
+CONVERT=('cvtss2sd','cvtsd2ss','cvtsi2ss','cvtsi2sd','cvtss2si','cvtsd2si','cvttss2si','cvttsd2si','cvtps2pd','cvtdq2ps','cvtdq2pd')
 
 def emit(row,pc):
     raw,op,arg=row;end=pc+len(raw);args=[x.strip() for x in arg.split(',')]
@@ -222,8 +222,13 @@ def emit(row,pc):
         code.append(f'mxb_xmm x={v},r;if(!xarith(s,{w},{scalar},{k},{a},x,&r))return -5;');write(d,16,0,'r')
     elif op in CONVERT and len(args)==2:
         d,b=args
-        if op in ('cvtps2pd','cvtdq2ps') and d in XMM:
-            if op=='cvtps2pd':
+        if op in ('cvtps2pd','cvtdq2ps','cvtdq2pd') and d in XMM:
+            if op=='cvtdq2pd':
+                if raw[0]!=0xf3 or raw[i+1]!=0xe6:raise ValueError('sse_encoding')
+                v=read(b,8,0,'v')
+                code.append(f'mxb_xmm x={v};uint64_t a,b;uint32_t csr=s->mxcsr;if(!fp_fromint(&csr,32,64,x.lo&UINT32_MAX,&a)||!fp_fromint(&csr,32,64,x.lo>>32,&b))return -5;s->mxcsr=csr;')
+                write(d,16,0,'(mxb_xmm){a,b}')
+            elif op=='cvtps2pd':
                 v=read(b,8,0,'v')
                 code.append(f'mxb_xmm x={v};uint64_t a,b;uint32_t csr=s->mxcsr;if(!fp_convert(&csr,32,64,x.lo&UINT32_MAX,&a)||!fp_convert(&csr,32,64,x.lo>>32,&b))return -5;s->mxcsr=csr;')
                 write(d,16,0,'(mxb_xmm){a,b}')
