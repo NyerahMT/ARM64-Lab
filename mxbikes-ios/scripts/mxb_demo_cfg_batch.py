@@ -141,6 +141,7 @@ def emit(row,pc):
     addr32=raw[0]==0x67
     if addr32 and any(x in (0x64,0x65,0xf0,0xf2,0xf3,0x67) for x in raw[1:2]):raise ValueError('prefix')
     if raw[0] in (0x26,0x2e,0x36,0x3e):
+        if len(raw)<2 or raw[1] in (0x26,0x2e,0x36,0x3e,0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError('prefix')
         # Long mode ignores legacy ES/CS/SS/DS base overrides. Preserve
         # full instruction length for RIP-relative operands and branches.
         args=[re.sub(r'(?<![a-z])(es|cs|ss|ds):(?=\[)','',a) for a in args]
