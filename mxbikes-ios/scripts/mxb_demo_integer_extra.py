@@ -13,6 +13,19 @@ static inline uint64_t mx_rotate(mxb_cfg*s,unsigned w,unsigned right,uint64_t a,
  unsigned of=right?(!!(v&signbit(w))^!!(v&(signbit(w)>>1))):(!!(v&signbit(w))^cf);
  flagset(s,CF|OF,CF|(n==1?OF:0),(cf?CF:0)|(n==1&&of?OF:0));return v;
 }
+static inline int mx_rotate_carry(mxb_cfg*s,unsigned w,unsigned right,uint64_t a,uint64_t count,uint64_t*out){
+ unsigned n=(unsigned)(count&(w==64?63:31));n%=w+1;
+ uint64_t m=mask(w);a&=m;*out=a;
+ if(!n)return 1;
+ if(!(s->known&CF))return 0;
+ unsigned c=!!(s->flags&CF);
+ for(unsigned i=0;i<n;i++){
+  unsigned next=right?(a&1):!!(a&signbit(w));
+  a=right?((a>>1)|((uint64_t)c<<(w-1))):(((a<<1)&m)|c);c=next;
+ }
+ unsigned of=right?(!!(a&signbit(w))^!!(a&(signbit(w)>>1))):(!!(a&signbit(w))^c);
+ flagset(s,CF|OF,CF|(n==1?OF:0),(c?CF:0)|(n==1&&of?OF:0));*out=a;return 1;
+}
 static inline void mx_mul_form(mxb_cfg*s,unsigned w,uint64_t b,unsigned signed_mul_form){
  __uint128_t p=signed_mul_form?(__uint128_t)((__int128)(int64_t)sx(s->r[0],w)*(__int128)(int64_t)sx(b,w)):(__uint128_t)(s->r[0]&mask(w))*(b&mask(w));
  uint64_t lo=(uint64_t)p&mask(w),hi=(uint64_t)(p>>w)&mask(w);
@@ -131,10 +144,10 @@ def emit(row,pc):
     if bit is not None:return bit
     raw,op,arg=row;end=pc+len(raw)
     if op=="imul" and "," in arg:return None
-    if op not in ('rol','ror','mul','imul','div','idiv'):return None
+    if op not in ('rol','ror','rcl','rcr','mul','imul','div','idiv'):return None
     if not raw or raw[0] in (0x26,0x2e,0x36,0x3e,0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError("scalar_prefix")
     args=[a.strip() for a in arg.split(',')]
-    if len(args)!=(2 if op in ('rol','ror') else 1):raise ValueError("scalar_operands")
+    if len(args)!=(2 if op in ('rol','ror','rcl','rcr') else 1):raise ValueError("scalar_operands")
     dst=args[0];reg=cfg.REGS.get(dst)
     if reg:i,w=reg;src=f's->r[{i}]';pre='';mem=None
     elif cfg.MEM.fullmatch(dst):
@@ -142,7 +155,7 @@ def emit(row,pc):
         if not w:raise ValueError("scalar_width")
         pre=f'uint64_t a;if(!s->read||!s->read(s->ctx,{mem},{w//8},&a))return -2;';src='a'
     else:raise ValueError("scalar_operand")
-    if op in ('rol','ror'):
+    if op in ('rol','ror','rcl','rcr'):
         c=args[1]
         if c=='cl':count='s->r[1]&255'
         else:
@@ -150,6 +163,11 @@ def emit(row,pc):
             except ValueError:raise ValueError("rotate_count") from None
             if not 0<=n<=255:raise ValueError("rotate_count")
             count=f'UINT64_C({n})'
+        if op in ('rcl','rcr'):
+            body=f'mxb_cfg tmp=*s;uint64_t v;if(!mx_rotate_carry(&tmp,{w},{int(op=="rcr")},{src},{count},&v))return -3;'
+            body+=f'regset(s,{i},{w},v);' if reg else f'if(!s->write||!s->write(s->ctx,{mem},{w//8},v))return -2;'
+            body+='s->flags=tmp.flags;s->known=tmp.known;'
+            return pre+body+f's->rip=UINT64_C({end});break;',[end]
         v=f'mx_rotate(s,{w},{int(op=="ror")},{src},{count})'
         if reg:body=f'uint64_t v={v};regset(s,{i},{w},v);'
         else:body=f'mxb_cfg tmp=*s;uint64_t v={v.replace("s,","&tmp,",1)};if(!s->write||!s->write(s->ctx,{mem},{w//8},v))return -2;s->flags=tmp.flags;s->known=tmp.known;'
