@@ -136,7 +136,11 @@ def address(token,end):
 def emit(row,pc):
     raw,op,arg=row;end=pc+len(raw);args=[a.strip() for a in arg.split(',')];code=[];edges=[end]
     # Reject segment and address-size overrides, LOCK and REP; these require different semantics.
-    if raw[0] in (0x26,0x2e,0x36,0x3e,0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError('prefix')
+    if raw[0] in (0x26,0x2e,0x36,0x3e):
+        # Long mode ignores legacy ES/CS/SS/DS base overrides. Preserve
+        # full instruction length for RIP-relative operands and branches.
+        args=[re.sub(r'(?<![a-z])(es|cs|ss|ds):(?=\[)','',a) for a in args]
+    elif raw[0] in (0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError('prefix')
     if any(t in HIGH8 for t in args):
         pos=0
         while pos<len(raw) and raw[pos]==0x66:pos+=1
