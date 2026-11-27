@@ -192,6 +192,11 @@ def emit(row,pc):
             return f'uint64_t v;if(!pop(s,&v))return -2;s->r[4]+=UINT64_C({cleanup});s->rip=v;break;',[]
         if raw!=b'\xc3' or arg:raise ValueError('return')
         return 'uint64_t v;if(!pop(s,&v))return -2;s->rip=v;break;',[]
+    if op in ('loop','loope','loopne') and len(raw)==2 and raw[0]=={'loop':0xe2,'loope':0xe1,'loopne':0xe0}[op]:
+        dest=end+struct.unpack_from('<b',raw,1)[0]
+        check='' if op=='loop' else 'if(!(s->known&ZF))return -3;'
+        condextra='' if op=='loop' else '&&'+('!!(s->flags&ZF)' if op=='loope' else '!(s->flags&ZF)')
+        return check+f'--s->r[1];s->rip=(s->r[1]{condextra})?UINT64_C({dest}):UINT64_C({end});break;',[dest,end]
     if op=='call' or op.startswith('j'):
         dest,cc=target(raw,pc,op)
         if op=='call':code.append(f'if(!push(s,UINT64_C({end})))return -2;');edges=[dest,end]
@@ -201,6 +206,12 @@ def emit(row,pc):
         else:raise ValueError('control')
         advance(dest);return ''.join(code),edges
     if op=='nop':pass
+    elif op=='pushfq' and not arg and raw==bytes([0x9c]):
+        # The guest only exposes ordinary user-mode arithmetic and direction
+        # flags; require known arithmetic flags, never copy host RFLAGS.
+        code.append('if((s->known&STATUS)!=STATUS)return -3;if(!push(s,(s->flags&UINT64_C(0x3c7fd7))|2))return -2;')
+    elif op=='xlatb' and not arg and raw==bytes([0xd7]):
+        code.append('uint64_t v;if(!s->read||!s->read(s->ctx,s->r[3]+(s->r[0]&255),1,&v))return -2;regset(s,0,8,v);')
     elif op=='push' and len(args)==1:
         if raw[0]==0x66:raise ValueError('push_width')
         value=read(args[0],64,'a');code.append(f'if(!push(s,{value}))return -2;')
