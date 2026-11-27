@@ -41,6 +41,14 @@ static inline int mx_repeat_move(mxb_cfg*s,unsigned bytes,unsigned copy){
  }
  return s->r[1]?-6:1;
 }
+static inline int mx_string_once(mxb_cfg*s,unsigned bytes,unsigned kind){
+ uint64_t a=0,b=0,d=(s->flags&MXB_DF)?-(uint64_t)bytes:bytes;
+ if(!s->read||!s->read(s->ctx,s->r[6],bytes,&a))return -2;
+ if(kind==0){if(!s->read(s->ctx,s->r[7],bytes,&b))return -2;(void)alu(s,bytes*8,1,a,b);}
+ else if(kind==1){if(!s->write||!s->write(s->ctx,s->r[7],bytes,a))return -2;}
+ else regset(s,0,bytes*8,a);
+ s->r[6]+=d;if(kind!=2)s->r[7]+=d;return 1;
+}
 '''
 
 REPEAT_FORMS={bytes.fromhex(prefix+opcode):(width,copy)
@@ -54,6 +62,16 @@ REPEAT_BYTES=frozenset(REPEAT_FORMS)|frozenset((b'\xf2\xae',b'\xf3\xae',b'\xf2\x
 
 def emit(row,pc):
     raw,op,args=row;end=pc+len(raw)
+    # Unprefixed single string operation (including the operand-size prefix).
+    once={bytes.fromhex(prefix+opcode):(width,kind,mnemonic)
+          for opcode,kind,stem in (("a6",0,"cmps"),("a7",0,"cmps"),("a4",1,"movs"),("a5",1,"movs"),("ac",2,"lods"),("ad",2,"lods"))
+          for prefix,width,suffix in (("",1,"b"),("66",2,"w"),("",4,"d"),("48",8,"q"))
+          if (opcode in ("a6","a4","ac"))==(width==1)
+          for mnemonic in (stem+suffix,)}
+    if raw in once:
+        width,kind,mnemonic=once[raw]
+        if op!=mnemonic:raise ValueError("string_encoding")
+        return f'int rc=mx_string_once(s,{width},{kind});if(rc!=1)return rc;s->rip=UINT64_C({end});break;',[end]
     # Legacy REP MOVS/STOS, with exact operand width from the opcode.
     if raw in REPEAT_FORMS and op.startswith("rep"):
         width,copy=REPEAT_FORMS[raw]
