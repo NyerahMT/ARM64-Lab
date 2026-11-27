@@ -216,6 +216,14 @@ def emit(row,pc):
         else:raise ValueError('control')
         advance(dest);return ''.join(code),edges
     if op=='nop':pass
+    elif op=='prefetchw' and len(args)==1 and MEM.fullmatch(args[0]):
+        # Architecturally nonbinding cache hint: no observable guest memory
+        # read or write. Require the actual legacy 0F 0D /1 memory encoding.
+        pos=1 if 0x40<=raw[0]<=0x4f else 0
+        if raw[pos:pos+2]!=bytes([0x0f,0x0d]) or len(raw)<=pos+2 or raw[pos+2]>=0xc0 or ((raw[pos+2]>>3)&7)!=1:raise ValueError('prefetch_encoding')
+        address(args[0],end,addr32)
+    elif op=='pushf' and not arg and raw==bytes([0x66,0x9c]):
+        code.append('if((s->known&STATUS)!=STATUS)return -3;uint64_t a=s->r[4]-2;if(!s->write||!s->write(s->ctx,a,2,(s->flags&UINT64_C(0x7fd7))|2))return -2;s->r[4]=a;')
     elif op=='pushfq' and not arg and raw==bytes([0x9c]):
         # The guest only exposes ordinary user-mode arithmetic and direction
         # flags; require known arithmetic flags, never copy host RFLAGS.
