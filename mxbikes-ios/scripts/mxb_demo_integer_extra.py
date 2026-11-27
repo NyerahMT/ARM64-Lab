@@ -147,6 +147,11 @@ def emit(row,pc):
     if op not in ('rol','ror','rcl','rcr','mul','imul','div','idiv'):return None
     if not raw or raw[0] in (0x26,0x2e,0x36,0x3e,0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError("scalar_prefix")
     args=[a.strip() for a in arg.split(',')]
+    # Some decoders omit the implicit count of one for D0/D1.
+    if op in ('rol','ror','rcl','rcr') and len(args)==1:
+        pos=0
+        while pos<len(raw) and (raw[pos]==0x66 or 0x40<=raw[pos]<=0x4f):pos+=1
+        if pos+1<len(raw) and raw[pos] in (0xd0,0xd1) and ((raw[pos+1]>>3)&7)=={'rol':0,'ror':1,'rcl':2,'rcr':3}[op]:args.append("1")
     if len(args)!=(2 if op in ('rol','ror','rcl','rcr') else 1):raise ValueError("scalar_operands")
     dst=args[0];reg=cfg.REGS.get(dst)
     if reg:i,w=reg;src=f's->r[{i}]';pre='';mem=None
