@@ -19,6 +19,7 @@ REGS={r:(i,64) for i,r in enumerate(GPRS)}
 for w,names in [(32,'eax ecx edx ebx esp ebp esi edi'),(16,'ax cx dx bx sp bp si di'),(8,'al cl dl bl spl bpl sil dil')]:
     REGS.update({r:(i,w) for i,r in enumerate(names.split())})
     REGS.update({f'r{i}'+{32:'d',16:'w',8:'b'}[w]:(i,w) for i in range(8,16)})
+HIGH8={'ah':0,'ch':1,'dh':2,'bh':3}
 MEM=re.compile(r'(?:(byte|word|dword|qword) ptr )?\[(.+)\]$')
 WIDTH={'byte':8,'word':16,'dword':32,'qword':64}
 LINE=re.compile(r'^\s*([\da-fA-F]+):\s+((?:[\da-fA-F]{2}\s+)+)(\S+)(?:\s+(.*))?$')
@@ -136,8 +137,15 @@ def emit(row,pc):
     raw,op,arg=row;end=pc+len(raw);args=[a.strip() for a in arg.split(',')];code=[];edges=[end]
     # Reject segment and address-size overrides, LOCK and REP; these require different semantics.
     if raw[0] in (0x26,0x2e,0x36,0x3e,0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError('prefix')
-    def width(t):return REGS[t][1] if t in REGS else address(t,end)[1] if MEM.fullmatch(t) else None
+    if any(t in HIGH8 for t in args):
+        pos=0
+        while pos<len(raw) and raw[pos]==0x66:pos+=1
+        if pos>=len(raw) or 0x40<=raw[pos]<=0x4f:raise ValueError('high_byte_rex')
+    def width(t):return 8 if t in HIGH8 else REGS[t][1] if t in REGS else address(t,end)[1] if MEM.fullmatch(t) else None
     def read(t,w,key):
+        if t in HIGH8:
+            if w!=8:raise ValueError('width')
+            return f'((s->r[{HIGH8[t]}]>>8)&255)'
         if t in REGS:
             i,b=REGS[t]
             if b!=w:raise ValueError('width')
@@ -149,6 +157,9 @@ def emit(row,pc):
         try:return f'UINT64_C({int(t,0)&((1<<w)-1)})'
         except ValueError:raise ValueError('operand') from None
     def write(t,w,v):
+        if t in HIGH8:
+            if w!=8:raise ValueError('width')
+            i=HIGH8[t];code.append(f'uint64_t hv=({v})&255;s->r[{i}]=(s->r[{i}]&~UINT64_C(0xff00))|(hv<<8);');return
         if t in REGS:
             i,b=REGS[t]
             if b!=w:raise ValueError('width')
@@ -193,12 +204,12 @@ def emit(row,pc):
     elif op=='push' and len(args)==1:
         if raw[0]==0x66:raise ValueError('push_width')
         value=read(args[0],64,'a');code.append(f'if(!push(s,{value}))return -2;')
-    elif op=='pop' and len(args)==1 and args[0] in GPRS and args[0]!='rsp':code.append(f'uint64_t v;if(!pop(s,&v))return -2;s->r[{GPRS.index(args[0])}]=v;')
+    elif op=='pop' and len(args)==1 and args[0] in GPRS :code.append(f'uint64_t v;if(!pop(s,&v))return -2;s->r[{GPRS.index(args[0])}]=v;')
     elif op=='lea' and len(args)==2 and args[0] in REGS and width(args[0])>=32:
         a,_=address(args[1],end);write(args[0],width(args[0]),a)
     elif op in ('mov','movabs','movzx','movsx','movsxd') and len(args)==2:
         w=width(args[0]);src=width(args[1]) or w
-        if not w or not src or (op in ('mov','movabs') and w!=src) or (op not in ('mov','movabs') and (src>=w or args[0] not in REGS or width(args[1]) is None)):raise ValueError('width')
+        if not w or not src or (op in ('mov','movabs') and w!=src) or (op not in ('mov','movabs') and ((src>=w and not (op=='movsxd' and src==w==32)) or args[0] not in REGS or width(args[1]) is None)):raise ValueError('width')
         v=read(args[1],src,'a');write(args[0],w,f'sx({v},{src})' if op in ('movsx','movsxd') else v)
     elif op.startswith('cmov') and len(args)==2:
         w=width(args[0]);cc=condition_code()
@@ -239,6 +250,10 @@ def emit(row,pc):
     elif op=='xchg' and len(args)==2 and all(t in REGS for t in args):
         w=width(args[0]);a=read(args[0],w,'a');b=read(args[1],w,'b')
         code.append(f'uint64_t av={a},bv={b};');write(args[0],w,'bv');write(args[1],w,'av')
+    elif op in ('cld','std') and not arg and raw==bytes([0xfc if op=='cld' else 0xfd]):
+        code.append('flagset(s,1024,1024,'+('1024' if op=='std' else '0')+');')
+    elif op=='sahf' and not arg and raw==b'\x9e':
+        code.append('flagset(s,CF|PF|AF|ZF|SF,CF|PF|AF|ZF|SF,s->r[0]>>8);')
     elif op in ('clc','stc','cmc') and not arg:
         if op=='cmc':code.append('if(!(s->known&CF))return -3;flagset(s,CF,CF,(s->flags^CF)&CF);')
         else:code.append('flagset(s,CF,CF,'+('CF' if op=='stc' else '0')+');')
