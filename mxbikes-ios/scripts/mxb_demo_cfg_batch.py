@@ -118,34 +118,38 @@ def target(raw,pc,op):
     if op.startswith('j') and len(raw)==6 and raw[0]==0x0f and 0x80<=raw[1]<=0x8f:return end+struct.unpack_from('<i',raw,2)[0],raw[1]&15
     raise ValueError('unsupported_control')
 
-def address(token,end):
+def address(token,end,addr32=False):
     m=MEM.fullmatch(token)
     if not m:raise ValueError('address')
     width,expr=m.groups();terms=expr.replace(' ','').replace('-','+-').split('+');acc=[]
+    ar={r:i for r,(i,w) in REGS.items() if w==32} if addr32 else {r:i for i,r in enumerate(GPRS)}
     for term in terms:
-        if term=='rip':acc.append(f'UINT64_C({end})');continue
-        if term in GPRS:acc.append(f's->r[{GPRS.index(term)}]');continue
+        if term==('eip' if addr32 else 'rip'):acc.append(f'UINT64_C({end})');continue
+        if term in ar:acc.append(f's->r[{ar[term]}]');continue
         factors=term.split('*')
         if len(factors)==2:
-            r=next((x for x in factors if x in GPRS),None);k=next((x for x in factors if x in ('1','2','4','8')),None)
-            if r and k:acc.append(f's->r[{GPRS.index(r)}]*UINT64_C({k})');continue
+            r=next((x for x in factors if x in ar),None);k=next((x for x in factors if x in ('1','2','4','8')),None)
+            if r and k:acc.append(f's->r[{ar[r]}]*UINT64_C({k})');continue
         try:acc.append(f'UINT64_C({int(term,0)&((1<<64)-1)})')
         except ValueError:raise ValueError('address') from None
-    return '('+'+'.join(acc)+')',WIDTH.get(width)
+    expr='('+'+'.join(acc)+')'
+    return (f'((uint64_t)(uint32_t){expr})' if addr32 else expr),WIDTH.get(width)
 
 def emit(row,pc):
     raw,op,arg=row;end=pc+len(raw);args=[a.strip() for a in arg.split(',')];code=[];edges=[end]
     # Reject segment and address-size overrides, LOCK and REP; these require different semantics.
+    addr32=raw[0]==0x67
+    if addr32 and any(x in (0x64,0x65,0xf0,0xf2,0xf3,0x67) for x in raw[1:2]):raise ValueError('prefix')
     if raw[0] in (0x26,0x2e,0x36,0x3e):
         # Long mode ignores legacy ES/CS/SS/DS base overrides. Preserve
         # full instruction length for RIP-relative operands and branches.
         args=[re.sub(r'(?<![a-z])(es|cs|ss|ds):(?=\[)','',a) for a in args]
-    elif raw[0] in (0x64,0x65,0x67,0xf0,0xf2,0xf3):raise ValueError('prefix')
+    elif raw[0] in (0x64,0x65,0xf0,0xf2,0xf3):raise ValueError('prefix')
     if any(t in HIGH8 for t in args):
         pos=0
-        while pos<len(raw) and raw[pos]==0x66:pos+=1
+        while pos<len(raw) and raw[pos] in (0x26,0x2e,0x36,0x3e,0x66,0x67):pos+=1
         if pos>=len(raw) or 0x40<=raw[pos]<=0x4f:raise ValueError('high_byte_rex')
-    def width(t):return 8 if t in HIGH8 else REGS[t][1] if t in REGS else address(t,end)[1] if MEM.fullmatch(t) else None
+    def width(t):return 8 if t in HIGH8 else REGS[t][1] if t in REGS else address(t,end,addr32)[1] if MEM.fullmatch(t) else None
     def read(t,w,key):
         if t in HIGH8:
             if w!=8:raise ValueError('width')
@@ -155,7 +159,7 @@ def emit(row,pc):
             if b!=w:raise ValueError('width')
             return f'(s->r[{i}]&mask({w}))'
         if MEM.fullmatch(t):
-            a,b=address(t,end)
+            a,b=address(t,end,addr32)
             if b!=w:raise ValueError('width')
             code.append(f'uint64_t {key}=0;if(!s->read||!s->read(s->ctx,{a},{w//8},&{key}))return -2;');return f'({key}&mask({w}))'
         try:return f'UINT64_C({int(t,0)&((1<<w)-1)})'
@@ -169,7 +173,7 @@ def emit(row,pc):
             if b!=w:raise ValueError('width')
             code.append(f'regset(s,{i},{w},{v});');return
         if MEM.fullmatch(t):
-            a,b=address(t,end)
+            a,b=address(t,end,addr32)
             if b!=w:raise ValueError('width')
             code.append(f'if(!s->write||!s->write(s->ctx,{a},{w//8},({v})&mask({w})))return -2;');return
         raise ValueError('destination')
@@ -202,7 +206,8 @@ def emit(row,pc):
         condextra='' if op=='loop' else '&&'+('!!(s->flags&ZF)' if op=='loope' else '!(s->flags&ZF)')
         return check+f'--s->r[1];s->rip=(s->r[1]{condextra})?UINT64_C({dest}):UINT64_C({end});break;',[dest,end]
     if op=='call' or op.startswith('j'):
-        dest,cc=target(raw,pc,op)
+        prefix=1 if raw[0] in (0x26,0x2e,0x36,0x3e) else 0
+        dest,cc=target(raw[prefix:],pc+prefix,op)
         if op=='call':code.append(f'if(!push(s,UINT64_C({end})))return -2;');edges=[dest,end]
         elif op=='jmp':edges=[dest]
         elif cc is not None:
@@ -221,7 +226,7 @@ def emit(row,pc):
         value=read(args[0],64,'a');code.append(f'if(!push(s,{value}))return -2;')
     elif op=='pop' and len(args)==1 and args[0] in GPRS :code.append(f'uint64_t v;if(!pop(s,&v))return -2;s->r[{GPRS.index(args[0])}]=v;')
     elif op=='lea' and len(args)==2 and args[0] in REGS and width(args[0])>=32:
-        a,_=address(args[1],end);write(args[0],width(args[0]),a)
+        a,_=address(args[1],end,addr32);write(args[0],width(args[0]),a)
     elif op in ('mov','movabs','movzx','movsx','movsxd') and len(args)==2:
         w=width(args[0]);src=width(args[1]) or w
         if not w or not src or (op in ('mov','movabs') and w!=src) or (op not in ('mov','movabs') and ((src>=w and not (op=='movsxd' and src==w==32)) or args[0] not in REGS or width(args[1]) is None)):raise ValueError('width')
