@@ -182,8 +182,27 @@ def run(root):
                  112:(bytes.fromhex("f348a5"),"rep movsq","qword ptr [rdi], qword ptr [rsi]"),
                  116:(bytes.fromhex("c21000"),"ret","0x10")})
     rows[120]=(bytes.fromhex("660f2f01"),"comisd","xmm0, xmmword ptr [rcx]")
+    rows.update({128:(bytes.fromhex("b5c0"),"mov","ch, 0xc0"),
+                 132:(bytes.fromhex("00 30"),"add","byte ptr [rax], dh"),
+                 136:(bytes.fromhex("00 dd"),"add","ch, bl"),
+                 140:(bytes.fromhex("f00fb108"),"lock cmpxchg","dword ptr [rax], ecx"),
+                 144:(bytes.fromhex("8718"),"xchg","dword ptr [rax], ebx"),
+                 148:(bytes.fromhex("f00908"),"lock or","dword ptr [rax], ecx"),
+                 152:(bytes.fromhex("d018"),"rcr","byte ptr [rax], 1"),
+                 156:(bytes.fromhex("d1d1"),"rcl","ecx, 1"),
+                 160:(bytes.fromhex("66a7"),"cmpsw","word ptr [rsi], word ptr [rdi]"),
+                 164:(bytes.fromhex("ad"),"lodsd","eax, dword ptr [rsi]"),
+                 168:(bytes.fromhex("a5"),"movsd","dword ptr [rdi], dword ptr [rsi]"),
+                 172:(bytes.fromhex("e1fe"),"loope","0xac"),
+                 176:(bytes.fromhex("9e"),"sahf",""),
+                 180:(bytes.fromhex("fc"),"cld",""),
+                 184:(bytes.fromhex("fd"),"std",""),
+                 188:(bytes.fromhex("5c"),"pop","rsp"),
+                 192:(bytes.fromhex("d7"),"xlatb",""),
+                 196:(bytes.fromhex("9c"),"pushfq",""),
+                 200:(bytes.fromhex("6318"),"movsxd","ebx, dword ptr [rax]")})
     src,accepted,reject=generate(rows,set(rows))
-    if len(accepted)!=24 or reject:raise RuntimeError("scalar/CRT generator fixture")
+    if len(accepted)!=43 or reject:raise RuntimeError("scalar/CRT generator fixture")
     # Execute emitted memory operand with a callback accepting only eight
     # bytes. Incorrect 16-byte reads must fail this boundary fixture.
     compare=root/"compare-width.c";compare.write_text(src+r"""
@@ -201,6 +220,48 @@ int main(void){
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","x86_64-windows-gnu","-O2",str(compare),"-o",str(exe)],check=True,timeout=120)
     subprocess.run([str(exe)],check=True,timeout=30)
     print("COMISD_M64_WIDTH_FIXTURE passed",flush=True)
+    expanded=root/"expanded-memory.c";expanded.write_text(src+r"""
+static uint8_t mem[256];static int writable=1;
+static int rd(void*c,uint64_t a,unsigned n,uint64_t*out){
+ (void)c;if(!n||n>8||a>sizeof(mem)-n)return 0;*out=0;for(unsigned i=0;i<n;i++)*out|=(uint64_t)mem[a+i]<<(8*i);return 1;
+}
+static int wr(void*c,uint64_t a,unsigned n,uint64_t v){
+ (void)c;if(!writable||!n||n>8||a>sizeof(mem)-n)return 0;for(unsigned i=0;i<n;i++)mem[a+i]=(uint8_t)(v>>(8*i));return 1;
+}
+static int step(mxb_cfg*s,uint64_t pc){s->rip=pc;return mxb_block_step(s);}
+int main(void){
+ mxb_cfg s={0};s.read=rd;s.write=wr;s.exclusive_guest=1;s.known=STATUS;
+ s.r[1]=0x1122334455667788ULL;if(step(&s,128)!=1||s.r[1]!=0x112233445566c088ULL)return 1;
+ s.r[0]=64;s.r[2]=0x0200;mem[64]=254;if(step(&s,132)!=1||mem[64]||!(s.flags&CF)||!(s.flags&ZF))return 2;
+ s.r[1]=0x7f00;s.r[3]=1;if(step(&s,136)!=1||s.r[1]!=0x8000||!(s.flags&OF))return 3;
+ s.r[0]=64;s.r[1]=0x11223344;wr(0,64,4,64);
+ if(step(&s,140)!=1||mem[64]!=0x44||!(s.flags&ZF))return 4;
+ s.r[0]=64;if(step(&s,140)!=1||s.r[0]!=0x11223344||s.flags&ZF)return 5;
+ s.r[0]=64;s.r[3]=0xffffffff000000aaULL;if(step(&s,144)!=1||s.r[3]!=0x11223344||mem[64]!=0xaa)return 6;
+ s.r[1]=0x55;if(step(&s,148)!=1||mem[64]!=0xff)return 7;
+ s.exclusive_guest=0;if(step(&s,148)!=-8||mem[64]!=0xff)return 8;s.exclusive_guest=1;
+ s.flags=CF;s.known=STATUS;mem[64]=2;if(step(&s,152)!=1||mem[64]!=0x81||(s.flags&CF)||!(s.flags&OF))return 9;
+ s.flags=CF;s.known=STATUS;s.r[1]=0x80000000;if(step(&s,156)!=1||s.r[1]!=1||!(s.flags&CF)||!(s.flags&OF))return 10;
+ s.flags=0;s.r[6]=80;s.r[7]=90;wr(0,80,2,55);wr(0,90,2,55);
+ if(step(&s,160)!=1||s.r[6]!=82||s.r[7]!=92||!(s.flags&ZF))return 11;
+ wr(0,82,4,0xf1234567);if(step(&s,164)!=1||s.r[0]!=0xf1234567||s.r[6]!=86)return 12;
+ wr(0,86,4,0x55667788);if(step(&s,168)!=1||mem[92]!=0x88||s.r[6]!=90||s.r[7]!=96)return 13;
+ s.r[1]=2;s.flags=ZF;s.known=STATUS;if(step(&s,172)!=1||s.rip!=172||s.r[1]!=1)return 14;
+ s.r[0]=0xd500;s.flags=OF;if(step(&s,176)!=1||(s.flags&(STATUS))!=(OF|CF|PF|AF|ZF|SF))return 15;
+ if(step(&s,184)!=1||!(s.flags&1024)||step(&s,180)!=1||(s.flags&1024))return 16;
+ s.r[4]=128;wr(0,128,8,200);if(step(&s,188)!=1||s.r[4]!=200)return 17;
+ s.r[0]=3;s.r[3]=96;mem[99]=0x9a;if(step(&s,192)!=1||s.r[0]!=0x9a)return 18;
+ s.flags=CF|OF;s.known=STATUS;s.r[4]=200;uint64_t v;
+ if(step(&s,196)!=1||s.r[4]!=192||!rd(0,192,8,&v)||v!=(CF|OF|2))return 19;
+ s.r[0]=64;wr(0,64,4,0x80000000);if(step(&s,200)!=1||s.r[3]!=0x80000000)return 20;
+ writable=0;s.flags=CF;s.known=STATUS;mem[64]=2;if(step(&s,152)!=-2||s.flags!=CF||mem[64]!=2)return 21;
+ return 0;
+}
+""")
+    expanded_exe=root/"expanded-memory.exe"
+    subprocess.run([sys.executable,"-m","ziglang","cc","-target","x86_64-windows-gnu","-O2",str(expanded),"-o",str(expanded_exe)],check=True,timeout=120)
+    subprocess.run([str(expanded_exe)],check=True,timeout=30)
+    print("EXPANDED_LEGACY_MEMORY_FIXTURE 21 checks passed",flush=True)
     source=root/"integer-arm.c";source.write_text(src)
     obj=root/"integer-arm.o"
     subprocess.run([sys.executable,"-m","ziglang","cc","-target","aarch64-linux-musl","-O2","-ffreestanding","-fno-builtin","-c",str(source),"-o",str(obj)],check=True,timeout=120)
